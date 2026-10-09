@@ -1,0 +1,11 @@
+qpdf 12.4.2
+Copyright (c) 2005-2026 Jay Berkenbilt
+
+qpdf is distributed under either the Apache License, Version 2.0, or the
+Artistic License 2.0, at the user's option. Source, full license texts, and
+notices are available from the official project:
+https://github.com/qpdf/qpdf
+
+This product also redistributes the runtime libraries included in qpdf's
+official Windows MSVC binary distribution. Their applicable notices remain
+with the upstream distribution.

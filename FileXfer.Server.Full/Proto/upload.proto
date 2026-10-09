@@ -1,0 +1,45 @@
+// DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+// Archivo: FileXfer.Server.Full/Proto/upload.proto
+// Capa: Backend FileXfer.Server.Full (.NET 8)
+// Propósito: Archivo del backend relacionado con configuración, hosting o contrato del servidor.
+// Interacción: Participa en el arranque o soporte operativo del servicio FileXfer.
+// Regla de mantenimiento: Validar impacto en despliegue local, pruebas y producción antes de publicar.
+// Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+
+syntax = "proto3";
+
+package FileXfer.Proto;
+
+option csharp_namespace = "FileXfer.Proto";
+
+message UploadChunk {
+  string fileUuid            = 1;
+  string originalFileName    = 2;
+  string originalSourcePath  = 3;
+  int64  offset              = 4;
+  bytes  data                = 5;
+  string sha256Hex           = 6;
+
+  string jwtToken            = 7;
+  string rfc                 = 8;
+  string deviceId            = 9;
+
+  int32 idEnte               = 10;
+  int32 idAuditoria          = 11;
+  int32 idActo               = 12;
+  int32 idOficio             = 13;
+  int32 idRequerimiento      = 14;
+  int32 resultadoId          = 15;
+  int32 periodo             = 16;
+}
+
+message UploadAck {
+  bool   success        = 1;
+  bool   integrityOk    = 2;
+  string storedPath     = 3;
+  string message        = 4;
+}
+
+service Upload {
+  rpc UploadStream (stream UploadChunk) returns (UploadAck);
+}

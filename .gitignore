@@ -1,0 +1,45 @@
+# Paquetes originales y artefactos locales
+_packages/
+.vs/
+**/bin/
+**/obj/
+**/publish/
+**/node_modules/
+**/dist/
+*.user
+*.suo
+
+# Secretos, certificados y configuración por ambiente
+*.pfx
+*.p12
+*.key
+*.cer
+.env
+.env.*
+!.env.example
+appsettings.Production.json
+appsettings.Staging.json
+
+# Datos operativos y temporales
+uploads/
+inbox/
+staging/
+logs/
+*.log
+*.tmp
+*.bak
+
+# Resultados locales de pruebas
+TestResults/
+coverage/
+*.trx
+
+# Runtime qpdf versionado y verificado; excepción deliberada al patrón bin/
+!tools/qpdf/win-x64/bin/
+!tools/qpdf/win-x64/bin/**
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

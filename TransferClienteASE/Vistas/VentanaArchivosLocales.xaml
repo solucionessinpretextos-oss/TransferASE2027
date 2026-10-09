@@ -1,0 +1,220 @@
+<!--
+  DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+  Archivo: TransferClienteASE/Vistas/VentanaArchivosLocales.xaml
+  Capa: Cliente TransferClienteASE (WPF .NET)
+  Propósito: Vista XAML WPF: define layout, controles, bindings y recursos visuales de una pantalla.
+  Interacción: Se enlaza al ViewModel mediante Binding; muestra estado y dispara comandos sin conocer SQL ni backend.
+  Regla de mantenimiento: Usar Mode=OneWay para propiedades calculadas de solo lectura; validar nombres de propiedades enlazadas.
+  Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+-->
+<Window x:Class="TransferClienteASE.Vistas.VentanaArchivosLocales"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ASE | Archivos del Requerimiento"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        MinWidth="800"
+        MinHeight="420"
+        Background="white"
+        Icon="/Recursos/filetransfer.ico">
+    <!--
+        DOCUMENTACIÓN INTERNA — VentanaArchivosLocales
+        Lista los archivos que Transfer_ArchivosLocales tiene registrados para el contexto actual.
+        En actos por resultado, el filtro correcto es ResultadoId + ColaboraId + MovimientoId.
+    -->
+
+    <Window.Resources>
+<SolidColorBrush x:Key="DocsPanelBackgroundBrush" Color="#DDC9A3"/>
+        <SolidColorBrush x:Key="DocsLabelBrush" Color="#533313"/>
+        <SolidColorBrush x:Key="DocsPrimaryButtonBrush" Color="#754C24"/>
+        <SolidColorBrush x:Key="DocsPrimaryButtonForegroundBrush" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="DocsSecondaryButtonBrush" Color="#EEEEEE"/>
+        <SolidColorBrush x:Key="DocsSecondaryButtonForegroundBrush" Color="#666666"/>
+
+<SolidColorBrush x:Key="ListadoGridHeaderBrush" Color="#754C24"/>
+
+        <Style x:Key="ListadoDataGridColumnHeaderStyle"
+               TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="{StaticResource ListadoGridHeaderBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="TextBlock.TextAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="ListadoDataGridStyle" TargetType="DataGrid">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="RowBackground" Value="#FFFFFF"/>
+            <Setter Property="AlternatingRowBackground" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#FFDDDDDD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="RowHeaderWidth" Value="0"/>
+            <Setter Property="ScrollViewer.Background" Value="#FFFFFF"/>
+            <Setter Property="ColumnHeaderStyle" Value="{StaticResource ListadoDataGridColumnHeaderStyle}"/>
+        </Style>
+
+        <Style x:Key="ListadoDataGridCellStyle" TargetType="DataGridCell">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="#FF333333"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="BorderBrush" Value="#FFDDDDDD"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ListadoDataGridRowStyle" TargetType="DataGridRow">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="#FF333333"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+<Grid>
+        <Grid.RowDefinitions>
+<RowDefinition Height="78"/>
+<RowDefinition Height="*"/>
+<RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+<Grid Grid.Row="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="6"/>
+                <RowDefinition Height="14"/>
+            </Grid.RowDefinitions>
+<Grid Grid.Row="0" Background="{StaticResource AseHeaderBackground}">
+                <TextBlock Text="Archivos registrados para el requerimiento seleccionado"
+                           Foreground="#FFFFFF"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Left"
+                           Margin="16,0,0,0"/>
+            </Grid>
+<Border Grid.Row="1" Background="#FFFFFF"/>
+<Border Grid.Row="2" Background="#DDC9A3"/>
+        </Grid>
+<Border Grid.Row="1"
+                Margin="12"
+                Background="#FFFFFF"
+                BorderBrush="#FFCCCCCC"
+                BorderThickness="1">
+            <Grid Margin="12" Background="#FFFFFF">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+<TextBlock Grid.Row="0"
+                           Text="{Binding Contexto.Requerimiento.Descripcion}"
+                           FontWeight="Bold"
+                           Foreground="{StaticResource DocsLabelBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,0,0,10"/>
+<DataGrid x:Name="DataGridArchivos"
+                          Grid.Row="1"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          CanUserReorderColumns="True"
+                          CanUserResizeColumns="True"
+                          CanUserSortColumns="True"
+                          SelectionMode="Extended"
+                          SelectionUnit="FullRow"
+                          Margin="0,0,0,0"
+                          RowHeight="32"
+                          HorizontalGridLinesBrush="#FFDDDDDD"
+                          VerticalGridLinesBrush="#FFDDDDDD"
+                          HeadersVisibility="Column"
+                          RowHeaderWidth="0"
+                          Style="{StaticResource ListadoDataGridStyle}"
+                          CellStyle="{StaticResource ListadoDataGridCellStyle}"
+                          RowStyle="{StaticResource ListadoDataGridRowStyle}">
+
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Archivo"
+                                            Binding="{Binding NombreArchivo}"
+                                            Width="*"/>
+                        <DataGridTextColumn Header="Extensión"
+                                            Binding="{Binding Extension}"
+                                            Width="90"/>
+                        <DataGridTextColumn Header="Tamaño"
+                                            Binding="{Binding TamanioDescripcion}"
+                                            Width="120"/>
+                        <DataGridTextColumn Header="Fecha de alta"
+                                            Binding="{Binding FechaAlta}"
+                                            Width="170"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+<StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="12,0,12,12">
+<Button Style="{StaticResource AseFlatButton}"
+                    Background="#FF754C24"
+                    Foreground="White"
+                    MinWidth="200"
+                    Height="38"
+                    Margin="0,0,8,0"
+                    Click="BotonEliminar_Click">
+                <Button.Content>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Image Source="pack://application:,,,/TransferClienteASE;component/Recursos/VERDOCUMENTOS/borrar.png"
+                               Width="18"
+                               Height="18"
+                               Margin="0,0,6,0"
+                               VerticalAlignment="Center"
+                               Stretch="Uniform"/>
+                        <TextBlock Text="Eliminar documentos"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button.Content>
+            </Button>
+<Button Style="{StaticResource AseFlatButton}"
+                    Background="{StaticResource DocsSecondaryButtonBrush}"
+                    Foreground="{StaticResource DocsSecondaryButtonForegroundBrush}"
+                    MinWidth="120"
+                    Height="38"
+                    IsCancel="True"
+                    Click="BotonCerrar_Click">
+                <Button.Content>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Image Source="pack://application:,,,/TransferClienteASE;component/Recursos/VERDOCUMENTOS/cerrar.png"
+                               Width="18"
+                               Height="18"
+                               Margin="0,0,6,0"
+                               VerticalAlignment="Center"
+                               Stretch="Uniform"/>
+                        <TextBlock Text="Cerrar"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button.Content>
+            </Button>
+
+        </StackPanel>
+
+    </Grid>
+</Window>

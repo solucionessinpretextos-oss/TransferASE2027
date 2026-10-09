@@ -1,0 +1,60 @@
+<!--
+  DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+  Archivo: TransferClienteASE/Vistas/DialogoImportanteWindow.xaml
+  Capa: Cliente TransferClienteASE (WPF .NET)
+  Propósito: Vista XAML WPF: define layout, controles, bindings y recursos visuales de una pantalla.
+  Interacción: Se enlaza al ViewModel mediante Binding; muestra estado y dispara comandos sin conocer SQL ni backend.
+  Regla de mantenimiento: Usar Mode=OneWay para propiedades calculadas de solo lectura; validar nombres de propiedades enlazadas.
+  Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+-->
+<Window x:Class="TransferClienteASE.Vistas.DialogoImportanteWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Mensaje importante"
+        Width="520"
+        MinWidth="520"
+        MinHeight="220"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        WindowStyle="ToolWindow"
+        Topmost="True"
+        SizeToContent="Height"
+        Loaded="Window_Loaded">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="10" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="20" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+<TextBlock x:Name="TextoTitulo"
+                   Grid.Row="0"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   TextWrapping="Wrap" />
+
+<ScrollViewer x:Name="ScrollMensaje"
+                      Grid.Row="2"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <TextBlock x:Name="TextoMensaje"
+                       TextWrapping="Wrap"
+                       TextTrimming="None"
+                       FontSize="14" />
+        </ScrollViewer>
+<StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button x:Name="BotonAceptar"
+                    Width="100"
+                    Height="30"
+                    Margin="0,0,0,0"
+                    IsDefault="True"
+                    Content="Entendido"
+                    Click="BotonAceptar_OnClick" />
+        </StackPanel>
+    </Grid>
+</Window>

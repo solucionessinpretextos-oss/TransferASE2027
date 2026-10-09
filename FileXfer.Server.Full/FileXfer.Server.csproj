@@ -1,0 +1,55 @@
+<!--
+  DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+  Archivo: FileXfer.Server.Full/FileXfer.Server.csproj
+  Capa: Backend FileXfer.Server.Full (.NET 8)
+  Propósito: Archivo del backend relacionado con configuración, hosting o contrato del servidor.
+  Interacción: Participa en el arranque o soporte operativo del servicio FileXfer.
+  Regla de mantenimiento: Validar impacto en despliegue local, pruebas y producción antes de publicar.
+  Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+-->
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <UserSecretsId>FileXfer.Server.2027</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.62.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.8" />
+    <PackageReference Include="Dapper" Version="2.1.35" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.8" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.8" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.8">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <PackageReference Include="QRCoder" Version="1.5.1" />
+    <PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileXfer.Pdf\FileXfer.Pdf.csproj" />
+    <Content Include="..\tools\qpdf\win-x64\bin\**\*"
+             Link="qpdf\bin\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\qpdf\win-x64\THIRD-PARTY-NOTICES.txt"
+             Link="qpdf\THIRD-PARTY-NOTICES.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Proto\\upload.proto" GrpcServices="Server" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="wwwroot\\" />
+  </ItemGroup>
+
+</Project>

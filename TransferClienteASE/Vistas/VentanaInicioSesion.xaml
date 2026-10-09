@@ -1,0 +1,270 @@
+<!--
+  DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+  Archivo: TransferClienteASE/Vistas/VentanaInicioSesion.xaml
+  Capa: Cliente TransferClienteASE (WPF .NET)
+  Propósito: Vista XAML WPF: define layout, controles, bindings y recursos visuales de una pantalla.
+  Interacción: Se enlaza al ViewModel mediante Binding; muestra estado y dispara comandos sin conocer SQL ni backend.
+  Regla de mantenimiento: Usar Mode=OneWay para propiedades calculadas de solo lectura; validar nombres de propiedades enlazadas.
+  Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+-->
+<Window x:Class="TransferClienteASE.Vistas.VentanaInicioSesion"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ASE | Sistema de Transferencia de Archivos del Buzón Digital"
+        WindowStartupLocation="CenterScreen"
+        Width="900"
+        Height="600"
+        ResizeMode="NoResize"
+        Background="{StaticResource AsePageBackground}"
+        Icon="/Recursos/filetransfer.ico">
+<Window.Resources>
+<SolidColorBrush x:Key="LoginBackgroundBrush" Color="#AD824B" />
+<SolidColorBrush x:Key="LoginPanelBackgroundBrush" Color="#eeeeee" />
+<SolidColorBrush x:Key="LoginTextMutedBrush" Color="#999999" />
+<SolidColorBrush x:Key="LoginButtonBackgroundBrush" Color="#7e5428" />
+        <SolidColorBrush x:Key="LoginButtonForegroundBrush" Color="#FFFFFF" />
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="90"/>
+<RowDefinition Height="*"/>
+<RowDefinition Height="60"/>
+</Grid.RowDefinitions>
+<Grid Grid.Row="0" Background="{StaticResource LoginBackgroundBrush}" Grid.RowSpan="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Grid.ColumnSpan="2" Margin="0,8,10,0">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top">
+                    <Image Source="/Recursos/LOGO-ASE-2022.png"
+                           Height="72"
+                           Width="878"
+                           Margin="10,0,8,0"/>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Grid.Column="1"
+                        VerticalAlignment="Center"/>
+
+            <Border Grid.ColumnSpan="2"
+                    VerticalAlignment="Bottom"
+                    Height="4"
+                    Background="{StaticResource LoginButtonBackgroundBrush}"/>
+        </Grid>
+<Grid Grid.Row="1">
+            <Border Width="720"
+                    Height="430"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{StaticResource LoginPanelBackgroundBrush}"
+                    BorderBrush="#FFCCCCCC"
+                    BorderThickness="1">
+                <Grid Margin="40">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="20"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Text="TRANSFER ASE"
+                               HorizontalAlignment="Center"
+                               FontSize="18"
+                               FontWeight="Bold"
+                               Margin="0,0,0,8"/>
+<Border Grid.Row="1"
+                                Height="1"
+                                Width="460"
+                                Background="#FFB0B0B0"
+                                HorizontalAlignment="Center"
+                                Margin="0,0,0,10"/>
+                    <TextBlock Grid.Row="2"
+                               Text="Introduzca su firma electrónica para iniciar sesión"
+                               HorizontalAlignment="Center"
+                               FontSize="14"
+                               Margin="0,0,0,10"
+                               Foreground="Black"/>
+<Grid Grid.Row="4" Margin="0,0,0,-13">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="120"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="90"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="Auto"/>
+</Grid.RowDefinitions>
+<TextBlock Grid.Row="1" Grid.Column="0"
+                                   Style="{StaticResource AseLabelText}"
+                                   Foreground="Black"
+                                   Text="CER"/>
+                        <TextBox x:Name="textRutaCer" Grid.Row="1" Grid.Column="1"
+                                 Style="{StaticResource AseTextBox}"
+                                 Background="#eeeeee"
+                                 Foreground="{StaticResource LoginTextMutedBrush}"
+                                 Text="{Binding RutaCertificadoCer, UpdateSourceTrigger=PropertyChanged}"
+                                 IsReadOnly="True"
+                                 Margin="5"/>
+                        <Button Grid.Row="1" Grid.Column="2"
+                                Style="{StaticResource AseIconButton}"
+                                Background="#eeeeee"
+                                Foreground="Black"
+                                Command="{Binding ComandoExaminarCer}">
+                            <Button.Content>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Image Width="16"
+                                           Height="16"
+                                           Margin="0,0,4,0">
+                                        <Image.Source>
+                                            <BitmapImage UriSource="pack://application:,,,/TransferClienteASE;component/Recursos/LOGIN/lupa.png"/>
+                                        </Image.Source>
+                                    </Image>
+                                    <TextBlock Text="CER"/>
+                                </StackPanel>
+                            </Button.Content>
+                        </Button>
+<TextBlock Grid.Row="2" Grid.Column="0"
+                                   Style="{StaticResource AseLabelText}"
+                                   Foreground="Black"
+                                   Text="KEY"/>
+                        <TextBox x:Name="textRutaKey" Grid.Row="2" Grid.Column="1"
+                                 Style="{StaticResource AseTextBox}"
+                                 Background="#eeeeee"
+                                 Foreground="{StaticResource LoginTextMutedBrush}"
+                                 Text="{Binding RutaLlaveKey, UpdateSourceTrigger=PropertyChanged}"
+                                 IsReadOnly="True"
+                                 Margin="5"/>
+                        <Button Grid.Row="2" Grid.Column="2"
+                                Style="{StaticResource AseIconButton}"
+                                Background="#eeeeee"
+                                Foreground="Black"
+                                Command="{Binding ComandoExaminarKey}">
+                            <Button.Content>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Image Width="16"
+                                           Height="16"
+                                           Margin="0,0,4,0">
+                                        <Image.Source>
+                                            <BitmapImage UriSource="pack://application:,,,/TransferClienteASE;component/Recursos/LOGIN/lupa.png"/>
+                                        </Image.Source>
+                                    </Image>
+                                    <TextBlock Text="KEY"/>
+                                </StackPanel>
+                            </Button.Content>
+                        </Button>
+<TextBlock Grid.Row="3" Grid.Column="0"
+                                   Style="{StaticResource AseLabelText}"
+                                   Foreground="Black"
+                                   Text="Contraseña"/>
+<PasswordBox x:Name="CajaContrasena"
+                                     Grid.Row="3" Grid.Column="1"
+                                     Style="{StaticResource AsePasswordBox}"
+                                     Background="#eeeeee"
+                                     Foreground="Black"
+                                     PasswordChanged="PasswordBox_OnPasswordChanged"
+                                     Margin="5"/>
+<TextBlock Grid.Row="4" Grid.Column="0"
+                                   Style="{StaticResource AseLabelText}"
+                                   Foreground="Black"
+                                   Text="Código MFA"/>
+                        <PasswordBox x:Name="CajaMfa"
+                                     Grid.Row="4" Grid.Column="1"
+                                     Style="{StaticResource AsePasswordBox}"
+                                     Background="#eeeeee"
+                                     Foreground="Black"
+                                     MaxLength="8"
+                                     ToolTip="Código temporal de 6 a 8 dígitos, si su cuenta requiere MFA"
+                                     PasswordChanged="MfaPasswordBox_OnPasswordChanged"
+                                     Margin="5"/>
+<TextBlock Grid.Row="0" Grid.Column="0"
+                                   Style="{StaticResource AseLabelText}"
+                                   Foreground="Black"
+                                   Text="RFC"/>
+                        <TextBox Grid.Row="0" Grid.Column="1"
+                                 Style="{StaticResource AseTextBox}"
+                                 Background="#eeeeee"
+                                 Foreground="{StaticResource LoginTextMutedBrush}"
+                                 Text="{Binding Rfc, Mode=OneWay}"
+                                 IsReadOnly="True"
+                                 Margin="5"/>
+<TextBlock Grid.Row="5"
+                                   Grid.Column="0"
+                                   Grid.ColumnSpan="3"
+                                   Margin="0,8,0,0"
+                                   Text="{Binding MensajeEstado}"
+                                   Foreground="DarkRed"
+                                   TextWrapping="Wrap"
+                                   Visibility="Hidden"/>
+<StackPanel Grid.Row="5"
+                                    Orientation="Horizontal"
+                                    HorizontalAlignment="Center"
+                                    Margin="0,25,0,10"
+                                    Grid.ColumnSpan="3">
+<Button Margin="0,0,0,0"
+                                    Command="{Binding ComandoIngresar}" Height="41">
+                                <Button.Style>
+                                    <Style TargetType="Button"
+                                           BasedOn="{StaticResource AseFlatButton}">
+                                        <Setter Property="Width" Value="100"/>
+                                        <Setter Property="Height" Value="41"/>
+                                        <Setter Property="Padding" Value="15,2"/>
+                                        <Setter Property="IsDefault" Value="True"/>
+                                        <Setter Property="Background" Value="{StaticResource LoginButtonBackgroundBrush}"/>
+                                        <Setter Property="Foreground" Value="{StaticResource LoginButtonForegroundBrush}"/>
+
+</Style>
+                                </Button.Style>
+                                <Button.Content>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <Image Width="18"
+                                               Height="17"
+                                               Margin="0,0,6,0">
+                                            <Image.Source>
+                                                <BitmapImage UriSource="pack://application:,,,/TransferClienteASE;component/Recursos/LOGIN/iniciar-sesion.png"/>
+                                            </Image.Source>
+                                        </Image>
+                                        <TextBlock Text="Acceder" Height="17"/>
+                                    </StackPanel>
+                                </Button.Content>
+                            </Button>
+
+</StackPanel>
+
+                    </Grid>
+                    <TextBlock Grid.Row="5"
+                        HorizontalAlignment="Left"
+                        FontSize="18"
+                        FontWeight="Bold"
+                        Margin="544,220,0,-34"><Run Language="es-mx" Text=""/></TextBlock>
+                </Grid>
+            </Border>
+        </Grid>
+<Grid Grid.Row="2" Margin="20,0,20,8">
+            <TextBlock Text="{Binding VersionCliente, StringFormat='Versión: {0}'}"
+                       Foreground="White"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       FontSize="12"/>
+
+            <TextBlock Text="{Binding EtiquetaAmbiente, FallbackValue=PRUEBAS}"
+                       Foreground="{StaticResource AseAccent}"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       FontSize="12"
+                       Visibility="Hidden"
+                       FontWeight="SemiBold"/>
+        </Grid>
+    </Grid>
+</Window>

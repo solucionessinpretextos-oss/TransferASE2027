@@ -1,0 +1,61 @@
+// DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+// Archivo: FileXfer.Server.Full/Dtos/Admin/AdminMonitoringDtos.cs
+// Capa: Backend FileXfer.Server.Full (.NET 8)
+// Propósito: Contrato de datos del backend: define la forma exacta del JSON que viaja entre servidor y cliente.
+// Interacción: Los controladores devuelven estos objetos y el cliente los deserializa; cambiar nombres rompe bindings o mapeos.
+// Regla de mantenimiento: Mantener compatibilidad hacia atrás durante updates; agregar campos es más seguro que renombrar o eliminar.
+// Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+
+using System;
+
+namespace FileXfer.Server.Dtos.Admin
+{
+    public sealed class ServerHealthDto
+    {
+        public bool IsHealthy { get; set; }
+        public string? Message { get; set; }
+        public double CpuUsagePercent { get; set; }
+        public double MemoryUsagePercent { get; set; }
+        public double DiskUsagePercent { get; set; }
+        public bool DatabaseOk { get; set; }
+        public bool StorageOk { get; set; }
+        public bool MessageBusOk { get; set; }
+    }
+
+    public sealed class TransferSummaryDto
+    {
+        public int ActiveTransfers { get; set; }
+        public int WaitingTransfers { get; set; }
+        public int TotalPendingTransfers { get; set; }
+        public int CompletedLastHour { get; set; }
+        public int FailedLastHour { get; set; }
+        public int CompletedToday { get; set; }
+        public int FailedToday { get; set; }
+        public long BytesTransferredLastHour { get; set; }
+        public long TotalBytesTransferredToday { get; set; }
+        public double AverageThroughputMbps { get; set; }
+    }
+
+    public sealed class OperationalKpisDto
+    {
+        public double OperationalHealthScore { get; set; }
+        public int TotalTransfersToday { get; set; }
+        public double SuccessRateTodayPercent { get; set; }
+        public double FailureRateLastHourPercent { get; set; }
+        public double AverageUploadDurationTodaySeconds { get; set; }
+        public double P95UploadDurationTodaySeconds { get; set; }
+        public double AverageFileSizeTodayBytes { get; set; }
+        public int StalePendingTransfers { get; set; }
+        public int DistinctRfcsToday { get; set; }
+        public DateTimeOffset? LastCompletedUtc { get; set; }
+        public DateTimeOffset? LastFailedUtc { get; set; }
+    }
+
+    public sealed class SummaryResponse
+    {
+        public ServerHealthDto Server { get; set; } = default!;
+        public TransferSummaryDto Transfers { get; set; } = default!;
+        public OperationalKpisDto Kpis { get; set; } = default!;
+        public DateTime TimestampUtc { get; set; }
+    }
+}

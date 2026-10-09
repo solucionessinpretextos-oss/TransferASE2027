@@ -1,0 +1,46 @@
+// DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+// Archivo: TransferClienteASE/Proto/upload.proto
+// Capa: Cliente TransferClienteASE (WPF .NET)
+// Propósito: Archivo del cliente WPF relacionado con arranque, recursos o configuración visual.
+// Interacción: Da soporte a las pantallas y servicios del cliente.
+// Regla de mantenimiento: Validar que el ejecutable compile y abra después de modificarlo.
+// Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+
+syntax = "proto3";
+
+package FileXfer.Proto;
+
+option csharp_namespace = "FileXfer.Proto";
+
+message UploadChunk {
+  string fileUuid            = 1;
+  string originalFileName    = 2;
+  string originalSourcePath  = 3;
+  int64  offset              = 4;
+  bytes  data                = 5;
+  string sha256Hex           = 6;
+
+  string jwtToken            = 7;
+  string rfc                 = 8;
+  string deviceId            = 9;
+
+  int32 idEnte               = 10;
+  int32 idAuditoria          = 11;
+  int32 idActo               = 12;
+  int32 idOficio             = 13;
+  int32 idRequerimiento      = 14;
+
+  int32 resultadoId          = 15;
+  int32 periodo             = 16;
+}
+
+message UploadAck {
+  bool   success        = 1;
+  bool   integrityOk    = 2;
+  string storedPath     = 3;
+  string message        = 4;
+}
+
+service Upload {
+  rpc UploadStream (stream UploadChunk) returns (UploadAck);
+}

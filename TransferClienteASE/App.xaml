@@ -1,0 +1,21 @@
+<!--
+  DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+  Archivo: TransferClienteASE/App.xaml
+  Capa: Cliente TransferClienteASE (WPF .NET)
+  Propósito: Archivo del cliente WPF relacionado con arranque, recursos o configuración visual.
+  Interacción: Da soporte a las pantallas y servicios del cliente.
+  Regla de mantenimiento: Validar que el ejecutable compile y abra después de modificarlo.
+  Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+-->
+<Application x:Class="TransferClienteASE.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="Vistas/VentanaInicioSesion.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/AseTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

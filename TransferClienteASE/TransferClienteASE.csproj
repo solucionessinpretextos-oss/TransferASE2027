@@ -1,0 +1,246 @@
+<!--
+  DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+  Archivo: TransferClienteASE/TransferClienteASE.csproj
+  Capa: Cliente TransferClienteASE (WPF .NET)
+  Propósito: Archivo del cliente WPF relacionado con arranque, recursos o configuración visual.
+  Interacción: Da soporte a las pantallas y servicios del cliente.
+  Regla de mantenimiento: Validar que el ejecutable compile y abra después de modificarlo.
+  Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>TransferClienteASE</RootNamespace>
+
+    <!-- Habilitar WPF y Windows Forms -->
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <Nullable>enable</Nullable>
+
+    <!-- 🔹 Versión del cliente (usada por el auto-update) -->
+    <!-- Esta es la que leerá ServicioVersion.ObtenerVersionActual() -->
+    <Version>2.0.1.2</Version>
+    <AssemblyVersion>2.0.1.2</AssemblyVersion>
+    <FileVersion>2.0.1.2</FileVersion>
+    <ApplicationIcon>Recursos\ase_icon.ico</ApplicationIcon>
+
+    <!-- (Opcional, pero muy útil para publicación) -->
+    <!-- Generar un solo exe auto-contenido -->
+    <!--
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    -->
+  </PropertyGroup>
+
+  <ItemGroup><!--<Page Include="Themes\AseTheme.xaml" />-->
+  
+    <None Remove="Recursos\actualizar-flecha %281%29.png" />
+    <None Remove="Recursos\actualizar-flecha.png" />
+    <None Remove="Recursos\agregar-archivo %281%29.png" />
+    <None Remove="Recursos\agregar-archivo.png" />
+    <None Remove="Recursos\AGREGARDOCUMENTOS\aceptar.png" />
+    <None Remove="Recursos\AGREGARDOCUMENTOS\anexar carpetang.png" />
+    <None Remove="Recursos\AGREGARDOCUMENTOS\cerrar-sesion.png" />
+    <None Remove="Recursos\AGREGARDOCUMENTOS\Cerrar.png" />
+    <None Remove="Recursos\AGREGARDOCUMENTOS\documento.png" />
+    <None Remove="Recursos\ase_icon.ico" />
+    <None Remove="Recursos\back_login.png" />
+    <None Remove="Recursos\cerrar-sesion %282%29.png" />
+    <None Remove="Recursos\cerrar-sesion %283%29.png" />
+    <None Remove="Recursos\cerrar.png" />
+    <None Remove="Recursos\certificado %282%29.png" />
+    <None Remove="Recursos\eliminar-documento.png" />
+    <None Remove="Recursos\error.png" />
+    <None Remove="Recursos\filetransfer.ico" />
+    <None Remove="Recursos\findreplace_icon.gif" />
+    <None Remove="Recursos\LISTADOREQUERIMIENTOS\actualizar-flecha.png" />
+    <None Remove="Recursos\LISTADOREQUERIMIENTOS\archivo.png" />
+    <None Remove="Recursos\LISTADOREQUERIMIENTOS\cerrar-sesion.png" />
+    <None Remove="Recursos\LISTADOREQUERIMIENTOS\LogoASEblanco.png" />
+    <None Remove="Recursos\LISTADOREQUERIMIENTOS\ver-documentos.png" />
+    <None Remove="Recursos\llave %282%29.png" />
+    <None Remove="Recursos\login-seach.png" />
+    <None Remove="Recursos\login.jpg" />
+    <None Remove="Recursos\login1.jpg" />
+    <None Remove="Recursos\LOGIN\carpeta-abierta.png" />
+    <None Remove="Recursos\LOGIN\iniciar-sesion.png" />
+    <None Remove="Recursos\LOGIN\LogoASE.png" />
+    <None Remove="Recursos\LOGIN\lupa.png" />
+    <None Remove="Recursos\LOGO-ASE-2022.png" />
+    <None Remove="Recursos\Lupa.jpg" />
+    <None Remove="Recursos\lupa.png" />
+    <None Remove="Recursos\Lupa1.heic" />
+    <None Remove="Recursos\Lupa1.jpg" />
+    <None Remove="Recursos\Lupa2.jpg" />
+    <None Remove="Recursos\pdf %281%29.png" />
+    <None Remove="Recursos\pdf %282%29.png" />
+    <None Remove="Recursos\pdf %283%29.png" />
+    <None Remove="Recursos\pdf %284%29.png" />
+    <None Remove="Recursos\pdf.png" />
+    <None Remove="Recursos\registrarse.png" />
+    <None Remove="Recursos\rfc.jpg" />
+    <None Remove="Recursos\seleccion.png" />
+    <None Remove="Recursos\VERDOCUMENTOS\borrar.png" />
+    <None Remove="Recursos\VERDOCUMENTOS\cerrar.png" />
+    <None Remove="Recursos\WHITE-LOGO-ASE-2022.png" />
+    <None Remove="Vistas\LogoASEblanco.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Recursos\AGREGARDOCUMENTOS\aceptar.png" />
+    <Resource Include="Recursos\AGREGARDOCUMENTOS\anexar carpetang.png" />
+    <Resource Include="Recursos\AGREGARDOCUMENTOS\cerrar-sesion.png" />
+    <Resource Include="Recursos\AGREGARDOCUMENTOS\Cerrar.png" />
+    <Resource Include="Recursos\AGREGARDOCUMENTOS\documento.png" />
+    <Resource Include="Recursos\LISTADOREQUERIMIENTOS\actualizar-flecha.png" />
+    <Resource Include="Recursos\LISTADOREQUERIMIENTOS\archivo.png" />
+    <Resource Include="Recursos\LISTADOREQUERIMIENTOS\cerrar-sesion.png" />
+    <Resource Include="Recursos\LISTADOREQUERIMIENTOS\LogoASEblanco.png" />
+    <Resource Include="Recursos\LISTADOREQUERIMIENTOS\ver-documentos.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Recursos\LOGIN\carpeta-abierta.png" />
+    <Resource Include="Recursos\LOGIN\iniciar-sesion.png" />
+    <Resource Include="Recursos\LOGIN\LogoASE.png" />
+    <Resource Include="Recursos\LOGIN\lupa.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- HTTP helpers -->
+    <PackageReference Include="System.Net.Http.Json" Version="8.0.0" />
+
+    <!-- gRPC cliente -->
+    <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.27.2" />
+    <PackageReference Include="Grpc.Tools" Version="2.62.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileXfer.Pdf\FileXfer.Pdf.csproj" />
+    <Content Include="..\tools\qpdf\win-x64\bin\**\*"
+             Link="qpdf\bin\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\qpdf\win-x64\THIRD-PARTY-NOTICES.txt"
+             Link="qpdf\THIRD-PARTY-NOTICES.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Generar clases cliente a partir del mismo proto que usa el servidor -->
+  <ItemGroup>
+    <Protobuf Include="Proto\upload.proto" GrpcServices="Client" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Recursos\actualizar-flecha (1).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\actualizar-flecha.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\agregar-archivo (1).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\agregar-archivo.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\ase_icon.ico">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\back_login.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\cerrar-sesion (2).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\cerrar-sesion (3).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\cerrar.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\certificado (2).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\eliminar-documento.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\error.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\filetransfer.ico">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\findreplace_icon.gif">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\llave (2).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\login-seach.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\login.jpg">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\login1.jpg">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\LOGO-ASE-2022.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\Lupa.jpg">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\lupa.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\Lupa1.heic">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\Lupa1.jpg">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\Lupa2.jpg">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\pdf (1).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\pdf (2).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\pdf (3).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\pdf (4).png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\pdf.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\registrarse.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\rfc.jpg">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\seleccion.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Recursos\VERDOCUMENTOS\borrar.png" />
+    <Resource Include="Recursos\VERDOCUMENTOS\cerrar.png" />
+    <Resource Include="Recursos\WHITE-LOGO-ASE-2022.png">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Vistas\LogoASEblanco.png" />
+  </ItemGroup>
+
+</Project>

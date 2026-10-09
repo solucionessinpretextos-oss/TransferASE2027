@@ -1,0 +1,674 @@
+<!--
+  DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
+  Archivo: TransferClienteASE/Vistas/VentanaSelectorRequerimiento.xaml
+  Capa: Cliente TransferClienteASE (WPF .NET)
+  Propósito: Vista XAML WPF: define layout, controles, bindings y recursos visuales de una pantalla.
+  Interacción: Se enlaza al ViewModel mediante Binding; muestra estado y dispara comandos sin conocer SQL ni backend.
+  Regla de mantenimiento: Usar Mode=OneWay para propiedades calculadas de solo lectura; validar nombres de propiedades enlazadas.
+  Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+-->
+<Window x:Class="TransferClienteASE.Vistas.VentanaSelectorRequerimiento"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="clr-namespace:TransferClienteASE.Conversores"
+        Title="ASE | Sistema de Transferencia de Archivos del Buzón Digital"
+        Height="480"
+        Width="900"
+        WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
+        ResizeMode="CanResize"
+        Loaded="Window_Loaded"
+        SizeChanged="Window_SizeChanged"
+        Background="white"
+        Icon="/Recursos/filetransfer.ico">
+    <!--
+        DOCUMENTACIÓN INTERNA — VentanaSelectorRequerimiento
+        Esta vista cambia dinámicamente según el acto seleccionado:
+        - Actos normales: muestra requerimientos.
+        - Cédula preliminar: muestra resultados de Cédula.
+        - Informe Individual: muestra resultados asignados por oficio.
+        La lógica que decide qué mostrar vive en ModeloVistaSelectorRequerimiento.
+    -->
+
+    <Window.Resources>
+        <conv:BooleanInversoConverter x:Key="BooleanInversoConverter" />
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+
+        <SolidColorBrush x:Key="ListadoGridHeaderBrush" Color="#533313"/>
+        <SolidColorBrush x:Key="ListadoFiltroBackgroundBrush" Color="#EEEEEE"/>
+        <SolidColorBrush x:Key="ListadoFiltroTextoBrush" Color="#666666"/>
+
+        <Style x:Key="ListadoDataGridColumnHeaderStyle"
+               TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="{StaticResource ListadoGridHeaderBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="TextBlock.TextAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="BottomBarButtonBase"
+       TargetType="Button"
+       BasedOn="{StaticResource AseFlatButton}">
+            <Setter Property="Width" Value="160"/>
+            <Setter Property="Height" Value="52"/>
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="10,0"/>
+        </Style>
+<Style x:Key="BottomBarButton"
+       TargetType="Button"
+       BasedOn="{StaticResource BottomBarButtonBase}">
+        </Style>
+        <Style x:Key="BottomBarButtonInline"
+       TargetType="Button"
+       BasedOn="{StaticResource AseFlatButton}">
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Margin" Value="6,0,0,0"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+<Style x:Key="ListadoDataGridStyle" TargetType="DataGrid">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="RowBackground" Value="#FFFFFF"/>
+            <Setter Property="AlternatingRowBackground" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#FFDDDDDD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+<Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="RowHeaderWidth" Value="0"/>
+<Setter Property="ScrollViewer.Background" Value="#FFFFFF"/>
+<Setter Property="ColumnHeaderStyle" Value="{StaticResource ListadoDataGridColumnHeaderStyle}"/>
+        </Style>
+<Style x:Key="ListadoDataGridCellStyle" TargetType="DataGridCell">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="#FF333333"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="BorderBrush" Value="#FFDDDDDD"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+<Style x:Key="ListadoDataGridRowStyle" TargetType="DataGridRow">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="#FF333333"/>
+
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="Background" Value="#FFE6EDF7"/>
+                    <Setter Property="Foreground" Value="#FF111111"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+<Style x:Key="FiltroConLupaBorderStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource ListadoFiltroBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="#FFBDBDBD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Height" Value="26"/>
+        </Style>
+
+        <Style x:Key="FiltroConLupaTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="2,0,2,0"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Foreground" Value="{StaticResource ListadoFiltroTextoBrush}"/>
+        </Style>
+
+    </Window.Resources>
+
+    <DockPanel>
+<Grid DockPanel.Dock="Top"
+      Height="128"
+      Background="{StaticResource AseHeaderBackground}">
+<Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+<StackPanel Grid.Column="0"
+                Orientation="Horizontal"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Center"
+                Margin="5,0,0,15"
+                Height="95">
+                <Image Source="/Vistas/LogoASEblanco.png"
+               Height="66"
+               Width="284"/>
+            </StackPanel>
+<StackPanel Grid.Column="2"
+                Orientation="Vertical"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Margin="0,0,12,15"
+                MinWidth="260">
+<TextBlock FontSize="16"
+           FontWeight="Bold"
+           Foreground="White"
+           TextAlignment="Right"
+           TextTrimming="CharacterEllipsis"
+           Text="{Binding NombreUsuario, TargetNullValue=(SIN NOMBRE), FallbackValue=(SIN NOMBRE)}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+<DataTrigger Binding="{Binding NombreUsuario}" Value="">
+                                    <Setter Property="Text" Value="(SIN NOMBRE)"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <TextBlock Text="{Binding RfcUsuario}"
+                   FontSize="14"
+                   FontWeight="Bold"
+                   Foreground="#d8c39d"
+                   TextAlignment="Right"/>
+
+                <TextBlock Text="Servidor Público"
+                   FontSize="14"
+                   Foreground="White"
+                   TextAlignment="Right"/>
+            </StackPanel>
+<StackPanel Grid.ColumnSpan="3"
+                VerticalAlignment="Center"
+                HorizontalAlignment="Center"
+                Margin="0,0,0,10"
+                MaxWidth="520">
+                <TextBlock Text="TRANSFER ASE"
+                   FontSize="20"
+                   FontWeight="Bold"
+                   Foreground="White"
+                   HorizontalAlignment="Center"
+                   TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="Sistema de Transferencia de Archivos del Buzón Digital"
+                   FontWeight="Bold"
+                   FontSize="20"
+                   Foreground="#d8c39d"
+                   HorizontalAlignment="Center"
+                   TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+<Border Grid.ColumnSpan="3"
+            VerticalAlignment="Top"
+            Height="7"
+            Background="#ffffff"
+            Margin="0,104,0,0"/>
+            <Border Grid.ColumnSpan="3"
+            VerticalAlignment="Top"
+            Height="16"
+            Background="#ddc9a3"
+            Margin="0,112,0,0"/>
+
+        </Grid>
+<Border DockPanel.Dock="Top"
+                Margin="12"
+                Background="#FFFFFF"
+                BorderBrush="#FFCCCCCC"
+                BorderThickness="1">
+            <Grid Margin="12" Background="#FFFFFF">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+<Grid Grid.Row="0" Margin="0,0,0,18">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="2*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="4*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Margin="0,0,4,0"
+                               Text="Año PAAVI" FontSize="14"/>
+
+                    <ComboBox
+                              ItemsSource="{Binding Anios}"
+                              SelectedItem="{Binding AnioSeleccionado}"
+                              DisplayMemberPath="Nombre"
+                              IsEditable="True"
+                              IsHitTestVisible="False"
+                              Focusable="False"
+                              Background="White"
+                              Foreground="Black"
+                              Margin="69,0,20,0" Grid.ColumnSpan="2" FontSize="14"/>
+
+                    <TextBlock Grid.Column="2"
+                               VerticalAlignment="Center"
+                               Margin="0,0,4,0"
+                               Text="Ente Fiscalizado" FontSize="14"/>
+
+                    <TextBox Grid.Column="3"
+                             Text="{Binding NombreEnteSeleccionado, Mode=OneWay}"
+                             IsReadOnly="True" Margin="5,0,0,0" FontSize="14"/>
+                </Grid>
+<Grid Grid.Row="1" Margin="0,0,0,18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="7*"/>
+                        <RowDefinition Height="2*"/>
+                        <RowDefinition Height="5*"/>
+                        <RowDefinition Height="7*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="113*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               VerticalAlignment="Top"
+                               Margin="0,3,4,0"
+                               Text="Auditoría" Grid.RowSpan="4" FontSize="14"/>
+
+                    <ComboBox Grid.Column="1"
+                              ItemsSource="{Binding Entes}"
+                              SelectedItem="{Binding EnteSeleccionado}"
+                              DisplayMemberPath="Nombre"
+                              IsEditable="True"
+                              IsHitTestVisible="False"
+                              Background="White"
+                              Foreground="Black"
+                              Focusable="False" Grid.ColumnSpan="2" Grid.RowSpan="4" FontSize="14"/>
+                </Grid>
+<Grid Grid.Row="2" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+<Grid Grid.Column="0" Margin="0,0,8,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,4,0"
+                                   Text="Acto de Fiscalización" FontSize="14"/>
+
+                        <ComboBox
+                                  x:Name="cboActo"
+                                  ItemsSource="{Binding Actos}"
+                                  SelectedItem="{Binding ActoSeleccionado, Mode=TwoWay}"
+                                  DisplayMemberPath="Nom_Acto"
+                                  Background="White"
+                                  Foreground="Black"
+                                  IsEditable="True"
+                                  IsSynchronizedWithCurrentItem="True"
+                                  PreviewTextInput="ComboNoEditable_PreviewTextInput"
+                                  PreviewKeyDown="ComboNoEditable_PreviewKeyDown" Margin="4,0,39,0" Grid.Column="1" FontSize="14"/>
+                    </Grid>
+<Grid Grid.Column="1" Margin="0,0,0,10">
+<Grid Visibility="{Binding MuestraOficio, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,4,0"
+                                       FontSize="14"
+                                       Text="Oficio de Solicitud"/>
+
+                            <ComboBox Grid.Column="1"
+                                      x:Name="cboOficio"
+                                      ItemsSource="{Binding Oficios}"
+                                      SelectedItem="{Binding OficioSeleccionado, Mode=TwoWay}"
+                                      DisplayMemberPath="Descripcion"
+                                      FontSize="14"
+                                      Background="White"
+                                      Foreground="Black"
+                                      IsEditable="True"
+                                      IsSynchronizedWithCurrentItem="True"
+                                      PreviewTextInput="ComboNoEditable_PreviewTextInput"
+                                      PreviewKeyDown="ComboNoEditable_PreviewKeyDown"/>
+                        </Grid>
+<Grid Visibility="{Binding EsActoCedula, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,4,0"
+                                       Text="Anexo"/>
+
+                            <ComboBox Grid.Column="1"
+                                      x:Name="cboAnexoCedula"
+                                      ItemsSource="{Binding AnexosCedula}"
+                                      SelectedItem="{Binding AnexoSeleccionado, Mode=TwoWay}"
+                                      DisplayMemberPath="Anexo_Nombre"
+                                      FontSize="14"
+                                      Background="White"
+                                      Foreground="Black"
+                                      IsEditable="True"
+                                      IsSynchronizedWithCurrentItem="True"
+                                      PreviewTextInput="ComboNoEditable_PreviewTextInput"
+                                      PreviewKeyDown="ComboNoEditable_PreviewKeyDown"/>
+                        </Grid>
+
+                    </Grid>
+                </Grid>
+<Grid Grid.Row="3"
+                      Margin="0,0,0,4"
+                      Visibility="{Binding EsActoNormal, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="2*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding TituloRequerimientos}"
+                               FontSize="14"
+                               VerticalAlignment="Center"/>
+
+                    <TextBlock Grid.Column="1"
+                               Margin="8,0,4,0"
+                               VerticalAlignment="Center"
+                               Text="{Binding TextoFiltroRequerimientos}"
+                               FontSize="14"
+                               />
+
+                    <Border Grid.Column="2" Style="{StaticResource FiltroConLupaBorderStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+<Image Grid.Column="0"
+               Width="14"
+               Height="14"
+               Margin="0,0,8,0"
+               VerticalAlignment="Center"
+               Stretch="Uniform"
+               Source="pack://application:,,,/TransferClienteASE;component/Recursos/LOGIN/lupa.png"/>
+
+                            <TextBox Grid.Column="1"
+                                 Style="{StaticResource FiltroConLupaTextBoxStyle}"
+                                 Text="{Binding FiltroTexto, UpdateSourceTrigger=PropertyChanged}"/>
+                        </Grid>
+                    </Border>
+</Grid>
+<DataGrid x:Name="dgRequerimientos"
+                          Grid.Row="4"
+                          Visibility="{Binding EsActoNormal, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}"
+                          ItemsSource="{Binding Requerimientos}"
+                          SelectedItem="{Binding RequerimientoSeleccionado}"
+                          FontSize="14"
+                          AutoGenerateColumns="False"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          Margin="0,10,0,4"
+                          IsReadOnly="True"
+                          RowHeight="32"
+                          VerticalAlignment="Stretch"
+                          HorizontalGridLinesBrush="#FFDDDDDD"
+                          VerticalGridLinesBrush="#FFDDDDDD"
+                          HeadersVisibility="Column"
+                          RowHeaderWidth="0"
+                          ColumnHeaderStyle="{StaticResource ListadoDataGridColumnHeaderStyle}"
+                          Style="{StaticResource ListadoDataGridStyle}"
+                          CellStyle="{StaticResource ListadoDataGridCellStyle}"
+                          RowStyle="{StaticResource ListadoDataGridRowStyle}"
+                          >
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Apartado/Rubro"
+                                            Binding="{Binding Descripcion}"
+                                            Width="2*"/>
+                        <DataGridTextColumn Header="Requerimiento"
+                                            Binding="{Binding Clave}"
+                                            Width="3*"/>
+                        <DataGridTextColumn Header="Documentos enviados"
+                                            Binding="{Binding Total_Documentos}"
+                                            Width="1*">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    <Setter Property="TextAlignment" Value="Center"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+<DataGrid x:Name="dgResultadosCedula"
+                          Grid.Row="4"
+                          ItemsSource="{Binding ResultadosCedula}"
+                          SelectedItem="{Binding ResultadoCedulaSeleccionado}"
+                          AutoGenerateColumns="False"
+                          FontSize="14"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          Margin="0,10,0,4"
+                          IsReadOnly="True"
+                          RowHeight="32"
+                          VerticalAlignment="Stretch"
+                          HorizontalGridLinesBrush="#FFDDDDDD"
+                          VerticalGridLinesBrush="#FFDDDDDD"
+                          HeadersVisibility="Column"
+                          RowHeaderWidth="0"
+                          ColumnHeaderStyle="{StaticResource ListadoDataGridColumnHeaderStyle}"
+                          Visibility="{Binding EsActoCedula, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}"
+                          Style="{StaticResource ListadoDataGridStyle}"
+                          CellStyle="{StaticResource ListadoDataGridCellStyle}"
+                          RowStyle="{StaticResource ListadoDataGridRowStyle}"
+                          >
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="No. Resultado"
+                                            Binding="{Binding Num_Resultado}"
+                                            FontSize="14"
+                                            Width="1*">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    <Setter Property="TextAlignment" Value="Center"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn Header="Texto Resultado"
+                                            Binding="{Binding Resumen}"
+                                            FontSize="14"
+                                            Width="4*"/>
+                        <DataGridTextColumn Header="Documentos Anexados"
+                                            FontSize="14"
+                                            Binding="{Binding Total_Evidencias}"
+                                            Width="1*">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    <Setter Property="TextAlignment" Value="Center"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+<DataGrid x:Name="dgResultadosInforme"
+                          Grid.Row="4"
+                          ItemsSource="{Binding ResultadosInforme}"
+                          SelectedItem="{Binding ResultadoInformeSeleccionado}"
+                          AutoGenerateColumns="False"
+                          FontSize="14"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          Margin="0,10,0,4"
+                          IsReadOnly="True"
+                          RowHeight="32"
+                          VerticalAlignment="Stretch"
+                          HorizontalGridLinesBrush="#FFDDDDDD"
+                          VerticalGridLinesBrush="#FFDDDDDD"
+                          HeadersVisibility="Column"
+                          RowHeaderWidth="0"
+                          ColumnHeaderStyle="{StaticResource ListadoDataGridColumnHeaderStyle}"
+                          Visibility="{Binding EsActoInformeIndividual, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}"
+                          Style="{StaticResource ListadoDataGridStyle}"
+                          CellStyle="{StaticResource ListadoDataGridCellStyle}"
+                          RowStyle="{StaticResource ListadoDataGridRowStyle}">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="No. Resultado"
+                                            Binding="{Binding Num_Resultado}"
+                                            FontSize="14"
+                                            Width="1*">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    <Setter Property="TextAlignment" Value="Center"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <!--
+                            Informe Individual de Auditoría:
+                            El mockup y la regla de negocio indican que la segunda columna debe
+                            mostrar el Apartado / Rubro, no el texto del resultado. El texto del
+                            resultado sigue viajando en el DTO para trazabilidad y mantenimiento,
+                            pero esta vista debe presentar el rubro obtenido en backend desde
+                            BUZ_Resultados_CedulaEvaluacion.ID_Rubro -> BUZ_Cat_Rubros.Nom_Rubro.
+                        -->
+                        <DataGridTextColumn Header="Apartado / Rubro"
+                                            Binding="{Binding Apartado_Rubro}"
+                                            FontSize="14"
+                                            Width="4*"/>
+                        <DataGridTextColumn Header="Documentos Anexados"
+                                            FontSize="14"
+                                            Binding="{Binding Total_Documentos}"
+                                            Width="1*">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    <Setter Property="TextAlignment" Value="Center"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+<StackPanel Grid.Row="5"
+                    Orientation="Horizontal"
+                    Visibility="{Binding EsActoNormal, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}"
+                    HorizontalAlignment="Center"
+                    Margin="0,10,0,10">
+                    <Button Content="Anterior"
+                    Margin="4,0"
+                    Command="{Binding ComandoPaginaAnterior}"/>
+                    <TextBlock VerticalAlignment="Center"
+                       Margin="8,0,4,0"
+                       Text="{Binding PaginaActual}"/>
+                    <TextBlock VerticalAlignment="Center" Text="/"/>
+                    <TextBlock VerticalAlignment="Center"
+                       Margin="4,0,8,0"
+                       Text="{Binding TotalPaginas}"/>
+                    <Button Content="Siguiente"
+                    Margin="4,0"
+                    Command="{Binding ComandoPaginaSiguiente}"/>
+                </StackPanel>
+
+<StackPanel Grid.Row="6"
+            Orientation="Horizontal"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Center">
+<Button Style="{StaticResource BottomBarButtonInline}"
+            Width="159"
+            Background="#FF7E5428"
+            Foreground="White"
+            Click="BotonAgregarDocumentos_Click">
+                        <Button.Content>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Image Source="pack://application:,,,/TransferClienteASE;component/Recursos/LISTADOREQUERIMIENTOS/archivo.png"
+                       Width="16"
+                       Height="16"
+                       Margin="0,0,6,0"
+                       VerticalAlignment="Center"
+                       Stretch="Uniform"/>
+                                <TextBlock Text="Agregar documentos"
+                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button.Content>
+                    </Button>
+<Button Style="{StaticResource BottomBarButtonInline}"
+            Width="142"
+            Background="#FFD2B48C"
+            Foreground="White"
+            Command="{Binding ComandoRefrescar}">
+                        <Button.Content>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Image Source="pack://application:,,,/TransferClienteASE;component/Recursos/LISTADOREQUERIMIENTOS/actualizar-flecha.png"
+                       Width="16"
+                       Height="16"
+                       Margin="0,0,6,0"
+                       VerticalAlignment="Center"
+                       Stretch="Uniform"/>
+                                <TextBlock Text="Actualizar tabla"
+                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button.Content>
+                    </Button>
+<Button Style="{StaticResource BottomBarButtonInline}"
+            Width="140"
+            Background="#FFC5CFE0"
+            Foreground="White"
+            Command="{Binding ComandoVerArchivosLocales}"
+            Visibility="{Binding PuedeVerArchivosLocales, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}">
+                        <Button.Content>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Image Source="pack://application:,,,/TransferClienteASE;component/Recursos/LISTADOREQUERIMIENTOS/ver-documentos.png"
+                       Width="16"
+                       Height="16"
+                       Margin="0,0,6,0"
+                       VerticalAlignment="Center"
+                       Stretch="Uniform"/>
+                                <TextBlock Text="Ver documentos"
+                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button.Content>
+                    </Button>
+<Button Style="{StaticResource BottomBarButtonInline}"
+            Width="91"
+            Background="#FFEEEEEE"
+            Foreground="#747474"
+            Click="BotonSalir_Click">
+                        <Button.Content>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Image Source="pack://application:,,,/TransferClienteASE;component/Recursos/LISTADOREQUERIMIENTOS/cerrar-sesion.png"
+                       Width="16"
+                       Height="16"
+                       Margin="0,0,6,0"
+                       VerticalAlignment="Center"
+                       Stretch="Uniform"/>
+                                <TextBlock Text="Salir"
+                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button.Content>
+                    </Button>
+
+                </StackPanel>
+
+            </Grid>
+        </Border>
+    </DockPanel>
+</Window>
