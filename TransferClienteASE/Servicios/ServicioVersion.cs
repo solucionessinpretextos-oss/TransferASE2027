@@ -284,7 +284,6 @@ namespace TransferClienteASE.Servicios
                 Directory.CreateDirectory(carpeta);
                 rutaDestino = Path.Combine(carpeta, nombreArchivo);
 
-                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                 await using (var origen = await response.Content.ReadAsStreamAsync(ct))
                 await using (var destino = new FileStream(
                                  rutaDestino,
@@ -306,46 +305,64 @@ namespace TransferClienteASE.Servicios
                             throw new InvalidDataException("El paquete excede el tamaño máximo permitido.");
 
                         await destino.WriteAsync(buffer.AsMemory(0, read), ct);
-                        hash.AppendData(buffer, 0, read);
                         total += read;
                     }
 
                     await destino.FlushAsync(ct);
                 }
 
-                var actualHash = hash.GetHashAndReset();
-                if (!CryptographicOperations.FixedTimeEquals(actualHash, expectedHash))
+                string? verificationFailure = null;
+                await using (var verifiedPackage = new FileStream(
+                                 rutaDestino,
+                                 FileMode.Open,
+                                 FileAccess.Read,
+                                 FileShare.Read,
+                                 1024 * 1024,
+                                 FileOptions.Asynchronous | FileOptions.SequentialScan))
                 {
-                    File.Delete(rutaDestino);
-                    return (false, "El paquete descargado no coincide con el SHA-256 publicado. No se ejecutará. "
-                                   + MensajeSoporte);
+                    // El mismo handle permanece abierto desde el hash hasta Process.Start.
+                    // FileShare.Read permite al cargador leer, pero impide sustituir o borrar
+                    // el archivo verificado durante la ventana crítica.
+                    var actualHash = await SHA256.HashDataAsync(verifiedPackage, ct);
+                    if (!CryptographicOperations.FixedTimeEquals(actualHash, expectedHash))
+                    {
+                        verificationFailure = "El paquete descargado no coincide con el SHA-256 publicado. No se ejecutará. ";
+                    }
+                    else
+                    {
+                        var canonical = string.Join("\n", new[]
+                        {
+                            "FILEXFER-UPDATE-V1",
+                            ClientId,
+                            update.VersionDisponible,
+                            update.Sha256.ToLowerInvariant()
+                        });
+                        var signatureOk = verifier.VerifyData(
+                            Encoding.UTF8.GetBytes(canonical),
+                            signature,
+                            HashAlgorithmName.SHA256,
+                            RSASignaturePadding.Pss);
+
+                        if (!signatureOk)
+                        {
+                            verificationFailure = "La firma criptográfica de la actualización no es válida. No se ejecutará. ";
+                        }
+                        else
+                        {
+                            Process.Start(new ProcessStartInfo
+                            {
+                                FileName = rutaDestino,
+                                UseShellExecute = true
+                            });
+                        }
+                    }
                 }
 
-                var canonical = string.Join("\n", new[]
-                {
-                    "FILEXFER-UPDATE-V1",
-                    ClientId,
-                    update.VersionDisponible,
-                    update.Sha256.ToLowerInvariant()
-                });
-                var signatureOk = verifier.VerifyData(
-                    Encoding.UTF8.GetBytes(canonical),
-                    signature,
-                    HashAlgorithmName.SHA256,
-                    RSASignaturePadding.Pss);
-
-                if (!signatureOk)
+                if (verificationFailure is not null)
                 {
                     File.Delete(rutaDestino);
-                    return (false, "La firma criptográfica de la actualización no es válida. No se ejecutará. "
-                                   + MensajeSoporte);
+                    return (false, verificationFailure + MensajeSoporte);
                 }
-
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = rutaDestino,
-                    UseShellExecute = true
-                });
 
                 return (true, null);
             }

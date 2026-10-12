@@ -21,6 +21,9 @@ namespace FileXfer.Server.Uploading
         private readonly object _sessionGate = new();
         private readonly ConcurrentDictionary<string, UploadSessionInfo> _sessions =
             new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _admissionsByRfc =
+            new(StringComparer.OrdinalIgnoreCase);
+        private int _activeAdmissions;
 
         public UploadSessionStore(StorageOptions storage)
         {
@@ -29,20 +32,31 @@ namespace FileXfer.Server.Uploading
 
         public IReadOnlyDictionary<string, UploadSessionInfo> Sessions => _sessions;
 
+        public UploadAdmissionResult TryAcquireAdmission(string rfc, out IDisposable? lease)
+        {
+            lease = null;
+            lock (_sessionGate)
+            {
+                if (_activeAdmissions >= _storage.MaxConcurrentUploadsTotal)
+                    return UploadAdmissionResult.GlobalLimitReached;
+
+                _admissionsByRfc.TryGetValue(rfc, out var activeForRfc);
+                if (activeForRfc >= _storage.MaxConcurrentUploadsPerRfc)
+                    return UploadAdmissionResult.RfcLimitReached;
+
+                _activeAdmissions++;
+                _admissionsByRfc[rfc] = activeForRfc + 1;
+                lease = new UploadAdmissionLease(this, rfc);
+                return UploadAdmissionResult.Started;
+            }
+        }
+
         public UploadStartResult TryBegin(string fileUuid, string rfc)
         {
             lock (_sessionGate)
             {
                 if (_sessions.ContainsKey(fileUuid))
                     return UploadStartResult.DuplicateUuid;
-                if (_sessions.Count >= _storage.MaxConcurrentUploadsTotal)
-                    return UploadStartResult.GlobalLimitReached;
-                if (_sessions.Values.Count(session =>
-                        string.Equals(session.Rfc, rfc, StringComparison.OrdinalIgnoreCase)) >=
-                    _storage.MaxConcurrentUploadsPerRfc)
-                {
-                    return UploadStartResult.RfcLimitReached;
-                }
 
                 var added = _sessions.TryAdd(fileUuid, new UploadSessionInfo
                 {
@@ -96,6 +110,15 @@ namespace FileXfer.Server.Uploading
                     c++;
             }
             return c;
+        }
+
+        public int ActiveAdmissionCount
+        {
+            get
+            {
+                lock (_sessionGate)
+                    return _activeAdmissions;
+            }
         }
 
         public IEnumerable<UploadSessionInfo> GetActiveSessions()
@@ -162,6 +185,47 @@ namespace FileXfer.Server.Uploading
 
             return removed;
         }
+
+        private void ReleaseAdmission(string rfc)
+        {
+            lock (_sessionGate)
+            {
+                if (_activeAdmissions > 0)
+                    _activeAdmissions--;
+
+                if (!_admissionsByRfc.TryGetValue(rfc, out var activeForRfc))
+                    return;
+
+                if (activeForRfc <= 1)
+                    _admissionsByRfc.Remove(rfc);
+                else
+                    _admissionsByRfc[rfc] = activeForRfc - 1;
+            }
+        }
+
+        private sealed class UploadAdmissionLease : IDisposable
+        {
+            private UploadSessionStore? _owner;
+            private readonly string _rfc;
+
+            public UploadAdmissionLease(UploadSessionStore owner, string rfc)
+            {
+                _owner = owner;
+                _rfc = rfc;
+            }
+
+            public void Dispose()
+            {
+                Interlocked.Exchange(ref _owner, null)?.ReleaseAdmission(_rfc);
+            }
+        }
+    }
+
+    public enum UploadAdmissionResult
+    {
+        Started,
+        GlobalLimitReached,
+        RfcLimitReached
     }
 
     public enum UploadStartResult

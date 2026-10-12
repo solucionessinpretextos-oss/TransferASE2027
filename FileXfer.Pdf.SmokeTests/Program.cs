@@ -13,6 +13,9 @@ var repairablePath = Path.GetFullPath(args[2]);
 var activeContentPath = Path.GetFullPath(args[3]);
 var qpdfPath = Path.GetFullPath(args[4]);
 var stagingRoot = Path.Combine(Path.GetTempPath(), "FileXfer.Pdf.SmokeTests", Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(stagingRoot);
+var attachmentPath = Path.Combine(stagingRoot, "attachment-annotation.pdf");
+WriteAttachmentAnnotationPdf(attachmentPath);
 
 var service = new QpdfPdfSafetyService(new PdfSafetyOptions
 {
@@ -55,6 +58,10 @@ try
     Require(activeContent.Outcome == PdfInspectionOutcome.UnsafeActiveContent,
         $"El PDF con JavaScript/OpenAction no fue rechazado: {activeContent.Outcome}");
 
+    var attachment = await service.InspectAsync(attachmentPath);
+    Require(attachment.Outcome == PdfInspectionOutcome.UnsafeActiveContent,
+        $"El PDF con adjunto por anotación no fue rechazado: {attachment.Outcome} / {attachment.TechnicalDetail}");
+
     var damaged = await service.InspectAsync(repairablePath);
     Require(damaged.Outcome == PdfInspectionOutcome.Damaged,
         $"El PDF de control no fue detectado como dañado: {damaged.Outcome} / {damaged.TechnicalDetail}");
@@ -87,6 +94,7 @@ try
     Console.WriteLine("PASS valid=accepted pages=1");
     Console.WriteLine("PASS encrypted=rejected");
     Console.WriteLine("PASS active-content=rejected");
+    Console.WriteLine("PASS attachment-annotation=rejected");
     Console.WriteLine("PASS damaged=detected repaired=revalidated original=unchanged staging=cleaned");
     return 0;
 }
@@ -103,6 +111,39 @@ finally
 }
 
 static byte[] Hash(string path) => SHA256.HashData(File.ReadAllBytes(path));
+
+static void WriteAttachmentAnnotationPdf(string path)
+{
+    var objects = new[]
+    {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Annots [4 0 R] /Contents 7 0 R >>",
+        "<< /Type /Annot /Subtype /FileAttachment /Rect [10 10 30 30] /FS 5 0 R >>",
+        "<< /Type /Filespec /F (payload.txt) /UF (payload.txt) /EF << /F 6 0 R /UF 6 0 R >> >>",
+        "<< /Type /EmbeddedFile /Length 5 >>\nstream\nhello\nendstream",
+        "<< /Length 0 >>\nstream\n\nendstream"
+    };
+
+    var bytes = new List<byte>();
+    AppendAscii(bytes, "%PDF-1.4\n%1234\n");
+    var offsets = new List<int> { 0 };
+    for (var index = 0; index < objects.Length; index++)
+    {
+        offsets.Add(bytes.Count);
+        AppendAscii(bytes, $"{index + 1} 0 obj\n{objects[index]}\nendobj\n");
+    }
+
+    var xrefOffset = bytes.Count;
+    AppendAscii(bytes, $"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n");
+    for (var index = 1; index < offsets.Count; index++)
+        AppendAscii(bytes, $"{offsets[index]:D10} 00000 n \n");
+    AppendAscii(bytes, $"trailer\n<< /Size {objects.Length + 1} /Root 1 0 R >>\nstartxref\n{xrefOffset}\n%%EOF\n");
+    File.WriteAllBytes(path, bytes.ToArray());
+}
+
+static void AppendAscii(List<byte> target, string value) =>
+    target.AddRange(System.Text.Encoding.ASCII.GetBytes(value));
 
 static void Require(bool condition, string message)
 {

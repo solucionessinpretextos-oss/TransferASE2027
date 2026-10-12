@@ -33,7 +33,12 @@ internal static class Program
             var publicKeyPath = Path.GetFullPath(args[6]);
 
             ValidateInputs(zipPath, destPath, exeName, version, publicKeyPath);
-            VerifyPackage(zipPath, version, expectedSha256, signatureBase64, publicKeyPath);
+            using var verifiedPackage = VerifyPackageAndOpen(
+                zipPath,
+                version,
+                expectedSha256,
+                signatureBase64,
+                publicKeyPath);
 
             if (IsRunningInsideDestination(destPath))
             {
@@ -79,7 +84,7 @@ internal static class Program
             try
             {
                 L("Validando y extrayendo el ZIP en staging...");
-                ExtractSafely(zipPath, stagingRoot);
+                ExtractSafely(verifiedPackage, stagingRoot);
                 var source = DetectExtractionSource(stagingRoot, L);
 
                 L("Aplicando actualización con respaldo transaccional...");
@@ -150,7 +155,7 @@ internal static class Program
             throw new FileNotFoundException("No se encontró la clave pública de actualización.", publicKeyPath);
     }
 
-    private static void VerifyPackage(
+    private static FileStream VerifyPackageAndOpen(
         string zipPath,
         string version,
         string expectedSha256,
@@ -172,43 +177,55 @@ internal static class Program
             throw new InvalidDataException("El hash o la firma no tiene un formato válido.", ex);
         }
 
-        using var stream = new FileStream(
+        var stream = new FileStream(
             zipPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
             1024 * 1024,
             FileOptions.SequentialScan);
-        var actual = SHA256.HashData(stream);
-        if (!CryptographicOperations.FixedTimeEquals(actual, expected))
-            throw new CryptographicException("El paquete no coincide con el SHA-256 esperado.");
-
-        using var rsa = RSA.Create();
-        rsa.ImportFromPem(File.ReadAllText(publicKeyPath));
-        if (rsa.KeySize < 2048)
-            throw new CryptographicException("La clave pública de actualización es demasiado corta.");
-        var canonical = string.Join("\n", new[]
+        try
         {
-            "FILEXFER-UPDATE-V1",
-            "transfer-cliente-ase",
-            version,
-            expectedSha256.ToLowerInvariant()
-        });
-        if (!rsa.VerifyData(
-                Encoding.UTF8.GetBytes(canonical),
-                signature,
-                HashAlgorithmName.SHA256,
-                RSASignaturePadding.Pss))
-            throw new CryptographicException("La firma RSA-PSS del paquete no es válida.");
+            var actual = SHA256.HashData(stream);
+            if (!CryptographicOperations.FixedTimeEquals(actual, expected))
+                throw new CryptographicException("El paquete no coincide con el SHA-256 esperado.");
+
+            using var rsa = RSA.Create();
+            rsa.ImportFromPem(File.ReadAllText(publicKeyPath));
+            if (rsa.KeySize < 2048)
+                throw new CryptographicException("La clave pública de actualización es demasiado corta.");
+            var canonical = string.Join("\n", new[]
+            {
+                "FILEXFER-UPDATE-V1",
+                "transfer-cliente-ase",
+                version,
+                expectedSha256.ToLowerInvariant()
+            });
+            if (!rsa.VerifyData(
+                    Encoding.UTF8.GetBytes(canonical),
+                    signature,
+                    HashAlgorithmName.SHA256,
+                    RSASignaturePadding.Pss))
+                throw new CryptographicException("La firma RSA-PSS del paquete no es válida.");
+
+            stream.Position = 0;
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
     }
 
-    private static void ExtractSafely(string zipPath, string stagingRoot)
+    private static void ExtractSafely(Stream verifiedPackage, string stagingRoot)
     {
         var root = WithTrailingSeparator(Path.GetFullPath(stagingRoot));
         long totalExpanded = 0;
         var entries = 0;
 
-        using var archive = ZipFile.OpenRead(zipPath);
+        verifiedPackage.Position = 0;
+        using var archive = new ZipArchive(verifiedPackage, ZipArchiveMode.Read, leaveOpen: true);
         long actualExpanded = 0;
         foreach (var entry in archive.Entries)
         {

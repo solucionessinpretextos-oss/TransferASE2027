@@ -2,8 +2,15 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using FileXfer.Server.Data;
+using FileXfer.Server.Options;
 using FileXfer.Server.Security;
+using FileXfer.Server.Services;
+using FileXfer.Server.Uploading;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 if (args.Length != 1)
 {
@@ -16,10 +23,16 @@ Require(File.Exists(updaterPath), "No se encontró el updater compilado.");
 
 TestPathProtection();
 TestMfaSecretProtection();
+TestUploadFileNamePolicy();
+TestUploadAdmission();
+await TestConcurrentMfaLockoutAsync();
 await TestUpdaterAsync(updaterPath);
 
 Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
+Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
+Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
+Console.WriteLine("PASS mfa-lockout=concurrent-failures-serialized");
 Console.WriteLine("PASS updater=signed-package-applied invalid-signature-rejected zip-slip-rejected");
 return 0;
 
@@ -72,6 +85,69 @@ static void TestMfaSecretProtection()
     var tampered = "v2:" + Convert.ToBase64String(payload);
     Expect<CryptographicException>(() => protector.Unprotect(tampered),
         "Un secreto MFA AES-GCM alterado fue aceptado.");
+}
+
+static void TestUploadFileNamePolicy()
+{
+    Require(UploadFileNamePolicy.TryValidate("informe-final.pdf", out _),
+        "La política rechazó un nombre PDF normal.");
+    foreach (var blocked in new[] { "payload.cmd", "payload.cmd ", "payload.ps1.", "PAYLOAD.CmD" })
+    {
+        Require(!UploadFileNamePolicy.TryValidate(blocked, out _),
+            $"La política aceptó un nombre peligroso: '{blocked}'.");
+    }
+}
+
+static void TestUploadAdmission()
+{
+    var store = new UploadSessionStore(new StorageOptions
+    {
+        MaxConcurrentUploadsTotal = 2,
+        MaxConcurrentUploadsPerRfc = 1
+    });
+
+    Require(store.TryAcquireAdmission("RFCUNO010101AA1", out var first) == UploadAdmissionResult.Started,
+        "No se concedió el primer lease de carga.");
+    Require(store.TryAcquireAdmission("RFCUNO010101AA1", out _) == UploadAdmissionResult.RfcLimitReached,
+        "No se aplicó la cuota por RFC antes del primer mensaje.");
+    Require(store.TryAcquireAdmission("RFCDOS010101AA2", out var second) == UploadAdmissionResult.Started,
+        "No se concedió el segundo lease global.");
+    Require(store.TryAcquireAdmission("RFCTRE010101AA3", out _) == UploadAdmissionResult.GlobalLimitReached,
+        "No se aplicó la cuota global antes del primer mensaje.");
+
+    first!.Dispose();
+    first.Dispose();
+    Require(store.TryAcquireAdmission("RFCUNO010101AA1", out var replacement) == UploadAdmissionResult.Started,
+        "El lease no liberó la capacidad por RFC.");
+    replacement!.Dispose();
+    second!.Dispose();
+    Require(store.ActiveAdmissionCount == 0, "Quedaron leases de carga activos después de Dispose.");
+}
+
+static async Task TestConcurrentMfaLockoutAsync()
+{
+    var databaseName = "lockout-smoke-" + Guid.NewGuid().ToString("N");
+    var dbOptions = new DbContextOptionsBuilder<FileXferDbContext>()
+        .UseInMemoryDatabase(databaseName)
+        .Options;
+    var factory = new SmokeDbContextFactory(dbOptions);
+    var service = new RateLockService(
+        factory,
+        Options.Create(new RateLimitOptions
+        {
+            LockoutThreshold = 1_000,
+            LockoutMinutes = 30
+        }),
+        NullLogger<RateLockService>.Instance);
+
+    const string rfc = "LOCK010101AA1";
+    const int failures = 50;
+    await Task.WhenAll(Enumerable.Range(0, failures).Select(_ => service.RegisterFailureAsync(rfc)));
+
+    await using var db = await factory.CreateDbContextAsync();
+    var stored = await db.Lockouts.SingleAsync(item => item.Rfc == rfc);
+    Require(stored.FailCount == failures,
+        $"Se perdieron fallos MFA concurrentes. Esperado={failures}, real={stored.FailCount}.");
 }
 
 static async Task TestUpdaterAsync(string updaterPath)
@@ -267,4 +343,13 @@ static void Require(bool condition, string message)
 {
     if (!condition)
         throw new InvalidOperationException(message);
+}
+
+file sealed class SmokeDbContextFactory(DbContextOptions<FileXferDbContext> options)
+    : IDbContextFactory<FileXferDbContext>
+{
+    public FileXferDbContext CreateDbContext() => new(options);
+
+    public Task<FileXferDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new FileXferDbContext(options));
 }

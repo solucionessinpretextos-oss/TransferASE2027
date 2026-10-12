@@ -48,17 +48,6 @@ namespace FileXfer.Server.Uploading
     [Authorize]
     public class UploadGrpcService : Upload.UploadBase
     {
-        private static readonly HashSet<string> BlockedExtensions = new(
-            new[]
-            {
-                ".exe", ".dll", ".com", ".scr", ".msi", ".msp", ".bat", ".cmd",
-                ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
-                ".hta", ".jar", ".lnk", ".url", ".reg", ".chm", ".appx", ".msix",
-                ".key", ".pem", ".pfx", ".p12", ".ppk", ".jks", ".keystore",
-                ".kdbx", ".env", ".der"
-            },
-            StringComparer.OrdinalIgnoreCase);
-
         private readonly FileAssembler _assembler;
         private readonly ILogger<UploadGrpcService> _log;
         private readonly IHttpContextAccessor _httpAccessor;
@@ -113,6 +102,21 @@ namespace FileXfer.Server.Uploading
                 throw new RpcException(new Status(StatusCode.Unauthenticated, "El token no contiene un RFC válido."));
             rfc = normalizedRfc;
 
+            var admissionResult = _sessionStore.TryAcquireAdmission(rfc, out var admissionLease);
+            if (admissionResult != UploadAdmissionResult.Started)
+            {
+                throw new RpcException(new Status(
+                    StatusCode.ResourceExhausted,
+                    admissionResult == UploadAdmissionResult.RfcLimitReached
+                        ? "Se alcanzó el límite de cargas simultáneas para el RFC. Espere a que concluya una carga."
+                        : "El servidor alcanzó temporalmente su límite de cargas simultáneas."));
+            }
+            using var uploadAdmission = admissionLease!;
+
+            using var uploadTimeout = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
+            uploadTimeout.CancelAfter(TimeSpan.FromMinutes(_storage.MaxUploadDurationMinutes));
+            var uploadCancellationToken = uploadTimeout.Token;
+
             var deviceId =
                 user?.FindFirst("device")?.Value ??
                 user?.FindFirst("device_id")?.Value ??
@@ -159,9 +163,9 @@ namespace FileXfer.Server.Uploading
                     "grpc_upload_begin",
                     ip,
                     "begin stream auth ok",
-                    context.CancellationToken);
+                    uploadCancellationToken);
 
-                await using var db = await _dbf.CreateDbContextAsync(context.CancellationToken);
+                await using var db = await _dbf.CreateDbContextAsync(uploadCancellationToken);
 
                 var basePath = _storage.BasePath;
                 if (string.IsNullOrWhiteSpace(basePath))
@@ -171,8 +175,14 @@ namespace FileXfer.Server.Uploading
                         "StorageOptions.BasePath vacío en servidor"));
                 }
 
-                while (await requestStream.MoveNext(context.CancellationToken))
+                var nextChunkTimeout = TimeSpan.FromSeconds(_storage.FirstChunkTimeoutSeconds);
+                while (await MoveNextWithTimeoutAsync(
+                           requestStream,
+                           nextChunkTimeout,
+                           uploadCancellationToken,
+                           context.CancellationToken))
                 {
+                    nextChunkTimeout = TimeSpan.FromSeconds(_storage.IdleChunkTimeoutSeconds);
                     var chunk = requestStream.Current;
                     if (chunk == null)
                         continue;
@@ -271,7 +281,7 @@ namespace FileXfer.Server.Uploading
                             idOficio.Value,
                             idRequerimiento,
                             idResultado,
-                            context.CancellationToken);
+                            uploadCancellationToken);
 
                         if (!contextAuthorized)
                         {
@@ -280,7 +290,7 @@ namespace FileXfer.Server.Uploading
                                 "grpc_upload_denied_context",
                                 ip,
                                 $"periodo={periodo}; ente={idEnte}; auditoria={idAuditoria}; acto={idActo}; oficio={idOficio}",
-                                context.CancellationToken);
+                                uploadCancellationToken);
                             throw new RpcException(new Status(
                                 StatusCode.PermissionDenied,
                                 "El usuario no tiene autorización para cargar archivos en el contexto seleccionado."));
@@ -328,7 +338,7 @@ namespace FileXfer.Server.Uploading
                             throw new RpcException(new Status(StatusCode.InvalidArgument, "OriginalFileName es obligatorio."));
 
                         entry = await db.Uploads
-                            .SingleOrDefaultAsync(x => x.FileUuid == fileUuid, context.CancellationToken);
+                            .SingleOrDefaultAsync(x => x.FileUuid == fileUuid, uploadCancellationToken);
 
                         var displayFileName = !string.IsNullOrWhiteSpace(fileName)
                             ? fileName
@@ -371,7 +381,7 @@ namespace FileXfer.Server.Uploading
                             };
 
                             db.Uploads.Add(entry);
-                            await db.SaveChangesAsync(context.CancellationToken);
+                            await db.SaveChangesAsync(uploadCancellationToken);
 
                             lastDbFlushUtc = DateTimeOffset.UtcNow;
                             bytesSinceDbFlush = 0;
@@ -442,7 +452,7 @@ namespace FileXfer.Server.Uploading
                             _assembler.ResetForRetry(storageKey, fileUuid, storedFileNameForDisk);
                             fileOwnedByAttempt = true;
 
-                            await db.SaveChangesAsync(context.CancellationToken);
+                            await db.SaveChangesAsync(uploadCancellationToken);
 
                             lastDbFlushUtc = DateTimeOffset.UtcNow;
                             bytesSinceDbFlush = 0;
@@ -472,7 +482,7 @@ namespace FileXfer.Server.Uploading
 
                         if (updatedMeta)
                         {
-                            await db.SaveChangesAsync(context.CancellationToken);
+                            await db.SaveChangesAsync(uploadCancellationToken);
                             lastDbFlushUtc = DateTimeOffset.UtcNow;
                             bytesSinceDbFlush = 0;
                         }
@@ -508,7 +518,7 @@ namespace FileXfer.Server.Uploading
                             currentFileNameForDisk,
                             chunk.Offset,
                             dataBytes,
-                            context.CancellationToken);
+                            uploadCancellationToken);
 
                         totalBytes += dataBytes.LongLength;
                         lastOffset += dataBytes.LongLength;
@@ -525,7 +535,7 @@ namespace FileXfer.Server.Uploading
 
                         if (needDbFlush)
                         {
-                            await db.SaveChangesAsync(context.CancellationToken);
+                            await db.SaveChangesAsync(uploadCancellationToken);
                             lastDbFlushUtc = now;
                             bytesSinceDbFlush = 0;
                         }
@@ -537,12 +547,12 @@ namespace FileXfer.Server.Uploading
 
                 if (entry != null && bytesSinceDbFlush > 0)
                 {
-                    await using var db2 = await _dbf.CreateDbContextAsync(context.CancellationToken);
-                    var e2 = await db2.Uploads.SingleOrDefaultAsync(x => x.FileUuid == fileUuid, context.CancellationToken);
+                    await using var db2 = await _dbf.CreateDbContextAsync(uploadCancellationToken);
+                    var e2 = await db2.Uploads.SingleOrDefaultAsync(x => x.FileUuid == fileUuid, uploadCancellationToken);
                     if (e2 != null)
                     {
                         e2.BytesReceived = totalBytes;
-                        await db2.SaveChangesAsync(context.CancellationToken);
+                        await db2.SaveChangesAsync(uploadCancellationToken);
                     }
                 }
 
@@ -558,7 +568,7 @@ namespace FileXfer.Server.Uploading
                     storageKey,
                     fileUuid!,
                     finalFileNameForDisk,
-                    context.CancellationToken);
+                    uploadCancellationToken);
 
                 // Cierra el escritor antes de pedir a qpdf que abra el documento o de eliminar
                 // una carga rechazada. End() en finally vuelve a intentarlo de forma idempotente.
@@ -575,7 +585,7 @@ namespace FileXfer.Server.Uploading
                     storageKey,
                     fileUuid!,
                     finalFileNameForDisk);
-                if (integrityOk && await LooksLikePortableExecutableAsync(absolutePath, context.CancellationToken))
+                if (integrityOk && await LooksLikePortableExecutableAsync(absolutePath, uploadCancellationToken))
                 {
                     integrityOk = false;
                     validationFailure = "El contenido corresponde a un ejecutable de Windows y está bloqueado.";
@@ -585,13 +595,13 @@ namespace FileXfer.Server.Uploading
                 var extensionPdf = Path.GetExtension(nombreOriginalParaValidar)
                     .Equals(".pdf", StringComparison.OrdinalIgnoreCase);
                 var contenidoPdf = integrityOk &&
-                    await LooksLikePdfAsync(absolutePath, context.CancellationToken);
+                    await LooksLikePdfAsync(absolutePath, uploadCancellationToken);
 
                 if (integrityOk && (extensionPdf || contenidoPdf))
                 {
                     var pdfResult = await _pdfSafety.InspectAsync(
                         absolutePath,
-                        context.CancellationToken);
+                        uploadCancellationToken);
 
                     if (!pdfResult.IsAccepted)
                     {
@@ -667,7 +677,7 @@ namespace FileXfer.Server.Uploading
                                     tamano: tamanoStr,
                                     hash8: hash8,
                                     idUpload: entry.Id,
-                                    ct: context.CancellationToken);
+                                    ct: uploadCancellationToken);
                             }
                             else
                             {
@@ -681,7 +691,7 @@ namespace FileXfer.Server.Uploading
                                     tamano: tamanoStr,
                                     hash8: hash8,
                                     idUpload: entry.Id,
-                                    ct: context.CancellationToken);
+                                    ct: uploadCancellationToken);
                             }
                         }
                         catch (Exception exReg)
@@ -705,7 +715,7 @@ namespace FileXfer.Server.Uploading
                     entry.CompletedUtc = DateTimeOffset.UtcNow;
                     entry.LastError = validationFailure ?? catalogFailure;
 
-                    await db.SaveChangesAsync(context.CancellationToken);
+                    await db.SaveChangesAsync(uploadCancellationToken);
                 }
 
                 var operationSuccess = integrityOk && catalogOk;
@@ -729,7 +739,7 @@ namespace FileXfer.Server.Uploading
                             "grpc_upload_end",
                             ip,
                             detailsEnd,
-                            context.CancellationToken);
+                            uploadCancellationToken);
                     }
                     catch (Exception auditException)
                     {
@@ -756,6 +766,16 @@ namespace FileXfer.Server.Uploading
                 _log.LogError(rex, "RpcException en UploadStream. RFC={Rfc}, FileUuid={FileUuid}", rfc, fileUuid);
                 throw;
             }
+            catch (OperationCanceledException) when (!context.CancellationToken.IsCancellationRequested)
+            {
+                attemptFailure = "La carga excedió el tiempo máximo permitido.";
+                throw new RpcException(new Status(StatusCode.DeadlineExceeded, attemptFailure));
+            }
+            catch (OperationCanceledException)
+            {
+                attemptFailure = "La carga fue cancelada por el cliente.";
+                throw new RpcException(new Status(StatusCode.Cancelled, attemptFailure));
+            }
             catch (Exception ex)
             {
                 attemptFailure = "La carga terminó por un error interno antes de completarse.";
@@ -767,6 +787,11 @@ namespace FileXfer.Server.Uploading
             }
             finally
             {
+                // La cuota protege solicitudes activas, no tareas de limpieza. Se libera antes
+                // de cualquier I/O de base de datos para que una falla de SQL no agote todos
+                // los cupos después de cancelar o expirar cargas. Dispose es idempotente.
+                uploadAdmission.Dispose();
+
                 if (sessionStarted && fileUuid != null)
                 {
                     _sessionStore.End(fileUuid);
@@ -821,7 +846,9 @@ namespace FileXfer.Server.Uploading
 
         private async Task MarkPendingUploadFailedAsync(string fileUuid, string reason)
         {
-            await using var db = await _dbf.CreateDbContextAsync(CancellationToken.None);
+            using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var cleanupToken = cleanupTimeout.Token;
+            await using var db = await _dbf.CreateDbContextAsync(cleanupToken);
             var boundedReason = reason.Length <= 1024 ? reason : reason[..1024];
             if (db.Database.IsRelational())
             {
@@ -832,39 +859,46 @@ namespace FileXfer.Server.Uploading
                             .SetProperty(upload => upload.Status, "Failed")
                             .SetProperty(upload => upload.LastError, boundedReason)
                             .SetProperty(upload => upload.CompletedUtc, DateTimeOffset.UtcNow),
-                        CancellationToken.None);
+                        cleanupToken);
                 return;
             }
 
             var entry = await db.Uploads.SingleOrDefaultAsync(
                 upload => upload.FileUuid == fileUuid && upload.Status == "Pending",
-                CancellationToken.None);
+                cleanupToken);
             if (entry is null)
                 return;
 
             entry.Status = "Failed";
             entry.LastError = boundedReason;
             entry.CompletedUtc = DateTimeOffset.UtcNow;
-            await db.SaveChangesAsync(CancellationToken.None);
+            await db.SaveChangesAsync(cleanupToken);
         }
 
         private static void ValidateFileName(string fileName)
         {
-            if (string.IsNullOrWhiteSpace(fileName) || fileName.Length > 255 ||
-                !string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal) ||
-                fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            {
-                throw new RpcException(new Status(StatusCode.InvalidArgument, "El nombre del archivo no es válido."));
-            }
+            if (!UploadFileNamePolicy.TryValidate(fileName, out var error))
+                throw new RpcException(new Status(StatusCode.InvalidArgument, error));
+        }
 
-            var extension = Path.GetExtension(fileName);
-            if (string.IsNullOrWhiteSpace(extension))
-                throw new RpcException(new Status(StatusCode.InvalidArgument, "El archivo debe tener una extensión."));
-            if (BlockedExtensions.Contains(extension))
+        private static async Task<bool> MoveNextWithTimeoutAsync(
+            IAsyncStreamReader<UploadChunk> requestStream,
+            TimeSpan timeout,
+            CancellationToken uploadCancellationToken,
+            CancellationToken callerCancellationToken)
+        {
+            using var chunkTimeout = CancellationTokenSource.CreateLinkedTokenSource(uploadCancellationToken);
+            chunkTimeout.CancelAfter(timeout);
+            try
             {
-                throw new RpcException(new Status(
-                    StatusCode.InvalidArgument,
-                    "El tipo de archivo está bloqueado por la política de seguridad."));
+                return await requestStream.MoveNext(chunkTimeout.Token);
+            }
+            catch (OperationCanceledException) when (!callerCancellationToken.IsCancellationRequested)
+            {
+                var detail = uploadCancellationToken.IsCancellationRequested
+                    ? "La carga excedió su duración máxima."
+                    : "La carga excedió el tiempo permitido sin enviar datos.";
+                throw new RpcException(new Status(StatusCode.DeadlineExceeded, detail));
             }
         }
 

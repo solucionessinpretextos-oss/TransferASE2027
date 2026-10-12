@@ -32,6 +32,8 @@ builder.WebHost.ConfigureKestrel((context, options) =>
     var maxUploadBytesForKestrel = context.Configuration.GetValue<long?>("Storage:MaxUploadBytes")
                                    ?? 1024L * 1024L * 1024L;
     options.Limits.MaxRequestBodySize = maxUploadBytesForKestrel + (16L * 1024L * 1024L);
+    var maxStreamsPerConnection = context.Configuration.GetValue<int?>("Storage:MaxConcurrentUploadsTotal") ?? 200;
+    options.Limits.Http2.MaxStreamsPerConnection = Math.Clamp(maxStreamsPerConnection, 1, 1_000);
 });
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Security:Jwt"));
@@ -75,6 +77,9 @@ var maxConcurrentUploadsTotal = builder.Configuration.GetValue<int?>("Storage:Ma
                                 ?? 200;
 var maxConcurrentUploadsPerRfc = builder.Configuration.GetValue<int?>("Storage:MaxConcurrentUploadsPerRfc")
                                  ?? 5;
+var firstChunkTimeoutSeconds = builder.Configuration.GetValue<int?>("Storage:FirstChunkTimeoutSeconds") ?? 30;
+var idleChunkTimeoutSeconds = builder.Configuration.GetValue<int?>("Storage:IdleChunkTimeoutSeconds") ?? 120;
+var maxUploadDurationMinutes = builder.Configuration.GetValue<int?>("Storage:MaxUploadDurationMinutes") ?? 60;
 
 if (maxUploadBytes <= 0)
     throw new InvalidOperationException("Storage:MaxUploadBytes debe ser mayor que cero.");
@@ -88,6 +93,12 @@ if (maxConcurrentUploadsPerRfc is < 1 or > 100 ||
     throw new InvalidOperationException(
         "Storage:MaxConcurrentUploadsPerRfc debe estar entre 1 y 100 y no superar el límite global.");
 }
+if (firstChunkTimeoutSeconds is < 5 or > 300)
+    throw new InvalidOperationException("Storage:FirstChunkTimeoutSeconds debe estar entre 5 y 300.");
+if (idleChunkTimeoutSeconds is < 5 or > 900)
+    throw new InvalidOperationException("Storage:IdleChunkTimeoutSeconds debe estar entre 5 y 900.");
+if (maxUploadDurationMinutes is < 1 or > 1_440)
+    throw new InvalidOperationException("Storage:MaxUploadDurationMinutes debe estar entre 1 y 1440.");
 
 builder.Services.AddSingleton(new StorageOptions
 {
@@ -95,7 +106,10 @@ builder.Services.AddSingleton(new StorageOptions
     MaxUploadBytes = maxUploadBytes,
     MaxChunkBytes = maxChunkBytes,
     MaxConcurrentUploadsTotal = maxConcurrentUploadsTotal,
-    MaxConcurrentUploadsPerRfc = maxConcurrentUploadsPerRfc
+    MaxConcurrentUploadsPerRfc = maxConcurrentUploadsPerRfc,
+    FirstChunkTimeoutSeconds = firstChunkTimeoutSeconds,
+    IdleChunkTimeoutSeconds = idleChunkTimeoutSeconds,
+    MaxUploadDurationMinutes = maxUploadDurationMinutes
 });
 builder.Services.AddClientUpdates(builder.Configuration);
 

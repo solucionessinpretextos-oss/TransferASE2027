@@ -19,5 +19,11 @@ namespace FileXfer.Server.Options
         public int MaxConcurrentUploadsTotal { get; set; } = 200;
 
         public int MaxConcurrentUploadsPerRfc { get; set; } = 5;
+
+        public int FirstChunkTimeoutSeconds { get; set; } = 30;
+
+        public int IdleChunkTimeoutSeconds { get; set; } = 120;
+
+        public int MaxUploadDurationMinutes { get; set; } = 60;
     }
 }
