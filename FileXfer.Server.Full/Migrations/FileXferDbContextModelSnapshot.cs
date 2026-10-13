@@ -96,6 +96,100 @@ namespace FileXfer.Server.Migrations
                     b.ToTable("Devices");
                 });
 
+            modelBuilder.Entity("FileXfer.Server.Data.FileTypePolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ChangeReason")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("Extension")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("nvarchar(24)");
+
+                    b.Property<bool>("IsAllowed")
+                        .HasColumnType("bit");
+
+                    b.Property<long?>("MaxFileBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("RequiresVerification")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("UpdatedBy")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Extension")
+                        .IsUnique();
+
+                    b.ToTable("FileTypePolicies");
+                });
+
+            modelBuilder.Entity("FileXfer.Server.Data.FileTypePolicyRevision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ChangeReason")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("ChangedBy")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("ChangedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Extension")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("nvarchar(24)");
+
+                    b.Property<bool>("IsAllowed")
+                        .HasColumnType("bit");
+
+                    b.Property<long?>("MaxFileBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("PolicyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("RequiresVerification")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Extension", "ChangedUtc");
+
+                    b.HasIndex("PolicyId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("FileTypePolicyRevisions");
+                });
+
             modelBuilder.Entity("FileXfer.Server.Data.Lockout", b =>
                 {
                     b.Property<Guid>("Id")
@@ -182,6 +276,27 @@ namespace FileXfer.Server.Migrations
                     b.HasIndex("ValueBase64");
 
                     b.ToTable("Nonces");
+                });
+
+            modelBuilder.Entity("FileXfer.Server.Data.ReceiptChainState", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("int");
+
+                    b.Property<string>("HeadHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ReceiptChainStates");
                 });
 
             modelBuilder.Entity("FileXfer.Server.Data.RefreshToken", b =>
@@ -370,6 +485,13 @@ namespace FileXfer.Server.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<long?>("ExpectedLength")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ExpectedSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<string>("FileUuid")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -393,6 +515,9 @@ namespace FileXfer.Server.Migrations
                     b.Property<int?>("IdResultado")
                         .HasColumnType("int");
 
+                    b.Property<DateTimeOffset>("LastActivityUtc")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<string>("LastError")
                         .HasMaxLength(1024)
                         .HasColumnType("nvarchar(1024)");
@@ -407,6 +532,22 @@ namespace FileXfer.Server.Migrations
 
                     b.Property<int?>("Periodo")
                         .HasColumnType("int");
+
+                    b.Property<string>("PolicyExtension")
+                        .HasMaxLength(24)
+                        .HasColumnType("nvarchar(24)");
+
+                    b.Property<int?>("PolicyVersion")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ReceiptId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("ResumeExpiresUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<long>("ResumedBytes")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("Rfc")
                         .IsRequired()
@@ -431,16 +572,123 @@ namespace FileXfer.Server.Migrations
                         .HasMaxLength(450)
                         .HasColumnType("nvarchar(450)");
 
+                    b.Property<string>("TraceId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("VerificationOutcome")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<bool>("VerificationPerformed")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("VerificationRequired")
+                        .HasColumnType("bit");
+
                     b.HasKey("Id");
 
                     b.HasIndex("FileUuid")
                         .IsUnique();
 
+                    b.HasIndex("ReceiptId")
+                        .IsUnique()
+                        .HasFilter("[ReceiptId] IS NOT NULL");
+
                     b.HasIndex("StoredRelativePath");
 
                     b.HasIndex("Rfc", "OriginalFileName");
 
+                    b.HasIndex("Status", "ResumeExpiresUtc");
+
                     b.ToTable("Uploads");
+                });
+
+            modelBuilder.Entity("FileXfer.Server.Data.UploadReceipt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CanonicalPayloadJson")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ChainHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("IssuedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("KeyId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("PreviousChainHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("PublicKeyPem")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("nvarchar(2048)");
+
+                    b.Property<string>("SignatureAlgorithm")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("SignatureBase64")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("nvarchar(1024)");
+
+                    b.Property<Guid>("UploadId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IssuedUtc");
+
+                    b.HasIndex("UploadId")
+                        .IsUnique();
+
+                    b.ToTable("UploadReceipts");
+                });
+
+            modelBuilder.Entity("FileXfer.Server.Data.FileTypePolicyRevision", b =>
+                {
+                    b.HasOne("FileXfer.Server.Data.FileTypePolicy", null)
+                        .WithMany()
+                        .HasForeignKey("PolicyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("FileXfer.Server.Data.UploadEntry", b =>
+                {
+                    b.HasOne("FileXfer.Server.Data.UploadReceipt", null)
+                        .WithOne()
+                        .HasForeignKey("FileXfer.Server.Data.UploadEntry", "ReceiptId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("FileXfer.Server.Data.UploadReceipt", b =>
+                {
+                    b.HasOne("FileXfer.Server.Data.UploadEntry", null)
+                        .WithOne()
+                        .HasForeignKey("FileXfer.Server.Data.UploadReceipt", "UploadId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }

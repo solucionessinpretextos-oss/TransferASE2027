@@ -1,16 +1,25 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using FileXfer.Server.Controllers;
+using FileXfer.Server.Controllers.Admin;
 using FileXfer.Server.Data;
+using FileXfer.Server.Dtos.Admin;
 using FileXfer.Server.Options;
 using FileXfer.Server.Security;
 using FileXfer.Server.Services;
 using FileXfer.Server.Uploading;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
 
 if (args.Length != 1)
 {
@@ -26,6 +35,10 @@ TestMfaSecretProtection();
 TestUploadFileNamePolicy();
 TestUploadAdmission();
 await TestConcurrentMfaLockoutAsync();
+await TestFilePoliciesAsync();
+await TestSignedReceiptsAsync();
+await TestReceiptAuthorizationAsync();
+await TestResumableAssemblerAsync();
 await TestUpdaterAsync(updaterPath);
 
 Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
@@ -33,6 +46,9 @@ Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-reject
 Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
 Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
 Console.WriteLine("PASS mfa-lockout=concurrent-failures-serialized");
+Console.WriteLine("PASS file-policies=seed version conflict bypass limit rollback");
+Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent mfa-authorized");
+Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved");
 Console.WriteLine("PASS updater=signed-package-applied invalid-signature-rejected zip-slip-rejected");
 return 0;
 
@@ -148,6 +164,268 @@ static async Task TestConcurrentMfaLockoutAsync()
     var stored = await db.Lockouts.SingleAsync(item => item.Rfc == rfc);
     Require(stored.FailCount == failures,
         $"Se perdieron fallos MFA concurrentes. Esperado={failures}, real={stored.FailCount}.");
+}
+
+static async Task TestFilePoliciesAsync()
+{
+    var options = new DbContextOptionsBuilder<FileXferDbContext>()
+        .UseInMemoryDatabase("file-policy-smoke-" + Guid.NewGuid().ToString("N"))
+        .Options;
+    var factory = new SmokeDbContextFactory(options);
+    var service = new FilePolicyService(factory);
+    await service.EnsureSeededAsync();
+
+    var effectiveController = new EffectiveFilePoliciesController(service);
+    var effectiveAction = await effectiveController.GetEffective(CancellationToken.None);
+    var effectiveOk = effectiveAction.Result as OkObjectResult;
+    var effectivePolicies = effectiveOk?.Value as EffectiveFilePolicyDto[];
+    Require(effectivePolicies?.Any(policy => policy.Extension == ".pdf") == true,
+        "El endpoint efectivo no devolvió la política PDF esperada.");
+    Require(typeof(EffectiveFilePolicyDto).GetProperty("UpdatedBy") is null &&
+            typeof(EffectiveFilePolicyDto).GetProperty("ChangeReason") is null,
+        "El contrato efectivo expone metadatos administrativos.");
+
+    var pdf = await service.RequireAllowedAsync("informe.pdf", 1024);
+    Require(pdf.RequiresVerification, "PDF no quedó verificado por la política inicial.");
+    await ExpectAsync<FilePolicyConflictException>(
+        () => service.RequireAllowedAsync("legado.doc", 1024),
+        "El formato legado .doc quedó habilitado por omisión.");
+
+    var created = await service.UpsertAsync(
+        ".foo",
+        new FilePolicyChange(true, false, 2048, 0, "Prueba de formato controlado"),
+        "SMOKE");
+    Require(created.Version == 1 && !created.RequiresVerification,
+        "No se creó la excepción de verificación esperada.");
+    await service.RequireAllowedAsync("demo.foo", 2048);
+    await ExpectAsync<FilePolicyConflictException>(
+        () => service.RequireAllowedAsync("demo.foo", 2049),
+        "No se aplicó el límite por extensión.");
+    await ExpectAsync<FilePolicyConflictException>(
+        () => service.UpsertAsync(
+            ".foo",
+            new FilePolicyChange(true, true, null, 0, "Versión deliberadamente vencida"),
+            "SMOKE"),
+        "Se aceptó una escritura administrativa con versión obsoleta.");
+
+    var changed = await service.UpsertAsync(
+        ".foo",
+        new FilePolicyChange(false, true, null, created.Version, "Bloqueo para validar rollback"),
+        "SMOKE");
+    var history = await service.GetHistoryAsync(".foo");
+    var original = history.Single(item => item.Version == 1);
+    var restored = await service.RollbackAsync(
+        original.Id,
+        changed.Version,
+        "Restaurar configuración validada",
+        "SMOKE");
+    Require(restored.IsAllowed && !restored.RequiresVerification && restored.Version == 3,
+        "El rollback no creó una nueva versión con los valores históricos.");
+}
+
+static async Task TestSignedReceiptsAsync()
+{
+    var options = new DbContextOptionsBuilder<FileXferDbContext>()
+        .UseInMemoryDatabase("receipt-smoke-" + Guid.NewGuid().ToString("N"))
+        .Options;
+    var factory = new SmokeDbContextFactory(options);
+    var uploadId = Guid.NewGuid();
+    await using (var db = await factory.CreateDbContextAsync())
+    {
+        db.Uploads.Add(new UploadEntry
+        {
+            Id = uploadId,
+            Rfc = "TEST010101AA1",
+            FileUuid = Guid.NewGuid().ToString("N"),
+            OriginalFileName = "informe.pdf",
+            StoredRelativePath = "test/informe.pdf",
+            Status = "Completed"
+        });
+        await db.SaveChangesAsync();
+    }
+
+    using var rsa = RSA.Create(3072);
+    using var service = new UploadReceiptService(
+        factory,
+        new ReceiptSigningOptions { PrivateKeyPem = rsa.ExportPkcs8PrivateKeyPem() },
+        new SmokeWebHostEnvironment(),
+        NullLogger<UploadReceiptService>.Instance);
+    var draft = new UploadReceiptDraft(
+        uploadId,
+        Guid.NewGuid().ToString("N"),
+        "informe.pdf",
+        1234,
+        new string('a', 64),
+        "TEST010101AA1",
+        "device",
+        2027,
+        1, 2, 3, 4, 5, null,
+        ".pdf",
+        1,
+        true,
+        true,
+        "Accepted",
+        Guid.NewGuid().ToString("N"));
+    var receipt = await service.CreateAsync(draft);
+    Require(service.Verify(receipt), "La firma del recibo recién emitido no fue válida.");
+    var duplicate = await service.CreateAsync(draft);
+    Require(duplicate.Id == receipt.Id, "La emisión de recibo no fue idempotente por UploadId.");
+
+    using var attackerRsa = RSA.Create(3072);
+    var forgedPayload = receipt.CanonicalPayloadJson + " ";
+    var forgedPayloadHash = SHA256.HashData(Encoding.UTF8.GetBytes(forgedPayload));
+    var previousHash = string.IsNullOrWhiteSpace(receipt.PreviousChainHash)
+        ? new byte[32]
+        : Convert.FromHexString(receipt.PreviousChainHash);
+    var forgedChainMaterial = new byte[previousHash.Length + forgedPayloadHash.Length];
+    previousHash.CopyTo(forgedChainMaterial, 0);
+    forgedPayloadHash.CopyTo(forgedChainMaterial, previousHash.Length);
+    var forgedChainHash = SHA256.HashData(forgedChainMaterial);
+    var attackerPublicKey = attackerRsa.ExportSubjectPublicKeyInfo();
+    var forgedReceipt = new UploadReceipt
+    {
+        Id = receipt.Id,
+        UploadId = receipt.UploadId,
+        IssuedUtc = receipt.IssuedUtc,
+        CanonicalPayloadJson = forgedPayload,
+        PayloadSha256 = Convert.ToHexString(forgedPayloadHash).ToLowerInvariant(),
+        PreviousChainHash = receipt.PreviousChainHash,
+        ChainHash = Convert.ToHexString(forgedChainHash).ToLowerInvariant(),
+        SignatureBase64 = Convert.ToBase64String(attackerRsa.SignHash(
+            forgedChainHash,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pss)),
+        SignatureAlgorithm = "RSA-PSS-SHA256",
+        KeyId = Convert.ToHexString(SHA256.HashData(attackerPublicKey))[..24].ToLowerInvariant(),
+        PublicKeyPem = attackerRsa.ExportSubjectPublicKeyInfoPem()
+    };
+    Require(!service.Verify(forgedReceipt),
+        "Un recibo refirmado con una llave no confiable fue aceptado como auténtico.");
+
+    receipt.CanonicalPayloadJson += " ";
+    Require(!service.Verify(receipt), "Un recibo alterado conservó una firma válida.");
+}
+
+static async Task TestReceiptAuthorizationAsync()
+{
+    var options = new DbContextOptionsBuilder<FileXferDbContext>()
+        .UseInMemoryDatabase("receipt-auth-smoke-" + Guid.NewGuid().ToString("N"))
+        .Options;
+    var factory = new SmokeDbContextFactory(options);
+    var uploadId = Guid.NewGuid();
+    var receiptId = Guid.NewGuid();
+    await using (var db = await factory.CreateDbContextAsync())
+    {
+        db.Uploads.Add(new UploadEntry
+        {
+            Id = uploadId,
+            Rfc = "OWNER010101AA1",
+            FileUuid = Guid.NewGuid().ToString("N"),
+            OriginalFileName = "evidencia.pdf",
+            StoredRelativePath = "test/evidencia.pdf",
+            Status = "Completed"
+        });
+        db.UploadReceipts.Add(new UploadReceipt
+        {
+            Id = receiptId,
+            UploadId = uploadId,
+            IssuedUtc = DateTimeOffset.UtcNow,
+            CanonicalPayloadJson = "{}",
+            PayloadSha256 = new string('0', 64),
+            ChainHash = new string('1', 64),
+            SignatureBase64 = Convert.ToBase64String(new byte[384]),
+            SignatureAlgorithm = "RSA-PSS-SHA256",
+            KeyId = "smoke",
+            PublicKeyPem = "smoke"
+        });
+        await db.SaveChangesAsync();
+    }
+
+    async Task<ActionResult<UploadReceiptResponse>> GetAs(
+        string rfc,
+        string role,
+        string authenticationMethod)
+    {
+        var controller = new ReceiptsController(factory, new SmokeReceiptService())
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity(
+                        new[]
+                        {
+                            new Claim("rfc", rfc),
+                            new Claim(ClaimTypes.Role, role),
+                            new Claim("amr", authenticationMethod)
+                        },
+                        authenticationType: "smoke",
+                        nameType: ClaimTypes.Name,
+                        roleType: ClaimTypes.Role))
+                }
+            }
+        };
+        return await controller.Get(receiptId, CancellationToken.None);
+    }
+
+    var adminWithoutMfa = await GetAs("ADMIN010101AA1", "admin", "efirma");
+    Require(adminWithoutMfa.Result is ForbidResult,
+        "Un administrador sin MFA pudo leer el recibo de otro RFC.");
+
+    var adminWithMfa = await GetAs("ADMIN010101AA1", "admin", "efirma+mfa");
+    Require(adminWithMfa.Result is OkObjectResult,
+        "Un administrador con MFA no pudo ejercer el acceso privilegiado legítimo.");
+
+    var owner = await GetAs("OWNER010101AA1", "user", "efirma");
+    Require(owner.Result is OkObjectResult,
+        "El propietario perdió acceso legítimo a su propio recibo.");
+}
+
+static async Task TestResumableAssemblerAsync()
+{
+    var root = Path.Combine(Path.GetTempPath(), "FileXfer.Resume.Smoke", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var dbOptions = new DbContextOptionsBuilder<FileXferDbContext>()
+            .UseInMemoryDatabase("resume-smoke-" + Guid.NewGuid().ToString("N"))
+            .Options;
+        var factory = new SmokeDbContextFactory(dbOptions);
+        var storage = new StorageOptions
+        {
+            BasePath = root,
+            MaxChunkBytes = 1024 * 1024,
+            MaxUploadBytes = 8 * 1024 * 1024
+        };
+        var sessions = new UploadSessionStore(storage);
+        var assembler = new FileAssembler(
+            storage,
+            factory,
+            NullLogger<FileAssembler>.Instance,
+            sessions);
+        var uuid = Guid.NewGuid().ToString("N");
+        const string key = "1/2/3/4/5";
+        const string name = "resume.bin";
+        var first = Encoding.UTF8.GetBytes("primer-bloque|");
+        var second = Encoding.UTF8.GetBytes("segundo-bloque");
+
+        await assembler.AppendAsync(key, uuid, name, 0, first, CancellationToken.None);
+        assembler.ReleaseLock(key, uuid);
+        var persisted = assembler.GetPersistedLength(key, uuid, name);
+        Require(persisted == first.Length, "El offset físico confirmado no coincide con el primer bloque.");
+        await assembler.AppendAsync(key, uuid, name, persisted, second, CancellationToken.None);
+        assembler.ReleaseLock(key, uuid);
+
+        var expected = SHA256.HashData(first.Concat(second).ToArray());
+        var actual = Convert.FromHexString(await assembler.ComputeSha256Async(
+            key, uuid, name, CancellationToken.None));
+        Require(actual.SequenceEqual(expected), "La reanudación alteró el contenido o el hash final.");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+            Directory.Delete(root, recursive: true);
+    }
 }
 
 static async Task TestUpdaterAsync(string updaterPath)
@@ -339,6 +617,21 @@ static void Expect<TException>(Action action, string message)
     throw new InvalidOperationException(message);
 }
 
+static async Task ExpectAsync<TException>(Func<Task> action, string message)
+    where TException : Exception
+{
+    try
+    {
+        await action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
+}
+
 static void Require(bool condition, string message)
 {
     if (!condition)
@@ -352,4 +645,22 @@ file sealed class SmokeDbContextFactory(DbContextOptions<FileXferDbContext> opti
 
     public Task<FileXferDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(new FileXferDbContext(options));
+}
+
+file sealed class SmokeWebHostEnvironment : IWebHostEnvironment
+{
+    public string ApplicationName { get; set; } = "FileXfer.Security.SmokeTests";
+    public IFileProvider WebRootFileProvider { get; set; } = new NullFileProvider();
+    public string WebRootPath { get; set; } = Path.GetTempPath();
+    public string EnvironmentName { get; set; } = Environments.Development;
+    public string ContentRootPath { get; set; } = Path.GetTempPath();
+    public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+}
+
+file sealed class SmokeReceiptService : IUploadReceiptService
+{
+    public Task<UploadReceipt> CreateAsync(UploadReceiptDraft draft, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    public bool Verify(UploadReceipt receipt) => true;
 }

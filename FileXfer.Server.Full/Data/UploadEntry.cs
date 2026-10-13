@@ -32,6 +32,13 @@ namespace FileXfer.Server.Data
 
         public long BytesReceived { get; set; }
 
+        public long? ExpectedLength { get; set; }
+
+        [MaxLength(64)]
+        public string? ExpectedSha256 { get; set; }
+
+        public long ResumedBytes { get; set; }
+
         [MaxLength(64)]
         public string? Sha256Server { get; set; }
 
@@ -46,6 +53,24 @@ namespace FileXfer.Server.Data
 
         public DateTimeOffset CreatedUtc { get; set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset? CompletedUtc { get; set; }
+        public DateTimeOffset LastActivityUtc { get; set; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset? ResumeExpiresUtc { get; set; }
+
+        [MaxLength(24)]
+        public string? PolicyExtension { get; set; }
+
+        public int? PolicyVersion { get; set; }
+
+        public bool VerificationRequired { get; set; } = true;
+        public bool VerificationPerformed { get; set; }
+
+        [MaxLength(32)]
+        public string? VerificationOutcome { get; set; }
+
+        [MaxLength(64)]
+        public string? TraceId { get; set; }
+
+        public Guid? ReceiptId { get; set; }
 
         [MaxLength(64)]
         public string? DeviceId { get; set; }

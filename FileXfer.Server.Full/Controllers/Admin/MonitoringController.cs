@@ -85,6 +85,24 @@ namespace FileXfer.Server.Controllers.Admin
                 .Distinct()
                 .CountAsync(ct);
 
+            var pausedResumableTransfers = await uploads.CountAsync(
+                u => u.Status == "Paused" && u.ResumeExpiresUtc > now, ct);
+
+            var resumedTransfersToday = await uploads.CountAsync(
+                u => u.CreatedUtc >= todayStart && u.ResumedBytes > 0, ct);
+
+            var resumedBytesToday = await uploads
+                .Where(u => u.CreatedUtc >= todayStart && u.ResumedBytes > 0)
+                .SumAsync(u => u.ResumedBytes, ct);
+
+            var verificationBypassedToday = await uploads.CountAsync(
+                u => u.CompletedUtc >= todayStart &&
+                     u.VerificationRequired == false &&
+                     u.VerificationOutcome == "BypassedByPolicy", ct);
+
+            var receiptsIssuedToday = await db.UploadReceipts.AsNoTracking()
+                .CountAsync(receipt => receipt.IssuedUtc >= todayStart, ct);
+
             var averageFileSizeTodayBytes = await uploads
                 .Where(u => u.Status == "Completed" && u.CompletedUtc >= todayStart)
                 .AverageAsync(u => (double?)u.BytesReceived, ct) ?? 0;
@@ -135,7 +153,12 @@ namespace FileXfer.Server.Controllers.Admin
                 FailedToday = failedToday,
                 BytesTransferredLastHour = bytesLastHour,
                 TotalBytesTransferredToday = bytesToday,
-                AverageThroughputMbps = avgMbps
+                AverageThroughputMbps = avgMbps,
+                PausedResumableTransfers = pausedResumableTransfers,
+                ResumedTransfersToday = resumedTransfersToday,
+                ResumedBytesToday = resumedBytesToday,
+                VerificationBypassedToday = verificationBypassedToday,
+                ReceiptsIssuedToday = receiptsIssuedToday
             };
 
             var server = await _systemHealth.GetSnapshotAsync(ct);
@@ -164,6 +187,25 @@ namespace FileXfer.Server.Controllers.Admin
                 Server = server,
                 Transfers = transfers,
                 Kpis = kpis,
+                RecentTransfers = await uploads
+                    .OrderByDescending(u => u.CreatedUtc)
+                    .Take(20)
+                    .Select(u => new RecentTransferDto
+                    {
+                        FileName = u.OriginalFileName ?? string.Empty,
+                        Status = u.Status,
+                        BytesReceived = u.BytesReceived,
+                        ResumedBytes = u.ResumedBytes,
+                        CreatedUtc = u.CreatedUtc,
+                        CompletedUtc = u.CompletedUtc,
+                        PolicyExtension = u.PolicyExtension,
+                        PolicyVersion = u.PolicyVersion,
+                        VerificationRequired = u.VerificationRequired,
+                        VerificationPerformed = u.VerificationPerformed,
+                        TraceId = u.TraceId,
+                        ReceiptId = u.ReceiptId
+                    })
+                    .ToListAsync(ct),
                 TimestampUtc = DateTime.UtcNow
             };
 

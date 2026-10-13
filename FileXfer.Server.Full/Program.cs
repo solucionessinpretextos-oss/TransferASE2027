@@ -43,6 +43,9 @@ builder.Services.Configure<DevicePolicyOptions>(builder.Configuration.GetSection
 builder.Services.Configure<SatOptions>(builder.Configuration.GetSection("Security:SAT"));
 builder.Services.Configure<DebugFeaturesOptions>(builder.Configuration.GetSection("DebugFeatures"));
 builder.Services.Configure<AlertOptions>(builder.Configuration.GetSection("Alerts"));
+var receiptSigning = builder.Configuration.GetSection("Security:Receipts").Get<ReceiptSigningOptions>()
+                     ?? new ReceiptSigningOptions();
+builder.Services.AddSingleton(receiptSigning);
 
 var configuredSat = builder.Configuration.GetSection("Security:SAT").Get<SatOptions>() ?? new SatOptions();
 if (!builder.Environment.IsDevelopment() && configuredSat.TrustedRootCertificatePaths.Length == 0)
@@ -81,6 +84,7 @@ var maxConcurrentUploadsPerRfc = builder.Configuration.GetValue<int?>("Storage:M
 var firstChunkTimeoutSeconds = builder.Configuration.GetValue<int?>("Storage:FirstChunkTimeoutSeconds") ?? 30;
 var idleChunkTimeoutSeconds = builder.Configuration.GetValue<int?>("Storage:IdleChunkTimeoutSeconds") ?? 120;
 var maxUploadDurationMinutes = builder.Configuration.GetValue<int?>("Storage:MaxUploadDurationMinutes") ?? 60;
+var resumeRetentionHours = builder.Configuration.GetValue<int?>("Storage:ResumeRetentionHours") ?? 24;
 
 if (maxUploadBytes <= 0)
     throw new InvalidOperationException("Storage:MaxUploadBytes debe ser mayor que cero.");
@@ -100,6 +104,8 @@ if (idleChunkTimeoutSeconds is < 5 or > 900)
     throw new InvalidOperationException("Storage:IdleChunkTimeoutSeconds debe estar entre 5 y 900.");
 if (maxUploadDurationMinutes is < 1 or > 1_440)
     throw new InvalidOperationException("Storage:MaxUploadDurationMinutes debe estar entre 1 y 1440.");
+if (resumeRetentionHours is < 1 or > 168)
+    throw new InvalidOperationException("Storage:ResumeRetentionHours debe estar entre 1 y 168.");
 
 builder.Services.AddSingleton(new StorageOptions
 {
@@ -110,7 +116,8 @@ builder.Services.AddSingleton(new StorageOptions
     MaxConcurrentUploadsPerRfc = maxConcurrentUploadsPerRfc,
     FirstChunkTimeoutSeconds = firstChunkTimeoutSeconds,
     IdleChunkTimeoutSeconds = idleChunkTimeoutSeconds,
-    MaxUploadDurationMinutes = maxUploadDurationMinutes
+    MaxUploadDurationMinutes = maxUploadDurationMinutes,
+    ResumeRetentionHours = resumeRetentionHours
 });
 builder.Services.AddClientUpdates(builder.Configuration);
 
@@ -234,6 +241,12 @@ builder.Services.AddAuthorization(options =>
         policy.RequireRole("admin", "ops");
         policy.RequireClaim("amr", "efirma+mfa");
     });
+    options.AddPolicy("AdminMfa", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireRole("admin");
+        policy.RequireClaim("amr", "efirma+mfa");
+    });
 });
 
 const string AdminDashboardCorsPolicy = "AllowAdminDashboardDev";
@@ -259,11 +272,14 @@ builder.Services.AddSingleton<UploadSessionStore>();
 builder.Services.AddSingleton<FileAssembler>();
 builder.Services.AddSingleton<IPdfSafetyService, QpdfPdfSafetyService>();
 builder.Services.AddSingleton<IFileSafetyService, DefaultFileSafetyService>();
+builder.Services.AddSingleton<IFilePolicyService, FilePolicyService>();
+builder.Services.AddSingleton<IUploadReceiptService, UploadReceiptService>();
 builder.Services.AddSingleton<TotpService>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<ISatCertificateValidator, SatCertificateValidator>();
 builder.Services.AddSingleton<RateLockService>();
 builder.Services.AddHostedService<AuthStateCleanupService>();
+builder.Services.AddHostedService<ResumableUploadCleanupService>();
 
 builder.Services.AddSingleton<ISystemHealthService, SystemHealthService>();
 
@@ -333,6 +349,10 @@ using (var scope = app.Services.CreateScope())
     }
 
     await db.SaveChangesAsync();
+
+    var filePolicyService = scope.ServiceProvider.GetRequiredService<IFilePolicyService>();
+    await filePolicyService.EnsureSeededAsync();
+    _ = scope.ServiceProvider.GetRequiredService<IUploadReceiptService>();
 }
 
 if (app.Environment.IsDevelopment())
@@ -345,6 +365,27 @@ else
 {
     app.UseHsts();
 }
+
+app.Use(async (context, next) =>
+{
+    var incoming = context.Request.Headers["X-Correlation-ID"].FirstOrDefault();
+    var correlationId = Guid.TryParse(incoming, out var parsed)
+        ? parsed.ToString("D")
+        : Guid.NewGuid().ToString("D");
+    context.TraceIdentifier = correlationId;
+    System.Diagnostics.Activity.Current?.SetTag("filexfer.correlation_id", correlationId);
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Correlation-ID"] = correlationId;
+        return Task.CompletedTask;
+    });
+    using var correlationScope = app.Logger.BeginScope(new Dictionary<string, object>
+    {
+        ["CorrelationId"] = correlationId,
+        ["TraceId"] = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? string.Empty
+    });
+    await next();
+});
 
 app.Use(async (context, next) =>
 {

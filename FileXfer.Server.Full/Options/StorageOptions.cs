@@ -25,5 +25,7 @@ namespace FileXfer.Server.Options
         public int IdleChunkTimeoutSeconds { get; set; } = 120;
 
         public int MaxUploadDurationMinutes { get; set; } = 60;
+
+        public int ResumeRetentionHours { get; set; } = 24;
     }
 }

@@ -287,6 +287,51 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
         }
     }
 
+    public async Task<PreparedSafeFile> PrepareSnapshotForUploadAsync(
+        string originalPath,
+        string stagingRoot,
+        IProgress<FileSafetyProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(originalPath))
+            throw new ArgumentException("La ruta del archivo es obligatoria.", nameof(originalPath));
+        if (string.IsNullOrWhiteSpace(stagingRoot))
+            throw new ArgumentException("La carpeta temporal es obligatoria.", nameof(stagingRoot));
+
+        var fullRoot = Path.GetFullPath(stagingRoot);
+        Directory.CreateDirectory(fullRoot);
+        var workingDirectory = Path.Combine(fullRoot, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workingDirectory);
+        var extension = Path.GetExtension(originalPath);
+        var snapshotPath = Path.Combine(workingDirectory, "entrada" + extension);
+        try
+        {
+            Report(
+                progress,
+                FileSafetyStage.CreatingSafeCopy,
+                5,
+                "La política omite la verificación profunda; creando una copia inmutable para preservar integridad...");
+            await CopySnapshotAsync(originalPath, snapshotPath, progress, cancellationToken);
+            Report(
+                progress,
+                FileSafetyStage.Ready,
+                100,
+                "Copia segura lista. La verificación profunda fue omitida explícitamente por la política vigente.");
+            return new PreparedSafeFile(
+                originalPath,
+                snapshotPath,
+                string.IsNullOrWhiteSpace(extension) ? "sin extensión" : extension.TrimStart('.').ToUpperInvariant(),
+                wasRepaired: false,
+                fullRoot,
+                workingDirectory);
+        }
+        catch
+        {
+            DeleteWorkingDirectorySafely(fullRoot, workingDirectory);
+            throw;
+        }
+    }
+
     private async Task<FileInspectionResult> InspectPdfAsync(
         string path,
         IProgress<FileSafetyProgress>? progress,

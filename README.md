@@ -18,11 +18,15 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 - JWT de corta duración, `SecurityVersion`, revocación inmediata de dispositivos y familias de refresh token con detección de reutilización.
 - Autorización del contexto de carga derivada del JWT y validada contra BuDi; no se aceptan rutas físicas del cliente.
 - Hash final calculado sobre bytes releídos del almacenamiento después de `Flush(true)`.
+- Cargas reanudables por `FileUuid + longitud + SHA-256 + contexto + dispositivo`: ante una caída, el cliente consulta el offset físico confirmado y continúa desde ese byte. Los parciales vencen y se eliminan de forma controlada.
+- Políticas de archivo versionadas en base de datos: desde el Dashboard se habilita/bloquea cada extensión, se define límite de tamaño y se decide si requiere verificación profunda. Cada cambio exige motivo, control de concurrencia e historial con rollback.
 - El cliente muestra acción actual, archivo `n/N`, porcentaje por archivo y porcentaje total durante inspección, reparación, transferencia y confirmación del servidor.
 - El cliente inspecciona una copia temporal; el servidor vuelve a validar los bytes persistidos antes de catalogarlos.
 - PDF cifrado, dañado no reparable o con acciones activas se rechaza. La reparación se hace sobre una copia y se revalida.
 - Office moderno sin macros, OpenDocument, EPUB, XPS, Visio, XML, JSON, SVG, texto, imágenes comunes y certificados tienen validadores específicos. Se bloquean cifrado, macros, relaciones externas, rutas internas inseguras y expansión excesiva.
 - Los formatos legados o propietarios que no permiten demostrar integridad y ausencia de contraseña con los validadores instalados se rechazan; deben convertirse a un formato verificable.
+- La opción “sin verificación profunda” es una excepción administrativa explícita y visible. Aun así se conservan autenticación, autorización, límites, copia inmutable, SHA-256, bloqueo de ejecutables y recibo; no demuestra ausencia de contraseña ni estructura sana.
+- Cada carga catalogada emite un recibo RSA-PSS-SHA256 firmado, idempotente y enlazado criptográficamente con el recibo anterior. El Dashboard expone `TraceId`, política aplicada, reanudaciones, omisiones y `ReceiptId`.
 - Actualizaciones firmadas con RSA-PSS, hash SHA-256, extracción segura y recuperación ante fallo.
 - Producción falla al arrancar si faltan SQL, storage, hosts DNS explícitos, raíces SAT o allowlist OCSP/CRL.
 
@@ -32,11 +36,20 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 dotnet build FileXfer.Server.Full/FileXfer.Server.csproj -c Release
 dotnet build TransferClienteASE/TransferClienteASE.csproj -c Release
 dotnet build TransferClienteASEUpdater/TransferClienteASE.Updater.csproj -c Release
+dotnet run --project FileXfer.Pdf.SmokeTests/FileXfer.Pdf.SmokeTests.csproj -c Release -- tools/qpdf/win-x64/bin/qpdf.exe
 dotnet run --project FileXfer.FileSafety.SmokeTests/FileXfer.FileSafety.SmokeTests.csproj -c Release
 dotnet run --project FileXfer.Security.SmokeTests/FileXfer.Security.SmokeTests.csproj -c Release -- <updater.exe>
 ```
 
 El dashboard se construye desde `FileXfer.AdminDashboard` con `npm ci` y `npm run build`.
+
+## Operación de políticas y recibos
+
+- `GET /file-policies/effective`: política mínima que consume el cliente autenticado; no expone autor, motivo ni marcas de auditoría administrativas.
+- `/admin/file-policies`: consulta para `admin/ops` con MFA; las modificaciones y rollback exigen `admin` con MFA.
+- `GET /receipts/{receiptId}`: entrega payload canónico, firma, llave pública, hashes de cadena y resultado de verificación al propietario; el acceso cruzado de `admin/ops` exige `amr=efirma+mfa`.
+- La verificación del recibo compara su llave pública y `KeyId` contra la llave confiable configurada; sustituir toda la firma y su llave dentro de SQL no produce `signatureValid=true`.
+- Los spans usan `ActivitySource` `FileXfer.Server.Transfer` y las métricas el `Meter` `FileXfer.Server`, listos para el colector OpenTelemetry corporativo.
 
 ## Producción
 

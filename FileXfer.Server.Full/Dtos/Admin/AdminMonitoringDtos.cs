@@ -34,6 +34,11 @@ namespace FileXfer.Server.Dtos.Admin
         public long BytesTransferredLastHour { get; set; }
         public long TotalBytesTransferredToday { get; set; }
         public double AverageThroughputMbps { get; set; }
+        public int PausedResumableTransfers { get; set; }
+        public int ResumedTransfersToday { get; set; }
+        public long ResumedBytesToday { get; set; }
+        public int VerificationBypassedToday { get; set; }
+        public int ReceiptsIssuedToday { get; set; }
     }
 
     public sealed class OperationalKpisDto
@@ -56,6 +61,23 @@ namespace FileXfer.Server.Dtos.Admin
         public ServerHealthDto Server { get; set; } = default!;
         public TransferSummaryDto Transfers { get; set; } = default!;
         public OperationalKpisDto Kpis { get; set; } = default!;
+        public IReadOnlyList<RecentTransferDto> RecentTransfers { get; set; } = Array.Empty<RecentTransferDto>();
         public DateTime TimestampUtc { get; set; }
+    }
+
+    public sealed class RecentTransferDto
+    {
+        public string FileName { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public long BytesReceived { get; set; }
+        public long ResumedBytes { get; set; }
+        public DateTimeOffset CreatedUtc { get; set; }
+        public DateTimeOffset? CompletedUtc { get; set; }
+        public string? PolicyExtension { get; set; }
+        public int? PolicyVersion { get; set; }
+        public bool VerificationRequired { get; set; }
+        public bool VerificationPerformed { get; set; }
+        public string? TraceId { get; set; }
+        public Guid? ReceiptId { get; set; }
     }
 }

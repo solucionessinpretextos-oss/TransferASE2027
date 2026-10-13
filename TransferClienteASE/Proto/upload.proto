@@ -32,6 +32,8 @@ message UploadChunk {
 
   int32 resultadoId          = 15;
   int32 periodo             = 16;
+  int64 totalLength          = 17;
+  string correlationId      = 18;
 }
 
 message UploadAck {
@@ -39,8 +41,43 @@ message UploadAck {
   bool   integrityOk    = 2;
   string storedPath     = 3;
   string message        = 4;
+  string receiptId      = 5;
+  string traceId        = 6;
+  int64 resumedBytes    = 7;
+  int32 policyVersion   = 8;
+  bool verificationPerformed = 9;
+  bool verificationRequired  = 10;
+}
+
+message UploadStatusRequest {
+  string fileUuid           = 1;
+  string originalFileName   = 2;
+  int64 totalLength         = 3;
+  string sha256Hex          = 4;
+  string deviceId           = 5;
+  int32 idEnte              = 6;
+  int32 idAuditoria         = 7;
+  int32 idActo              = 8;
+  int32 idOficio            = 9;
+  int32 idRequerimiento     = 10;
+  int32 resultadoId         = 11;
+  int32 periodo             = 12;
+  string correlationId      = 13;
+}
+
+message UploadStatusReply {
+  bool resumeAllowed        = 1;
+  int64 nextOffset          = 2;
+  string status             = 3;
+  string message            = 4;
+  bool alreadyCompleted     = 5;
+  string receiptId          = 6;
+  string traceId            = 7;
+  int32 policyVersion       = 8;
+  bool verificationRequired = 9;
 }
 
 service Upload {
   rpc UploadStream (stream UploadChunk) returns (UploadAck);
+  rpc GetUploadStatus (UploadStatusRequest) returns (UploadStatusReply);
 }

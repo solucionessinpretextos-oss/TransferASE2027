@@ -21,4 +21,11 @@ public static class ServerMetrics {
   public static readonly Counter<long> UploadThrottleEventsTotal = M.CreateCounter<long>("upload_throttle_events_total");
   public static readonly Counter<long> AuthLoginsTotal = M.CreateCounter<long>("auth_logins_total");
   public static readonly Counter<long> AuthLoginFailuresTotal = M.CreateCounter<long>("auth_login_failures_total");
+  public static readonly Counter<long> UploadResumedFilesTotal = M.CreateCounter<long>("upload_resumed_files_total");
+  public static readonly Counter<long> UploadResumedBytesTotal = M.CreateCounter<long>("upload_resumed_bytes_total", "bytes");
+  public static readonly Counter<long> UploadVerificationBypassedTotal = M.CreateCounter<long>("upload_verification_bypassed_total");
+  public static readonly Counter<long> UploadPolicyRejectedTotal = M.CreateCounter<long>("upload_policy_rejected_total");
+  public static readonly Counter<long> UploadReceiptsIssuedTotal = M.CreateCounter<long>("upload_receipts_issued_total");
+  public static readonly Histogram<double> UploadValidationDurationMs = M.CreateHistogram<double>("upload_validation_duration_ms", "ms");
+  public static readonly Histogram<double> UploadCatalogDurationMs = M.CreateHistogram<double>("upload_catalog_duration_ms", "ms");
 }

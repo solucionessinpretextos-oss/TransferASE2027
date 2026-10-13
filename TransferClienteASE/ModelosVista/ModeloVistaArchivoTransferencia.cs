@@ -19,6 +19,8 @@ namespace TransferClienteASE.ModelosVista
         private double _progreso;
         private EstadoTransferenciaArchivo _estado;
         private string _accionActual = "Pendiente de validación";
+        private string? _reciboId;
+        private string? _traceId;
 
         public string RutaCompleta
         {
@@ -61,6 +63,18 @@ namespace TransferClienteASE.ModelosVista
         {
             get => _accionActual;
             set => EstablecerValor(ref _accionActual, value);
+        }
+
+        public string? ReciboId
+        {
+            get => _reciboId;
+            set => EstablecerValor(ref _reciboId, value);
+        }
+
+        public string? TraceId
+        {
+            get => _traceId;
+            set => EstablecerValor(ref _traceId, value);
         }
 
         public ModeloVistaArchivoTransferencia(string ruta)

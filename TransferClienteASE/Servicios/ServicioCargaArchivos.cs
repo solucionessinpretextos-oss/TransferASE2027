@@ -1,46 +1,37 @@
 // DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
 // Archivo: TransferClienteASE/Servicios/ServicioCargaArchivos.cs
 // Capa: Cliente TransferClienteASE (WPF .NET)
-// Propósito: Servicio gRPC de carga de archivos.
-// Interacción: Envía metadata, chunks y hash final hacia UploadGrpcService.
-// Regla de mantenimiento: Mantener URLs, JWT y manejo de errores consistentes; no duplicar lógica en code-behind.
-// Notas específicas:
-// - Carga de archivos: el hash valida integridad física; el registro en Transfer_ArchivosLocales valida catalogación de negocio.
-// Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
+// Propósito: Inspecciona, identifica y transmite archivos mediante gRPC reanudable.
+// Regla de mantenimiento: La política efectiva siempre proviene del servidor; nunca confiar
+// exclusivamente en el filtro visual del cliente para autorizar una extensión.
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using FileXfer.FileSafety;
+using FileXfer.Proto;
+using Google.Protobuf;
 using Grpc.Core;
 using Grpc.Net.Client;
-using Google.Protobuf;
 using TransferClienteASE.Modelos;
-using FileXfer.Proto;
-using FileXfer.FileSafety;
 
-
-// ============================================================================
-//  ServicioCargaArchivos
-// ============================================================================
-//  Se encarga de enviar físicamente los archivos al servidor usando gRPC streaming.
-//  Cada archivo se divide en bloques de 1 MB para evitar cargarlo completo en memoria.
-//
-//  Además de bytes, cada chunk transporta contexto de negocio:
-//      IdEnte, IdAuditoria, IdActo, IdOficio y RequerimientoId o ResultadoId.
-//
-//  La regla de decisión es:
-//      Si ContextoRequerimiento.ResultadoId > 0, el archivo se registra por resultado.
-//      Si no hay ResultadoId, se registra por RequerimientoId.
-//
-//  Para acto 21, ResultadoId debe ser BUZ_Resultados_CedulaEvaluacion.ID.
-// ============================================================================
 namespace TransferClienteASE.Servicios
 {
+    public sealed record PoliticaArchivoEfectiva(
+        string Extension,
+        bool IsAllowed,
+        bool RequiresVerification,
+        long? MaxFileBytes,
+        int Version);
+
     public sealed record ProgresoCargaArchivo(
         string RutaOriginal,
         double PorcentajeArchivo,
@@ -48,9 +39,10 @@ namespace TransferClienteASE.Servicios
         int NumeroArchivo,
         int TotalArchivos,
         string Etapa,
-        string Mensaje)
+        string Mensaje,
+        string? ReciboId = null,
+        string? TraceId = null)
     {
-        // Alias conservado para bindings o consumidores anteriores.
         public double Porcentaje => PorcentajeArchivo;
     }
 
@@ -59,17 +51,17 @@ namespace TransferClienteASE.Servicios
         int ArchivosVerificados,
         int ArchivosReparados,
         int PdfVerificados,
-        int PdfReparados);
+        int PdfReparados,
+        int VerificacionesOmitidas,
+        int ArchivosReanudados,
+        IReadOnlyList<string> RecibosEmitidos);
 
     public sealed class ServicioCargaArchivos
     {
+        private const int TamanoBloque = 1024 * 1024;
+        private const int MaximoReintentos = 4;
         private readonly ServicioConfiguracionCliente _configuracion;
         private readonly IFileSafetyService _fileSafety;
-
-        // Tamaño de cada bloque enviado por gRPC.
-        // 1 MB es un equilibrio razonable: reduce overhead de llamadas sin exigir demasiada RAM
-        // en equipos cliente antiguos.
-        private const int TamanoBloque = 1024 * 1024; // 1MB
 
         public ServicioCargaArchivos(
             ServicioConfiguracionCliente configuracion,
@@ -79,22 +71,37 @@ namespace TransferClienteASE.Servicios
             _fileSafety = fileSafety ?? new DefaultFileSafetyService();
         }
 
-        /// <summary>
-        /// Envía uno o más archivos al servidor.
-        ///
-        /// La función valida sesión, arma el contexto funcional, calcula SHA-256 y reporta avance
-        /// por archivo. Si el servidor responde integrityOk=false, se considera error porque el
-        /// archivo recibido no coincide con el hash calculado en cliente.
-        /// </summary>
+        public async Task<IReadOnlyList<PoliticaArchivoEfectiva>> ObtenerPoliticasEfectivasAsync(
+            CancellationToken ct = default)
+        {
+            if (!SesionAplicacion.EstaAutenticado || string.IsNullOrWhiteSpace(SesionAplicacion.TokenJwt))
+                throw new InvalidOperationException("No hay sesión autenticada para consultar las políticas de archivo.");
+
+            using var handler = _configuracion.CrearManejadorHttpSeguro();
+            using var http = new HttpClient(handler)
+            {
+                BaseAddress = new Uri(_configuracion.UrlBaseServidor, UriKind.Absolute),
+                Timeout = TimeSpan.FromSeconds(30)
+            };
+            http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", SesionAplicacion.TokenJwt);
+
+            using var response = await http.GetAsync("file-policies/effective", ct);
+            response.EnsureSuccessStatusCode();
+            var policies = await response.Content.ReadFromJsonAsync<List<PoliticaArchivoEfectiva>>(
+                cancellationToken: ct);
+            return policies is null ? Array.Empty<PoliticaArchivoEfectiva>() : policies;
+        }
+
         public async Task<ResultadoCargaArchivos> EnviarArchivosAsync(
             ContextoRequerimiento contexto,
             IReadOnlyList<string> rutasArchivos,
             IProgress<ProgresoCargaArchivo> progreso,
             CancellationToken ct)
         {
-            if (contexto == null) throw new ArgumentNullException(nameof(contexto));
-            if (rutasArchivos == null) throw new ArgumentNullException(nameof(rutasArchivos));
-            if (progreso == null) throw new ArgumentNullException(nameof(progreso));
+            ArgumentNullException.ThrowIfNull(contexto);
+            ArgumentNullException.ThrowIfNull(rutasArchivos);
+            ArgumentNullException.ThrowIfNull(progreso);
 
             if (!SesionAplicacion.EstaAutenticado)
                 throw new InvalidOperationException("No hay sesión autenticada para realizar la subida.");
@@ -102,7 +109,6 @@ namespace TransferClienteASE.Servicios
             var rfc = SesionAplicacion.Rfc;
             var jwtToken = SesionAplicacion.TokenJwt;
             var deviceId = SesionAplicacion.DeviceId;
-
             if (string.IsNullOrWhiteSpace(jwtToken))
                 throw new InvalidOperationException("No se encontró TokenJwt en la sesión de aplicación.");
 
@@ -110,77 +116,76 @@ namespace TransferClienteASE.Servicios
             var idAuditoria = contexto.Auditoria?.Id ?? 0;
             var idActo = contexto.Acto?.Id ?? 0;
             var idOficio = contexto.Oficio?.Id ?? 0;
-
-            // ResultadoId tiene prioridad sobre RequerimientoId.
-            // Esto activa el flujo de carga por resultado para acto 16 y acto 21.
             var idResultado = contexto.ResultadoId > 0 ? contexto.ResultadoId : contexto.IdResultado;
-
             var idRequerimiento = contexto.Requerimiento?.Id ?? 0;
-
             if (idEnte <= 0 || idAuditoria <= 0 || idActo <= 0 || idOficio <= 0 ||
-                (idResultado > 0 ? false : (idRequerimiento <= 0)))
+                (idResultado <= 0 && idRequerimiento <= 0))
             {
                 throw new InvalidOperationException(
-                    $"ContextoRequerimiento incompleto. " +
-                    $"IdEnte={idEnte}, IdAuditoria={idAuditoria}, IdActo={idActo}, IdOficio={idOficio}, " +
-                    $"IdRequerimiento={idRequerimiento}, ResultadoId={idResultado}");
+                    $"ContextoRequerimiento incompleto. IdEnte={idEnte}, IdAuditoria={idAuditoria}, " +
+                    $"IdActo={idActo}, IdOficio={idOficio}, IdRequerimiento={idRequerimiento}, ResultadoId={idResultado}");
             }
 
-            Console.WriteLine(
-                $"[ServicioCargaArchivos] Subiendo con contexto: " +
-                $"Ente={idEnte}, Aud={idAuditoria}, Acto={idActo}, Oficio={idOficio}, " +
-                (idResultado > 0
-                    ? $"ResultadoId={idResultado} (RequerimientoId=0)"
-                    : $"Req={idRequerimiento}"));
+            var rutasParaEnviar = rutasArchivos
+                .Where(ruta => !string.IsNullOrWhiteSpace(ruta))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (rutasParaEnviar.Length == 0)
+                return new ResultadoCargaArchivos(0, 0, 0, 0, 0, 0, 0, Array.Empty<string>());
 
-            var handler = _configuracion.CrearManejadorHttpSeguro();
+            progreso.Report(new ProgresoCargaArchivo(
+                string.Empty, 0, 0, 0, rutasParaEnviar.Length,
+                "Políticas", "Consultando extensiones y verificaciones autorizadas por el servidor..."));
+            var policies = (await ObtenerPoliticasEfectivasAsync(ct))
+                .ToDictionary(p => NormalizarExtension(p.Extension), StringComparer.OrdinalIgnoreCase);
+            if (policies.Count == 0)
+                throw new InvalidOperationException("El servidor no publicó ninguna extensión de archivo habilitada.");
 
+            using var grpcHandler = _configuracion.CrearManejadorHttpSeguro();
             using var channel = GrpcChannel.ForAddress(_configuracion.DireccionGrpc, new GrpcChannelOptions
             {
-                HttpHandler = handler
+                HttpHandler = grpcHandler
             });
-
             var clienteGrpc = new Upload.UploadClient(channel);
+            var headers = new Metadata { { "Authorization", $"Bearer {jwtToken}" } };
 
             var archivosEnviados = 0;
             var archivosVerificados = 0;
             var archivosReparados = 0;
             var pdfVerificados = 0;
             var pdfReparados = 0;
+            var verificacionesOmitidas = 0;
+            var archivosReanudados = 0;
+            var recibos = new List<string>();
             var stagingArchivos = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ASE",
-                "TransferClienteASE",
-                "FilePreflight");
-
-            var rutasParaEnviar = rutasArchivos
-                .Where(ruta => !string.IsNullOrWhiteSpace(ruta))
-                .ToArray();
-
-            if (rutasParaEnviar.Length == 0)
-                return new ResultadoCargaArchivos(0, 0, 0, 0, 0);
+                "ASE", "TransferClienteASE", "FilePreflight");
 
             for (var indiceArchivo = 0; indiceArchivo < rutasParaEnviar.Length; indiceArchivo++)
             {
                 ct.ThrowIfCancellationRequested();
-
                 var ruta = rutasParaEnviar[indiceArchivo];
                 var numeroArchivo = indiceArchivo + 1;
                 var totalArchivos = rutasParaEnviar.Length;
                 var nombreArchivo = Path.GetFileName(ruta);
+                var ultimoPorcentajeReportado = 0d;
 
-                void Reportar(double porcentajeArchivo, string etapa, string mensaje)
+                void Reportar(
+                    double porcentajeArchivo,
+                    string etapa,
+                    string mensaje,
+                    string? reciboId = null,
+                    string? traceId = null)
                 {
-                    var porcentajeAcotado = Math.Clamp(porcentajeArchivo, 0, 100);
+                    var porcentajeAcotado = Math.Max(
+                        ultimoPorcentajeReportado,
+                        Math.Clamp(porcentajeArchivo, 0, 100));
+                    ultimoPorcentajeReportado = porcentajeAcotado;
                     var porcentajeTotal = ((indiceArchivo + porcentajeAcotado / 100d) / totalArchivos) * 100d;
                     progreso.Report(new ProgresoCargaArchivo(
-                        ruta,
-                        porcentajeAcotado,
-                        Math.Clamp(porcentajeTotal, 0, 100),
-                        numeroArchivo,
-                        totalArchivos,
-                        etapa,
-                        $"[{numeroArchivo}/{totalArchivos}] {mensaje}"));
+                        ruta, porcentajeAcotado, Math.Clamp(porcentajeTotal, 0, 100),
+                        numeroArchivo, totalArchivos, etapa,
+                        $"[{numeroArchivo}/{totalArchivos}] {mensaje}", reciboId, traceId));
                 }
 
                 Reportar(0, "Preparación", $"Preparando {nombreArchivo}...");
@@ -190,158 +195,196 @@ namespace TransferClienteASE.Servicios
                     throw new FileNotFoundException("No se encontró uno de los archivos seleccionados.", ruta);
                 }
 
-                var rutaEnvio = ruta;
+                var extension = NormalizarExtension(Path.GetExtension(nombreArchivo));
+                if (!policies.TryGetValue(extension, out var policy) || !policy.IsAllowed)
+                {
+                    throw new FileValidationException(
+                        FileInspectionOutcome.Unsupported,
+                        $"La extensión {extension} no está habilitada actualmente por el servidor.");
+                }
+
+                var originalLength = new FileInfo(ruta).Length;
+                ValidarLimitePolitica(policy, originalLength, nombreArchivo);
                 PreparedSafeFile? archivoPreparado = null;
 
                 try
                 {
                     var progresoInspeccion = new DelegatingProgress<FileSafetyProgress>(p =>
-                    {
-                        var porcentajeArchivo = p.Percentage * 0.30;
-                        Reportar(
-                            porcentajeArchivo,
-                            TraducirEtapa(p.Stage),
-                            p.UserMessage);
-                    });
+                        Reportar(p.Percentage * 0.25, TraducirEtapa(p.Stage), p.UserMessage));
 
-                    archivoPreparado = await _fileSafety.PrepareForUploadAsync(
-                        ruta,
-                        stagingArchivos,
-                        progresoInspeccion,
+                    if (policy.RequiresVerification)
+                    {
+                        archivoPreparado = await _fileSafety.PrepareForUploadAsync(
+                            ruta, stagingArchivos, progresoInspeccion, ct);
+                        archivosVerificados++;
+                        if (archivoPreparado.WasRepaired)
+                            archivosReparados++;
+                        if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+                        {
+                            pdfVerificados++;
+                            if (archivoPreparado.WasRepaired)
+                                pdfReparados++;
+                        }
+                    }
+                    else
+                    {
+                        Reportar(4, "Política", $"El servidor permite {extension} sin verificación profunda; creando copia inmutable para el envío...");
+                        archivoPreparado = await _fileSafety.PrepareSnapshotForUploadAsync(
+                            ruta, stagingArchivos, progresoInspeccion, ct);
+                        verificacionesOmitidas++;
+                    }
+
+                    var rutaEnvio = archivoPreparado.UploadPath;
+                    var totalLength = new FileInfo(rutaEnvio).Length;
+                    if (totalLength <= 0)
+                        throw new FileValidationException(
+                            FileInspectionOutcome.Invalid,
+                            $"{nombreArchivo} está vacío y no puede enviarse.");
+                    ValidarLimitePolitica(policy, totalLength, nombreArchivo);
+
+                    Reportar(25, "Integridad", $"Calculando huella SHA-256 de {nombreArchivo}: 0%...");
+                    var sha256Hex = await CalcularSha256Async(
+                        rutaEnvio,
+                        porcentaje => Reportar(
+                            25 + porcentaje * 0.10,
+                            "Integridad",
+                            $"Calculando huella SHA-256 de {nombreArchivo}: {porcentaje:N0}%..."),
                         ct);
 
-                    rutaEnvio = archivoPreparado.UploadPath;
-                    archivosVerificados++;
-                    if (archivoPreparado.WasRepaired)
-                        archivosReparados++;
-                    if (Path.GetExtension(ruta).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
-                    {
-                        pdfVerificados++;
-                        if (archivoPreparado.WasRepaired)
-                            pdfReparados++;
-                    }
+                    var fileUuid = CrearUuidDeterminista(
+                        rfc, deviceId, contexto.Periodo, idEnte, idAuditoria, idActo,
+                        idOficio, idRequerimiento, idResultado, nombreArchivo, sha256Hex);
+                    var correlationId = Guid.NewGuid().ToString("D");
 
-                    Reportar(30, "Conexión segura", $"{nombreArchivo} superó la inspección; abriendo canal seguro con el servidor...");
-
-                    var headers = new Metadata
-                    {
-                        { "Authorization", $"Bearer {jwtToken}" }
-                    };
-
-                    using var call = clienteGrpc.UploadStream(headers, cancellationToken: ct);
-
-                    var fileUuid = Guid.NewGuid().ToString("N");
-                    // El nombre se conserva; la ruta local del equipo no se transmite al servidor.
-                    long offset = 0;
-                    var buffer = new byte[TamanoBloque];
-
-                    using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-
-                    using var fs = new FileStream(
-                        rutaEnvio,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.Read,
-                        bufferSize: TamanoBloque,
-                        options: FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-                    var total = fs.Length;
-                    Reportar(35, "Transferencia", $"Enviando {nombreArchivo}: 0% de sus bytes...");
-
-                    while (true)
+                    UploadAck? ackFinal = null;
+                    var archivoFueReanudado = false;
+                    Exception? ultimoError = null;
+                    for (var intento = 1; intento <= MaximoReintentos; intento++)
                     {
                         ct.ThrowIfCancellationRequested();
-
-                        var leidos = await fs.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
-                        if (leidos <= 0)
-                            break;
-
-                        hash.AppendData(buffer, 0, leidos);
-
-                        var chunk = new UploadChunk
+                        try
                         {
-                            FileUuid = fileUuid,
-                            OriginalFileName = nombreArchivo,
-                            OriginalSourcePath = string.Empty,
-                            Offset = offset,
-                            Data = ByteString.CopyFrom(buffer, 0, leidos),
+                            Reportar(
+                                35,
+                                intento == 1 ? "Conexión segura" : "Reanudación",
+                                intento == 1
+                                    ? $"Consultando el estado de {nombreArchivo} en el servidor..."
+                                    : $"Reintento {intento}/{MaximoReintentos}: consultando bytes conservados...");
 
-                            Sha256Hex = "",
+                            var status = await clienteGrpc.GetUploadStatusAsync(
+                                CrearSolicitudEstado(
+                                    fileUuid, nombreArchivo, totalLength, sha256Hex, deviceId,
+                                    contexto.Periodo, idEnte, idAuditoria, idActo, idOficio,
+                                    idRequerimiento, idResultado, correlationId),
+                                headers,
+                                cancellationToken: ct);
 
-                            JwtToken = jwtToken,
-                            Rfc = rfc,
-                            DeviceId = deviceId,
+                            if (status.AlreadyCompleted)
+                            {
+                                ackFinal = new UploadAck
+                                {
+                                    Success = true,
+                                    IntegrityOk = true,
+                                    Message = "Carga completada previamente; respuesta idempotente.",
+                                    ReceiptId = status.ReceiptId,
+                                    TraceId = status.TraceId,
+                                    PolicyVersion = status.PolicyVersion,
+                                    VerificationRequired = status.VerificationRequired,
+                                    VerificationPerformed = status.VerificationRequired,
+                                    ResumedBytes = status.NextOffset
+                                };
+                                archivoFueReanudado = status.NextOffset > 0;
+                                break;
+                            }
 
-                            IdEnte = idEnte,
-                            IdAuditoria = idAuditoria,
-                            IdActo = idActo,
-                            IdOficio = idOficio,
-                            Periodo = contexto.Periodo,
+                            if (!status.ResumeAllowed)
+                            {
+                                if (string.Equals(status.Status, "Active", StringComparison.OrdinalIgnoreCase) &&
+                                    intento < MaximoReintentos)
+                                {
+                                    Reportar(36, "Reanudación", "El servidor aún está cerrando la conexión anterior; esperando para reintentar...");
+                                    await EsperarReintentoAsync(intento, ct);
+                                    continue;
+                                }
 
-                            // Solo uno de estos dos campos debe viajar con valor:
-                            // - ResultadoId para Cédula/Informe Individual.
-                            // - IdRequerimiento para actos normales.
-                            ResultadoId = idResultado > 0 ? idResultado : 0,
-                            IdRequerimiento = idResultado > 0 ? 0 : idRequerimiento
-                        };
+                                throw new InvalidOperationException(
+                                    string.IsNullOrWhiteSpace(status.Message)
+                                        ? "El servidor no autorizó reanudar la carga."
+                                        : status.Message);
+                            }
 
-                        await call.RequestStream.WriteAsync(chunk);
+                            var offsetInicial = status.NextOffset;
+                            if (offsetInicial < 0 || offsetInicial > totalLength)
+                                throw new InvalidOperationException("El servidor devolvió un punto de reanudación inconsistente.");
+                            archivoFueReanudado |= offsetInicial > 0;
+                            if (offsetInicial > 0)
+                            {
+                                var porcentajeConservado = (double)offsetInicial / totalLength * 100d;
+                                Reportar(
+                                    40 + porcentajeConservado * 0.50,
+                                    "Reanudación",
+                                    $"Servidor confirmó {porcentajeConservado:N0}% de {nombreArchivo}; continuando desde el byte {offsetInicial:N0}...");
+                            }
 
-                        offset += leidos;
-                        var porcentaje = total > 0 ? (double)offset / total * 100.0 : 100.0;
-                        Reportar(
-                            35 + (porcentaje * 0.55),
-                            "Transferencia",
-                            $"Enviando {nombreArchivo}: {porcentaje:N0}% de sus bytes...");
+                            ackFinal = await TransmitirDesdeOffsetAsync(
+                                clienteGrpc, headers, rutaEnvio, fileUuid, nombreArchivo,
+                                sha256Hex, totalLength, offsetInicial, correlationId,
+                                jwtToken, rfc, deviceId, contexto.Periodo,
+                                idEnte, idAuditoria, idActo, idOficio,
+                                idRequerimiento, idResultado, Reportar, ct);
+                            break;
+                        }
+                        catch (RpcException exception) when (
+                            EsErrorTransitorio(exception.StatusCode) &&
+                            intento < MaximoReintentos &&
+                            !ct.IsCancellationRequested)
+                        {
+                            ultimoError = exception;
+                            Reportar(
+                                38,
+                                "Reanudación",
+                                $"Conexión interrumpida; el servidor conservará los bytes confirmados. Reintentando {intento + 1}/{MaximoReintentos}...");
+                            await EsperarReintentoAsync(intento, ct);
+                        }
+                        catch (HttpRequestException exception) when (
+                            intento < MaximoReintentos && !ct.IsCancellationRequested)
+                        {
+                            ultimoError = exception;
+                            Reportar(
+                                38,
+                                "Reanudación",
+                                $"No fue posible contactar al servidor; reintentando {intento + 1}/{MaximoReintentos} sin perder el avance confirmado...");
+                            await EsperarReintentoAsync(intento, ct);
+                        }
                     }
 
-                    Reportar(92, "Integridad", $"Calculando y enviando la huella SHA-256 de {nombreArchivo}...");
-                    var sha256Hex = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
-
-                    var finalMeta = new UploadChunk
-                    {
-                        FileUuid = fileUuid,
-                        OriginalFileName = nombreArchivo,
-                        OriginalSourcePath = string.Empty,
-                        Offset = offset,
-                        Data = ByteString.Empty,
-                        Sha256Hex = sha256Hex,
-
-                        JwtToken = jwtToken,
-                        Rfc = rfc,
-                        DeviceId = deviceId,
-
-                        IdEnte = idEnte,
-                        IdAuditoria = idAuditoria,
-                        IdActo = idActo,
-                        IdOficio = idOficio,
-                        Periodo = contexto.Periodo,
-
-                        ResultadoId = idResultado > 0 ? idResultado : 0,
-                        IdRequerimiento = idResultado > 0 ? 0 : idRequerimiento
-                    };
-
-                    await call.RequestStream.WriteAsync(finalMeta);
-                    await call.RequestStream.CompleteAsync();
-                    Reportar(95, "Validación del servidor", $"El servidor está verificando integridad, estructura y ausencia de protección en {nombreArchivo}...");
-                    var ack = await call.ResponseAsync;
-
-                    if (!ack.Success || !ack.IntegrityOk)
+                    if (ackFinal is null)
+                        throw new InvalidOperationException(
+                            $"No fue posible completar {nombreArchivo} después de {MaximoReintentos} intentos.",
+                            ultimoError);
+                    if (!ackFinal.Success || !ackFinal.IntegrityOk)
                     {
                         throw new InvalidOperationException(
-                            $"Error al subir {nombreArchivo}: {ack.Message} " +
-                            $"(success={ack.Success}, integrityOk={ack.IntegrityOk})");
+                            $"Error al subir {nombreArchivo}: {ackFinal.Message} " +
+                            $"(success={ackFinal.Success}, integrityOk={ackFinal.IntegrityOk})");
                     }
 
                     archivosEnviados++;
+                    if (archivoFueReanudado || ackFinal.ResumedBytes > 0)
+                        archivosReanudados++;
+                    if (!string.IsNullOrWhiteSpace(ackFinal.ReceiptId))
+                        recibos.Add(ackFinal.ReceiptId);
+
                     var mensajeFinal = archivoPreparado.WasRepaired
-                        ? $"{nombreArchivo} enviado correctamente después de reparar y revalidar una copia; el original no cambió."
-                        : $"{nombreArchivo} enviado y verificado correctamente.";
-                    Reportar(100, "Completado", mensajeFinal);
+                        ? $"{nombreArchivo} fue reparado, revalidado y enviado. Recibo digital: {MostrarId(ackFinal.ReceiptId)}."
+                        : policy.RequiresVerification
+                            ? $"{nombreArchivo} enviado y verificado. Recibo digital: {MostrarId(ackFinal.ReceiptId)}."
+                            : $"{nombreArchivo} enviado; la verificación profunda fue omitida por política v{ackFinal.PolicyVersion}. Recibo: {MostrarId(ackFinal.ReceiptId)}.";
+                    Reportar(100, "Completado", mensajeFinal, ackFinal.ReceiptId, ackFinal.TraceId);
                 }
                 catch (FileValidationException exception)
                 {
-                    Reportar(30, "Rechazado", exception.Message);
+                    Reportar(25, "Rechazado", exception.Message);
                     throw;
                 }
                 finally
@@ -356,8 +399,239 @@ namespace TransferClienteASE.Servicios
                 archivosVerificados,
                 archivosReparados,
                 pdfVerificados,
-                pdfReparados);
+                pdfReparados,
+                verificacionesOmitidas,
+                archivosReanudados,
+                recibos);
         }
+
+        private static async Task<UploadAck> TransmitirDesdeOffsetAsync(
+            Upload.UploadClient clienteGrpc,
+            Metadata headers,
+            string rutaEnvio,
+            string fileUuid,
+            string nombreArchivo,
+            string sha256Hex,
+            long totalLength,
+            long offsetInicial,
+            string correlationId,
+            string jwtToken,
+            string rfc,
+            string deviceId,
+            int periodo,
+            int idEnte,
+            int idAuditoria,
+            int idActo,
+            int idOficio,
+            int idRequerimiento,
+            int idResultado,
+            Action<double, string, string, string?, string?> reportar,
+            CancellationToken ct)
+        {
+            using var call = clienteGrpc.UploadStream(headers, cancellationToken: ct);
+            await using var fs = new FileStream(
+                rutaEnvio,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: TamanoBloque,
+                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+            fs.Seek(offsetInicial, SeekOrigin.Begin);
+            var offset = offsetInicial;
+            var buffer = new byte[TamanoBloque];
+
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                var leidos = await fs.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+                if (leidos <= 0)
+                    break;
+
+                var chunk = CrearChunk(
+                    fileUuid, nombreArchivo, offset, ByteString.CopyFrom(buffer, 0, leidos),
+                    sha256Hex, totalLength, correlationId, jwtToken, rfc, deviceId,
+                    periodo, idEnte, idAuditoria, idActo, idOficio,
+                    idRequerimiento, idResultado);
+                await call.RequestStream.WriteAsync(chunk);
+                offset += leidos;
+                var porcentajeBytes = (double)offset / totalLength * 100d;
+                reportar(
+                    40 + porcentajeBytes * 0.50,
+                    offsetInicial > 0 ? "Reanudación" : "Transferencia",
+                    $"Enviando {nombreArchivo}: {porcentajeBytes:N0}% de sus bytes...",
+                    null,
+                    null);
+            }
+
+            await call.RequestStream.WriteAsync(CrearChunk(
+                fileUuid, nombreArchivo, offset, ByteString.Empty,
+                sha256Hex, totalLength, correlationId, jwtToken, rfc, deviceId,
+                periodo, idEnte, idAuditoria, idActo, idOficio,
+                idRequerimiento, idResultado));
+            await call.RequestStream.CompleteAsync();
+            reportar(
+                95,
+                "Validación del servidor",
+                $"El servidor verifica integridad, política, estructura y emite el recibo de {nombreArchivo}...",
+                null,
+                null);
+            return await call.ResponseAsync;
+        }
+
+        private static UploadChunk CrearChunk(
+            string fileUuid,
+            string nombreArchivo,
+            long offset,
+            ByteString data,
+            string sha256Hex,
+            long totalLength,
+            string correlationId,
+            string jwtToken,
+            string rfc,
+            string deviceId,
+            int periodo,
+            int idEnte,
+            int idAuditoria,
+            int idActo,
+            int idOficio,
+            int idRequerimiento,
+            int idResultado) => new()
+        {
+            FileUuid = fileUuid,
+            OriginalFileName = nombreArchivo,
+            OriginalSourcePath = string.Empty,
+            Offset = offset,
+            Data = data,
+            Sha256Hex = sha256Hex,
+            TotalLength = totalLength,
+            CorrelationId = correlationId,
+            JwtToken = jwtToken,
+            Rfc = rfc,
+            DeviceId = deviceId,
+            Periodo = periodo,
+            IdEnte = idEnte,
+            IdAuditoria = idAuditoria,
+            IdActo = idActo,
+            IdOficio = idOficio,
+            ResultadoId = idResultado > 0 ? idResultado : 0,
+            IdRequerimiento = idResultado > 0 ? 0 : idRequerimiento
+        };
+
+        private static UploadStatusRequest CrearSolicitudEstado(
+            string fileUuid,
+            string nombreArchivo,
+            long totalLength,
+            string sha256Hex,
+            string deviceId,
+            int periodo,
+            int idEnte,
+            int idAuditoria,
+            int idActo,
+            int idOficio,
+            int idRequerimiento,
+            int idResultado,
+            string correlationId) => new()
+        {
+            FileUuid = fileUuid,
+            OriginalFileName = nombreArchivo,
+            TotalLength = totalLength,
+            Sha256Hex = sha256Hex,
+            DeviceId = deviceId,
+            Periodo = periodo,
+            IdEnte = idEnte,
+            IdAuditoria = idAuditoria,
+            IdActo = idActo,
+            IdOficio = idOficio,
+            ResultadoId = idResultado > 0 ? idResultado : 0,
+            IdRequerimiento = idResultado > 0 ? 0 : idRequerimiento,
+            CorrelationId = correlationId
+        };
+
+        private static async Task<string> CalcularSha256Async(
+            string ruta,
+            Action<double> reportar,
+            CancellationToken ct)
+        {
+            await using var stream = new FileStream(
+                ruta, FileMode.Open, FileAccess.Read, FileShare.Read,
+                TamanoBloque, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[TamanoBloque];
+            long procesados = 0;
+            while (true)
+            {
+                var leidos = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+                if (leidos <= 0)
+                    break;
+                hash.AppendData(buffer, 0, leidos);
+                procesados += leidos;
+                reportar(stream.Length > 0 ? (double)procesados / stream.Length * 100d : 100d);
+            }
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+
+        private static string CrearUuidDeterminista(
+            string rfc,
+            string deviceId,
+            int periodo,
+            int idEnte,
+            int idAuditoria,
+            int idActo,
+            int idOficio,
+            int idRequerimiento,
+            int idResultado,
+            string nombreArchivo,
+            string sha256Hex)
+        {
+            var canonical = string.Join("|",
+                rfc.Trim().ToUpperInvariant(),
+                deviceId.Trim(),
+                periodo, idEnte, idAuditoria, idActo, idOficio,
+                idRequerimiento, idResultado,
+                nombreArchivo.Trim().ToUpperInvariant(),
+                sha256Hex);
+            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+            return new Guid(digest.AsSpan(0, 16)).ToString("N");
+        }
+
+        private static async Task EsperarReintentoAsync(int intento, CancellationToken ct)
+        {
+            var baseDelayMs = (int)Math.Pow(2, Math.Max(0, intento - 1)) * 1000;
+            var jitterMs = Random.Shared.Next(100, 450);
+            await Task.Delay(TimeSpan.FromMilliseconds(baseDelayMs + jitterMs), ct);
+        }
+
+        private static bool EsErrorTransitorio(StatusCode statusCode) => statusCode is
+            StatusCode.Unavailable or
+            StatusCode.DeadlineExceeded or
+            StatusCode.ResourceExhausted or
+            StatusCode.Internal or
+            StatusCode.Aborted;
+
+        private static void ValidarLimitePolitica(
+            PoliticaArchivoEfectiva policy,
+            long length,
+            string nombreArchivo)
+        {
+            if (policy.MaxFileBytes.HasValue && length > policy.MaxFileBytes.Value)
+            {
+                throw new FileValidationException(
+                    FileInspectionOutcome.TooLarge,
+                    $"{nombreArchivo} pesa {length / 1024d / 1024d:N2} MB y la política v{policy.Version} " +
+                    $"permite hasta {policy.MaxFileBytes.Value / 1024d / 1024d:N2} MB para {policy.Extension}.");
+            }
+        }
+
+        private static string NormalizarExtension(string? extension)
+        {
+            var value = (extension ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(value))
+                return "(sin extensión)";
+            return value.StartsWith(".", StringComparison.Ordinal) ? value : "." + value;
+        }
+
+        private static string MostrarId(string? id) =>
+            string.IsNullOrWhiteSpace(id) ? "no disponible" : id;
 
         private static string TraducirEtapa(FileSafetyStage stage) => stage switch
         {
@@ -376,10 +650,8 @@ namespace TransferClienteASE.Servicios
         private sealed class DelegatingProgress<T> : IProgress<T>
         {
             private readonly Action<T> _callback;
-
             public DelegatingProgress(Action<T> callback) =>
                 _callback = callback ?? throw new ArgumentNullException(nameof(callback));
-
             public void Report(T value) => _callback(value);
         }
 

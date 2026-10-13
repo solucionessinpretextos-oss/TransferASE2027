@@ -9,6 +9,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./pages/Dashboard";
+import { FilePolicies } from "./pages/FilePolicies";
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/policies" element={<FilePolicies />} />
         </Routes>
       </Layout>
     </BrowserRouter>

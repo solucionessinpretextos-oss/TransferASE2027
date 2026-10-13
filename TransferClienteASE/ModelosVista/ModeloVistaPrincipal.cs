@@ -90,12 +90,19 @@ namespace TransferClienteASE.ModelosVista
         {
         }
 
-        private static readonly string[] ExtensionesPermitidas =
-        {
-            // Los contenedores de llave privada (.key/.pfx/.p12/.der) y archivos .env
-            // se excluyen deliberadamente para evitar exfiltración accidental de credenciales.
-            ".pdf", ".xml", ".doc", ".docx", ".xls", ".xsd", ".xlsx", ".xlsm", ".xlt", ".xltx", ".xltm", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".txt", ".odt", ".rtf", ".md", ".wps", ".xps", ".oxps", ".epub", ".csv", ".tsv", ".tab", ".psv", ".ppt", ".pptx", ".odp", ".ods", ".ots", ".numbers", ".svg", ".svgz", ".ai", ".eps", ".cdr", ".dxf", ".dwg", ".vsd", ".vsdx", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".sql", ".sqlite", ".db", ".sqlite3", ".mdb", ".bak", ".accdb", ".gpg", ".asc", ".csr", ".eml", ".msg", ".mbox", ".pst", ".ost", ".ics", ".vcf", ".sua", ".cer"
-        };
+        // Respaldo seguro para los primeros milisegundos de la pantalla. En cuanto responde
+        // el servidor, esta colección se reemplaza por la política efectiva versionada.
+        private HashSet<string> _extensionesPermitidas = new(
+            new[]
+            {
+                ".pdf", ".docx", ".xlsx", ".pptx", ".xltx", ".odt", ".ods", ".odp",
+                ".ots", ".epub", ".xps", ".oxps", ".vsdx", ".xml", ".xsd", ".json",
+                ".svg", ".svgz", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif",
+                ".tiff", ".txt", ".csv", ".tsv", ".tab", ".psv", ".md", ".yaml",
+                ".yml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".sql", ".ics",
+                ".vcf", ".asc", ".csr", ".cer"
+            },
+            StringComparer.OrdinalIgnoreCase);
 
         public ContextoRequerimiento Contexto => _contexto;
 
@@ -191,6 +198,34 @@ namespace TransferClienteASE.ModelosVista
                 MensajeEstado = $"Archivos en cola: {Archivos.Count}";
                 ActualizarHabilitacionComandos();
             };
+
+            _ = CargarPoliticasEfectivasAsync();
+        }
+
+        private async Task CargarPoliticasEfectivasAsync()
+        {
+            try
+            {
+                var policies = await _servicioCarga.ObtenerPoliticasEfectivasAsync();
+                var extensions = policies
+                    .Where(policy => policy.IsAllowed)
+                    .Select(policy => policy.Extension.StartsWith(".", StringComparison.Ordinal)
+                        ? policy.Extension
+                        : "." + policy.Extension)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (extensions.Count == 0)
+                    return;
+
+                _extensionesPermitidas = extensions;
+                MensajeEstado = $"Políticas actualizadas: {extensions.Count} extensiones habilitadas por el servidor.";
+            }
+            catch (Exception exception)
+            {
+                // La validación autoritativa vuelve a ejecutarse al iniciar la carga. Aquí se
+                // conserva un conjunto seguro para que una caída temporal no congele la UI.
+                MensajeEstado = "No se pudieron actualizar las extensiones todavía; se usará la política segura local y se verificará nuevamente al enviar.";
+                System.Diagnostics.Debug.WriteLine(exception);
+            }
         }
 
         private void AgregarArchivos()
@@ -253,8 +288,7 @@ namespace TransferClienteASE.ModelosVista
             }
 
             var filtrados = archivos.Where(r =>
-                ExtensionesPermitidas.Contains(Path.GetExtension(r) ?? string.Empty,
-                    StringComparer.OrdinalIgnoreCase));
+                _extensionesPermitidas.Contains(Path.GetExtension(r) ?? string.Empty));
 
             AgregarRutasACola(filtrados);
         }
@@ -266,8 +300,7 @@ namespace TransferClienteASE.ModelosVista
                 if (!File.Exists(ruta))
                     continue;
 
-                if (!ExtensionesPermitidas.Contains(Path.GetExtension(ruta) ?? string.Empty,
-                        StringComparer.OrdinalIgnoreCase))
+                if (!_extensionesPermitidas.Contains(Path.GetExtension(ruta) ?? string.Empty))
                     continue;
 
                 if (!Archivos.Any(a =>
@@ -342,13 +375,19 @@ namespace TransferClienteASE.ModelosVista
                     {
                         modelo.Progreso = p.PorcentajeArchivo;
                         modelo.AccionActual = $"{p.Etapa}: {p.Mensaje}";
+                        if (!string.IsNullOrWhiteSpace(p.ReciboId))
+                            modelo.ReciboId = p.ReciboId;
+                        if (!string.IsNullOrWhiteSpace(p.TraceId))
+                            modelo.TraceId = p.TraceId;
                         modelo.Estado = string.Equals(p.Etapa, "Completado", StringComparison.OrdinalIgnoreCase)
                             ? EstadoTransferenciaArchivo.Completado
                             : EstadoTransferenciaArchivo.Subiendo;
                     }
 
                     EtapaActual = p.Etapa;
-                    ArchivoActual = $"Archivo {p.NumeroArchivo} de {p.TotalArchivos}: {Path.GetFileName(p.RutaOriginal)}";
+                    ArchivoActual = p.NumeroArchivo <= 0
+                        ? "Preparando políticas para la cola"
+                        : $"Archivo {p.NumeroArchivo} de {p.TotalArchivos}: {Path.GetFileName(p.RutaOriginal)}";
                     ProgresoArchivoActual = p.PorcentajeArchivo;
                     ProgresoTotal = p.PorcentajeTotal;
                     MensajeEstado = p.Mensaje;
@@ -360,9 +399,19 @@ namespace TransferClienteASE.ModelosVista
                 ProgresoTotal = 100;
                 EtapaActual = "Finalizado";
                 ArchivoActual = $"{resultado.ArchivosEnviados} de {resultado.ArchivosEnviados} archivos procesados";
-                MensajeEstado = resultado.ArchivosReparados > 0
-                    ? $"Carga finalizada. {resultado.ArchivosEnviados} archivo(s) inspeccionado(s) y enviado(s); {resultado.ArchivosReparados} copia(s) reparada(s) y revalidada(s). Los originales no cambiaron."
-                    : $"Carga finalizada. {resultado.ArchivosVerificados} archivo(s) inspeccionado(s) y {resultado.ArchivosEnviados} enviado(s) correctamente.";
+                var detalles = new List<string>
+                {
+                    $"{resultado.ArchivosEnviados} enviado(s)",
+                    $"{resultado.ArchivosVerificados} verificado(s)",
+                    $"{resultado.RecibosEmitidos.Count} recibo(s) digital(es)"
+                };
+                if (resultado.ArchivosReparados > 0)
+                    detalles.Add($"{resultado.ArchivosReparados} reparado(s) y revalidado(s)");
+                if (resultado.ArchivosReanudados > 0)
+                    detalles.Add($"{resultado.ArchivosReanudados} reanudado(s)");
+                if (resultado.VerificacionesOmitidas > 0)
+                    detalles.Add($"{resultado.VerificacionesOmitidas} sin inspección profunda por política explícita");
+                MensajeEstado = "Carga finalizada: " + string.Join(", ", detalles) + ". Los archivos originales no cambiaron.";
             }
             catch (OperationCanceledException)
             {

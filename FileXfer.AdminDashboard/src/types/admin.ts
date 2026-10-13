@@ -28,6 +28,11 @@ export interface TransferSummaryDto {
   bytesTransferredLastHour: number;
   totalBytesTransferredToday: number;
   averageThroughputMbps: number;
+  pausedResumableTransfers: number;
+  resumedTransfersToday: number;
+  resumedBytesToday: number;
+  verificationBypassedToday: number;
+  receiptsIssuedToday: number;
 }
 
 export interface OperationalKpisDto {
@@ -48,5 +53,46 @@ export interface SummaryResponse {
   server: ServerHealthDto;
   transfers: TransferSummaryDto;
   kpis: OperationalKpisDto;
+  recentTransfers: RecentTransferDto[];
   timestampUtc: string;
+}
+
+export interface RecentTransferDto {
+  fileName: string;
+  status: string;
+  bytesReceived: number;
+  resumedBytes: number;
+  createdUtc: string;
+  completedUtc?: string | null;
+  policyExtension?: string | null;
+  policyVersion?: number | null;
+  verificationRequired: boolean;
+  verificationPerformed: boolean;
+  traceId?: string | null;
+  receiptId?: string | null;
+}
+
+export interface FilePolicyDto {
+  id: string;
+  extension: string;
+  isAllowed: boolean;
+  requiresVerification: boolean;
+  maxFileBytes?: number | null;
+  version: number;
+  updatedUtc: string;
+  updatedBy: string;
+  changeReason: string;
+  isVerificationBypass: boolean;
+}
+
+export interface FilePolicyRevisionDto {
+  id: string;
+  extension: string;
+  isAllowed: boolean;
+  requiresVerification: boolean;
+  maxFileBytes?: number | null;
+  version: number;
+  changedUtc: string;
+  changedBy: string;
+  changeReason: string;
 }

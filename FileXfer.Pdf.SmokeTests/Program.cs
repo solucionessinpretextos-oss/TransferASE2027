@@ -1,19 +1,41 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using FileXfer.Pdf;
 
-if (args.Length != 5)
+if (args.Length is not (1 or 5))
 {
-    Console.Error.WriteLine("Uso: smoke <valid.pdf> <encrypted.pdf> <repairable.pdf> <active-content.pdf> <qpdf.exe>");
+    Console.Error.WriteLine(
+        "Uso: smoke <qpdf.exe> | smoke <valid.pdf> <encrypted.pdf> <repairable.pdf> <active-content.pdf> <qpdf.exe>");
     return 2;
 }
 
-var validPath = Path.GetFullPath(args[0]);
-var encryptedPath = Path.GetFullPath(args[1]);
-var repairablePath = Path.GetFullPath(args[2]);
-var activeContentPath = Path.GetFullPath(args[3]);
-var qpdfPath = Path.GetFullPath(args[4]);
 var stagingRoot = Path.Combine(Path.GetTempPath(), "FileXfer.Pdf.SmokeTests", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(stagingRoot);
+var qpdfPath = Path.GetFullPath(args[^1]);
+string validPath;
+string encryptedPath;
+string repairablePath;
+string activeContentPath;
+
+if (args.Length == 1)
+{
+    validPath = Path.Combine(stagingRoot, "valid.pdf");
+    encryptedPath = Path.Combine(stagingRoot, "encrypted.pdf");
+    repairablePath = Path.Combine(stagingRoot, "repairable.pdf");
+    activeContentPath = Path.Combine(stagingRoot, "active-content.pdf");
+    WriteSimplePdf(validPath, corruptStartXref: false, activeContent: false);
+    WriteSimplePdf(repairablePath, corruptStartXref: true, activeContent: false);
+    WriteSimplePdf(activeContentPath, corruptStartXref: false, activeContent: true);
+    await WriteEncryptedPdfAsync(qpdfPath, validPath, encryptedPath);
+}
+else
+{
+    validPath = Path.GetFullPath(args[0]);
+    encryptedPath = Path.GetFullPath(args[1]);
+    repairablePath = Path.GetFullPath(args[2]);
+    activeContentPath = Path.GetFullPath(args[3]);
+}
+
 var attachmentPath = Path.Combine(stagingRoot, "attachment-annotation.pdf");
 WriteAttachmentAnnotationPdf(attachmentPath);
 
@@ -111,6 +133,73 @@ finally
 }
 
 static byte[] Hash(string path) => SHA256.HashData(File.ReadAllBytes(path));
+
+static async Task WriteEncryptedPdfAsync(string qpdfPath, string sourcePath, string destinationPath)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = qpdfPath,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+    };
+    startInfo.ArgumentList.Add("--encrypt");
+    startInfo.ArgumentList.Add("smoke-user");
+    startInfo.ArgumentList.Add("smoke-owner");
+    startInfo.ArgumentList.Add("256");
+    startInfo.ArgumentList.Add("--");
+    startInfo.ArgumentList.Add(sourcePath);
+    startInfo.ArgumentList.Add(destinationPath);
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("No se pudo iniciar qpdf para generar el PDF cifrado de prueba.");
+    var stdout = process.StandardOutput.ReadToEndAsync();
+    var stderr = process.StandardError.ReadToEndAsync();
+    await process.WaitForExitAsync();
+    if (process.ExitCode != 0 || !File.Exists(destinationPath))
+    {
+        throw new InvalidOperationException(
+            $"qpdf no generó el PDF cifrado de prueba. Exit={process.ExitCode}; {(await stdout)} {(await stderr)}");
+    }
+}
+
+static void WriteSimplePdf(string path, bool corruptStartXref, bool activeContent)
+{
+    var objects = activeContent
+        ? new[]
+        {
+            "<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+            "<< /Type /Action /S /JavaScript /JS (app.alert\\(test\\)) >>"
+        }
+        : new[]
+        {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream"
+        };
+
+    var bytes = new List<byte>();
+    AppendAscii(bytes, "%PDF-1.4\n%1234\n");
+    var offsets = new List<int> { 0 };
+    for (var index = 0; index < objects.Length; index++)
+    {
+        offsets.Add(bytes.Count);
+        AppendAscii(bytes, $"{index + 1} 0 obj\n{objects[index]}\nendobj\n");
+    }
+
+    var xrefOffset = bytes.Count;
+    AppendAscii(bytes, $"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n");
+    for (var index = 1; index < offsets.Count; index++)
+        AppendAscii(bytes, $"{offsets[index]:D10} 00000 n \n");
+    var declaredXrefOffset = corruptStartXref ? xrefOffset + 17 : xrefOffset;
+    AppendAscii(bytes, $"trailer\n<< /Size {objects.Length + 1} /Root 1 0 R >>\nstartxref\n{declaredXrefOffset}\n%%EOF\n");
+    File.WriteAllBytes(path, bytes.ToArray());
+}
 
 static void WriteAttachmentAnnotationPdf(string path)
 {

@@ -16,6 +16,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <h1 className="text-xl font-bold mb-4">FileXfer Admin</h1>
         <nav className="flex flex-col gap-2">
           <Link to="/" className="hover:text-emerald-300">Dashboard</Link>
+          <Link to="/policies" className="hover:text-emerald-300">Políticas de archivos</Link>
         </nav>
       </aside>
       <main className="flex-1 p-6">{children}</main>

@@ -152,4 +152,10 @@ public interface IFileSafetyService
         string stagingRoot,
         IProgress<FileSafetyProgress>? progress = null,
         CancellationToken cancellationToken = default);
+
+    Task<PreparedSafeFile> PrepareSnapshotForUploadAsync(
+        string originalPath,
+        string stagingRoot,
+        IProgress<FileSafetyProgress>? progress = null,
+        CancellationToken cancellationToken = default);
 }

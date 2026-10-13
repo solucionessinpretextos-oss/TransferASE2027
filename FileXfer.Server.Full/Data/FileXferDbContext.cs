@@ -27,6 +27,10 @@ namespace FileXfer.Server.Data
         public DbSet<UploadEntry> Uploads => Set<UploadEntry>();
         public DbSet<RfcProvisioningRequest> RfcProvisioningRequests => Set<RfcProvisioningRequest>();
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+        public DbSet<FileTypePolicy> FileTypePolicies => Set<FileTypePolicy>();
+        public DbSet<FileTypePolicyRevision> FileTypePolicyRevisions => Set<FileTypePolicyRevision>();
+        public DbSet<UploadReceipt> UploadReceipts => Set<UploadReceipt>();
+        public DbSet<ReceiptChainState> ReceiptChainStates => Set<ReceiptChainState>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -82,6 +86,62 @@ namespace FileXfer.Server.Data
 
             modelBuilder.Entity<UploadEntry>()
                 .HasIndex(x => x.StoredRelativePath);
+
+            modelBuilder.Entity<UploadEntry>()
+                .HasIndex(x => new { x.Status, x.ResumeExpiresUtc });
+
+            modelBuilder.Entity<UploadEntry>()
+                .HasIndex(x => x.ReceiptId)
+                .IsUnique()
+                .HasFilter("[ReceiptId] IS NOT NULL");
+
+            modelBuilder.Entity<FileTypePolicy>()
+                .HasIndex(x => x.Extension)
+                .IsUnique();
+
+            modelBuilder.Entity<FileTypePolicy>()
+                .Property(x => x.Version)
+                .IsConcurrencyToken();
+
+            modelBuilder.Entity<FileTypePolicyRevision>()
+                .HasIndex(x => new { x.PolicyId, x.Version })
+                .IsUnique();
+
+            modelBuilder.Entity<FileTypePolicyRevision>()
+                .HasIndex(x => new { x.Extension, x.ChangedUtc });
+
+            modelBuilder.Entity<FileTypePolicyRevision>()
+                .HasOne<FileTypePolicy>()
+                .WithMany()
+                .HasForeignKey(x => x.PolicyId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<UploadReceipt>()
+                .HasIndex(x => x.UploadId)
+                .IsUnique();
+
+            modelBuilder.Entity<UploadReceipt>()
+                .HasIndex(x => x.IssuedUtc);
+
+            modelBuilder.Entity<UploadReceipt>()
+                .HasOne<UploadEntry>()
+                .WithOne()
+                .HasForeignKey<UploadReceipt>(x => x.UploadId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<UploadEntry>()
+                .HasOne<UploadReceipt>()
+                .WithOne()
+                .HasForeignKey<UploadEntry>(x => x.ReceiptId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<ReceiptChainState>()
+                .Property(x => x.Id)
+                .ValueGeneratedNever();
+
+            modelBuilder.Entity<ReceiptChainState>()
+                .Property(x => x.Version)
+                .IsConcurrencyToken();
 
             modelBuilder.Entity<RfcProvisioningRequest>()
                 .HasIndex(x => x.Rfc);

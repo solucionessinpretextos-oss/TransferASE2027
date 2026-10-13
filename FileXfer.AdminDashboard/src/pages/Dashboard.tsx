@@ -308,6 +308,19 @@ export function Dashboard() {
 
       <section className="space-y-3">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+          Reanudación, verificación y custodia
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <KpiCard title="Reanudables" value={transfers.pausedResumableTransfers.toString()} helperText="Parciales vigentes conservados" />
+          <KpiCard title="Reanudadas hoy" value={transfers.resumedTransfersToday.toString()} helperText={formatBytes(transfers.resumedBytesToday) + " recuperados"} />
+          <KpiCard title="Verificación omitida" value={transfers.verificationBypassedToday.toString()} helperText="Solo por política explícita" />
+          <KpiCard title="Recibos hoy" value={transfers.receiptsIssuedToday.toString()} helperText="Firmados y encadenados" />
+          <KpiCard title="Trazas recientes" value={summary.recentTransfers.length.toString()} helperText="Con correlación de extremo a extremo" />
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
           Recursos del servidor
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -361,6 +374,28 @@ export function Dashboard() {
             title="Fallidas hoy"
             value={transfers.failedToday.toString()}
           />
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">Transferencias recientes</h3>
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-900 text-slate-400"><tr><th className="px-3 py-2">Archivo</th><th>Estado</th><th>Bytes</th><th>Política</th><th>Verificación</th><th>Trace ID</th><th>Recibo</th></tr></thead>
+            <tbody>
+              {summary.recentTransfers.map((transfer, index) => (
+                <tr key={`${transfer.traceId ?? transfer.fileName}-${index}`} className="border-t border-slate-800">
+                  <td className="max-w-64 truncate px-3 py-2" title={transfer.fileName}>{transfer.fileName}</td>
+                  <td>{transfer.status}</td>
+                  <td>{formatBytes(transfer.bytesReceived)}</td>
+                  <td>{transfer.policyExtension ?? "—"}{transfer.policyVersion ? ` v${transfer.policyVersion}` : ""}</td>
+                  <td>{transfer.verificationRequired ? (transfer.verificationPerformed ? "Ejecutada" : "Pendiente") : "Omitida por política"}</td>
+                  <td className="max-w-44 truncate font-mono" title={transfer.traceId ?? undefined}>{transfer.traceId ?? "—"}</td>
+                  <td className="max-w-44 truncate font-mono" title={transfer.receiptId ?? undefined}>{transfer.receiptId ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
 

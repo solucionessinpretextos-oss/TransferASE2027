@@ -244,6 +244,16 @@ namespace FileXfer.Server.Uploading
             using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         }
 
+        public long GetPersistedLength(
+            string rfcOrLogicalPath,
+            string fileUuid,
+            string? fileName)
+        {
+            _sessions.RemoveWriteState(fileUuid);
+            var path = ResolveAbsolutePath(rfcOrLogicalPath, fileUuid, fileName);
+            return File.Exists(path) ? new FileInfo(path).Length : 0;
+        }
+
         public void DeleteIfExists(
             string rfcOrLogicalPath,
             string fileUuid,
