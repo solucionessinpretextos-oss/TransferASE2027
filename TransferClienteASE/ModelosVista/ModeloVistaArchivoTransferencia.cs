@@ -18,6 +18,7 @@ namespace TransferClienteASE.ModelosVista
         private string _rutaCompleta = string.Empty;
         private double _progreso;
         private EstadoTransferenciaArchivo _estado;
+        private string _accionActual = "Pendiente de validación";
 
         public string RutaCompleta
         {
@@ -56,11 +57,18 @@ namespace TransferClienteASE.ModelosVista
             set => EstablecerValor(ref _estado, value);
         }
 
+        public string AccionActual
+        {
+            get => _accionActual;
+            set => EstablecerValor(ref _accionActual, value);
+        }
+
         public ModeloVistaArchivoTransferencia(string ruta)
         {
             RutaCompleta = ruta ?? throw new ArgumentNullException(nameof(ruta));
             Estado = EstadoTransferenciaArchivo.Pendiente;
             Progreso = 0;
+            AccionActual = "Pendiente de validación";
         }
     }
 }

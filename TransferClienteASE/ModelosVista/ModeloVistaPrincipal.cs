@@ -16,7 +16,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Win32;
 using Grpc.Core; // <<< agregado para detectar cancelación gRPC
-using FileXfer.Pdf;
+using FileXfer.FileSafety;
 using TransferClienteASE.Infraestructura;
 using TransferClienteASE.Modelos;
 using TransferClienteASE.Servicios;
@@ -40,6 +40,10 @@ namespace TransferClienteASE.ModelosVista
 
         private bool _subidaEnProgreso;
         private string _mensajeEstado = string.Empty;
+        private string _etapaActual = "En espera";
+        private string _archivoActual = "Ningún archivo en proceso";
+        private double _progresoArchivoActual;
+        private double _progresoTotal;
         private CancellationTokenSource? _ctsSubida;
 
         private string _nombreUsuario = string.Empty;
@@ -125,6 +129,30 @@ namespace TransferClienteASE.ModelosVista
         {
             get => _mensajeEstado;
             set => EstablecerValor(ref _mensajeEstado, value);
+        }
+
+        public string EtapaActual
+        {
+            get => _etapaActual;
+            set => EstablecerValor(ref _etapaActual, value);
+        }
+
+        public string ArchivoActual
+        {
+            get => _archivoActual;
+            set => EstablecerValor(ref _archivoActual, value);
+        }
+
+        public double ProgresoArchivoActual
+        {
+            get => _progresoArchivoActual;
+            set => EstablecerValor(ref _progresoArchivoActual, Math.Clamp(value, 0, 100));
+        }
+
+        public double ProgresoTotal
+        {
+            get => _progresoTotal;
+            set => EstablecerValor(ref _progresoTotal, Math.Clamp(value, 0, 100));
         }
 
         public ComandoRelay ComandoAgregarArchivos { get; }
@@ -274,6 +302,10 @@ namespace TransferClienteASE.ModelosVista
 
             SubidaEnProgreso = true;
             MensajeEstado = "Iniciando carga de archivos...";
+            EtapaActual = "Preparación";
+            ArchivoActual = "Organizando la cola de archivos";
+            ProgresoArchivoActual = 0;
+            ProgresoTotal = 0;
 
             try
             {
@@ -297,6 +329,7 @@ namespace TransferClienteASE.ModelosVista
                     {
                         a.Estado = EstadoTransferenciaArchivo.EnCola;
                         a.Progreso = 0;
+                        a.AccionActual = "En cola; pendiente de inspección";
                     }
                 }
 
@@ -307,20 +340,29 @@ namespace TransferClienteASE.ModelosVista
 
                     if (modelo != null)
                     {
-                        modelo.Progreso = p.Porcentaje;
-                        modelo.Estado = p.Porcentaje >= 100.0
+                        modelo.Progreso = p.PorcentajeArchivo;
+                        modelo.AccionActual = $"{p.Etapa}: {p.Mensaje}";
+                        modelo.Estado = string.Equals(p.Etapa, "Completado", StringComparison.OrdinalIgnoreCase)
                             ? EstadoTransferenciaArchivo.Completado
                             : EstadoTransferenciaArchivo.Subiendo;
                     }
 
+                    EtapaActual = p.Etapa;
+                    ArchivoActual = $"Archivo {p.NumeroArchivo} de {p.TotalArchivos}: {Path.GetFileName(p.RutaOriginal)}";
+                    ProgresoArchivoActual = p.PorcentajeArchivo;
+                    ProgresoTotal = p.PorcentajeTotal;
                     MensajeEstado = p.Mensaje;
                 });
 
                 var resultado = await _servicioCarga.EnviarArchivosAsync(Contexto, rutas, progreso, ct);
 
-                MensajeEstado = resultado.PdfReparados > 0
-                    ? $"Carga finalizada. {resultado.PdfReparados} PDF reparado(s), verificado(s) y enviado(s); los originales no cambiaron."
-                    : $"Carga finalizada. {resultado.ArchivosEnviados} archivo(s) enviado(s) correctamente.";
+                ProgresoArchivoActual = 100;
+                ProgresoTotal = 100;
+                EtapaActual = "Finalizado";
+                ArchivoActual = $"{resultado.ArchivosEnviados} de {resultado.ArchivosEnviados} archivos procesados";
+                MensajeEstado = resultado.ArchivosReparados > 0
+                    ? $"Carga finalizada. {resultado.ArchivosEnviados} archivo(s) inspeccionado(s) y enviado(s); {resultado.ArchivosReparados} copia(s) reparada(s) y revalidada(s). Los originales no cambiaron."
+                    : $"Carga finalizada. {resultado.ArchivosVerificados} archivo(s) inspeccionado(s) y {resultado.ArchivosEnviados} enviado(s) correctamente.";
             }
             catch (OperationCanceledException)
             {
@@ -330,22 +372,27 @@ namespace TransferClienteASE.ModelosVista
             {
                 MarcarColaComoCancelada();
             }
-            catch (PdfValidationException ex)
+            catch (FileValidationException ex)
             {
                 MensajeEstado = ex.Message;
+                EtapaActual = "Rechazado";
 
                 foreach (var a in Archivos.Where(a =>
                              a.Estado == EstadoTransferenciaArchivo.Subiendo ||
                              a.Estado == EstadoTransferenciaArchivo.EnCola))
                 {
+                    var eraArchivoActivo = a.Estado == EstadoTransferenciaArchivo.Subiendo;
                     a.Estado = EstadoTransferenciaArchivo.Fallido;
+                    a.AccionActual = eraArchivoActivo
+                        ? $"Rechazado: {ex.Message}"
+                        : "No se procesó porque la cola fue detenida por un archivo rechazado";
                 }
 
                 MessageBox.Show(
                     ex.Message,
-                    ex.Outcome == PdfInspectionOutcome.Encrypted
-                        ? "PDF protegido o con contraseña"
-                        : "El PDF no superó la validación",
+                    ex.Outcome == FileInspectionOutcome.Encrypted
+                        ? "Archivo protegido o con contraseña"
+                        : "El archivo no superó la validación",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
@@ -356,12 +403,14 @@ namespace TransferClienteASE.ModelosVista
                     "realizar la carga de archivos");
 
                 MensajeEstado = mensaje;
+                EtapaActual = "Error";
 
                 foreach (var a in Archivos.Where(a =>
                              a.Estado == EstadoTransferenciaArchivo.Subiendo ||
                              a.Estado == EstadoTransferenciaArchivo.EnCola))
                 {
                     a.Estado = EstadoTransferenciaArchivo.Fallido;
+                    a.AccionActual = $"Error: {mensaje}";
                 }
 
                 MessageBox.Show(
@@ -382,6 +431,7 @@ namespace TransferClienteASE.ModelosVista
         private void MarcarColaComoCancelada()
         {
             MensajeEstado = "La cola de archivos fue cancelada.";
+            EtapaActual = "Cancelado";
 
             foreach (var a in Archivos)
             {
@@ -389,6 +439,7 @@ namespace TransferClienteASE.ModelosVista
                     a.Estado == EstadoTransferenciaArchivo.EnCola)
                 {
                     a.Estado = EstadoTransferenciaArchivo.Cancelado;
+                    a.AccionActual = "Carga cancelada por el usuario";
                 }
             }
         }

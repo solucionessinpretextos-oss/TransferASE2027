@@ -9,7 +9,7 @@
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
 using FileXfer.Proto;
-using FileXfer.Pdf;
+using FileXfer.FileSafety;
 using FileXfer.Server.Data;
 using FileXfer.Server.Options;
 using FileXfer.Server.Security;
@@ -55,7 +55,7 @@ namespace FileXfer.Server.Uploading
         private readonly StorageOptions _storage;
         private readonly UploadSessionStore _sessionStore;
         private readonly IBudiDevRepository _budiDev;
-        private readonly IPdfSafetyService _pdfSafety;
+        private readonly IFileSafetyService _fileSafety;
 
         public UploadGrpcService(
             FileAssembler assembler,
@@ -65,7 +65,7 @@ namespace FileXfer.Server.Uploading
             StorageOptions storage,
             UploadSessionStore sessionStore,
             IBudiDevRepository budiDev,
-            IPdfSafetyService pdfSafety)
+            IFileSafetyService fileSafety)
         {
             _assembler = assembler ?? throw new ArgumentNullException(nameof(assembler));
             _log = log ?? throw new ArgumentNullException(nameof(log));
@@ -74,7 +74,7 @@ namespace FileXfer.Server.Uploading
             _storage = storage ?? throw new ArgumentNullException(nameof(storage));
             _sessionStore = sessionStore ?? throw new ArgumentNullException(nameof(sessionStore));
             _budiDev = budiDev ?? throw new ArgumentNullException(nameof(budiDev));
-            _pdfSafety = pdfSafety ?? throw new ArgumentNullException(nameof(pdfSafety));
+            _fileSafety = fileSafety ?? throw new ArgumentNullException(nameof(fileSafety));
         }
 
         /// <summary>
@@ -592,32 +592,24 @@ namespace FileXfer.Server.Uploading
                 }
 
                 var nombreOriginalParaValidar = entry?.OriginalFileName ?? fileName ?? finalFileNameForDisk;
-                var extensionPdf = Path.GetExtension(nombreOriginalParaValidar)
-                    .Equals(".pdf", StringComparison.OrdinalIgnoreCase);
-                var contenidoPdf = integrityOk &&
-                    await LooksLikePdfAsync(absolutePath, uploadCancellationToken);
-
-                if (integrityOk && (extensionPdf || contenidoPdf))
+                if (integrityOk)
                 {
-                    var pdfResult = await _pdfSafety.InspectAsync(
+                    var fileResult = await _fileSafety.InspectAsync(
                         absolutePath,
+                        nombreOriginalParaValidar,
+                        progress: null,
                         uploadCancellationToken);
 
-                    if (!pdfResult.IsAccepted)
+                    if (!fileResult.IsAccepted)
                     {
                         integrityOk = false;
-                        validationFailure = pdfResult.UserMessage;
+                        validationFailure = fileResult.UserMessage;
                         _log.LogWarning(
-                            "PDF rechazado por validación de seguridad. RFC={Rfc}, Uuid={Uuid}, Resultado={Resultado}",
+                            "Archivo rechazado por validación de seguridad. RFC={Rfc}, Uuid={Uuid}, Formato={Formato}, Resultado={Resultado}",
                             rfc,
                             fileUuid,
-                            pdfResult.Outcome);
-
-                    }
-                    else if (!extensionPdf)
-                    {
-                        integrityOk = false;
-                        validationFailure = "El contenido es PDF, pero la extensión del archivo no es .pdf.";
+                            fileResult.Format,
+                            fileResult.Outcome);
                     }
                 }
 

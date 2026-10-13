@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Threading;
@@ -20,7 +21,7 @@ using Grpc.Net.Client;
 using Google.Protobuf;
 using TransferClienteASE.Modelos;
 using FileXfer.Proto;
-using FileXfer.Pdf;
+using FileXfer.FileSafety;
 
 
 // ============================================================================
@@ -42,18 +43,28 @@ namespace TransferClienteASE.Servicios
 {
     public sealed record ProgresoCargaArchivo(
         string RutaOriginal,
-        double Porcentaje,
-        string Mensaje);
+        double PorcentajeArchivo,
+        double PorcentajeTotal,
+        int NumeroArchivo,
+        int TotalArchivos,
+        string Etapa,
+        string Mensaje)
+    {
+        // Alias conservado para bindings o consumidores anteriores.
+        public double Porcentaje => PorcentajeArchivo;
+    }
 
     public sealed record ResultadoCargaArchivos(
         int ArchivosEnviados,
+        int ArchivosVerificados,
+        int ArchivosReparados,
         int PdfVerificados,
         int PdfReparados);
 
     public sealed class ServicioCargaArchivos
     {
         private readonly ServicioConfiguracionCliente _configuracion;
-        private readonly IPdfSafetyService _pdfSafety;
+        private readonly IFileSafetyService _fileSafety;
 
         // Tamaño de cada bloque enviado por gRPC.
         // 1 MB es un equilibrio razonable: reduce overhead de llamadas sin exigir demasiada RAM
@@ -62,10 +73,10 @@ namespace TransferClienteASE.Servicios
 
         public ServicioCargaArchivos(
             ServicioConfiguracionCliente configuracion,
-            IPdfSafetyService? pdfSafety = null)
+            IFileSafetyService? fileSafety = null)
         {
             _configuracion = configuracion ?? throw new ArgumentNullException(nameof(configuracion));
-            _pdfSafety = pdfSafety ?? new QpdfPdfSafetyService();
+            _fileSafety = fileSafety ?? new DefaultFileSafetyService();
         }
 
         /// <summary>
@@ -132,42 +143,85 @@ namespace TransferClienteASE.Servicios
             var clienteGrpc = new Upload.UploadClient(channel);
 
             var archivosEnviados = 0;
+            var archivosVerificados = 0;
+            var archivosReparados = 0;
             var pdfVerificados = 0;
             var pdfReparados = 0;
-            var stagingPdf = Path.Combine(
+            var stagingArchivos = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ASE",
                 "TransferClienteASE",
-                "PdfPreflight");
+                "FilePreflight");
 
-            foreach (var ruta in rutasArchivos)
+            var rutasParaEnviar = rutasArchivos
+                .Where(ruta => !string.IsNullOrWhiteSpace(ruta))
+                .ToArray();
+
+            if (rutasParaEnviar.Length == 0)
+                return new ResultadoCargaArchivos(0, 0, 0, 0, 0);
+
+            for (var indiceArchivo = 0; indiceArchivo < rutasParaEnviar.Length; indiceArchivo++)
             {
                 ct.ThrowIfCancellationRequested();
 
-                if (string.IsNullOrWhiteSpace(ruta) || !File.Exists(ruta))
-                    continue;
+                var ruta = rutasParaEnviar[indiceArchivo];
+                var numeroArchivo = indiceArchivo + 1;
+                var totalArchivos = rutasParaEnviar.Length;
+                var nombreArchivo = Path.GetFileName(ruta);
+
+                void Reportar(double porcentajeArchivo, string etapa, string mensaje)
+                {
+                    var porcentajeAcotado = Math.Clamp(porcentajeArchivo, 0, 100);
+                    var porcentajeTotal = ((indiceArchivo + porcentajeAcotado / 100d) / totalArchivos) * 100d;
+                    progreso.Report(new ProgresoCargaArchivo(
+                        ruta,
+                        porcentajeAcotado,
+                        Math.Clamp(porcentajeTotal, 0, 100),
+                        numeroArchivo,
+                        totalArchivos,
+                        etapa,
+                        $"[{numeroArchivo}/{totalArchivos}] {mensaje}"));
+                }
+
+                Reportar(0, "Preparación", $"Preparando {nombreArchivo}...");
+                if (!File.Exists(ruta))
+                {
+                    Reportar(0, "Error", $"No se encontró {nombreArchivo}; la carga se detuvo.");
+                    throw new FileNotFoundException("No se encontró uno de los archivos seleccionados.", ruta);
+                }
 
                 var rutaEnvio = ruta;
-                PreparedPdfFile? pdfPreparado = null;
+                PreparedSafeFile? archivoPreparado = null;
 
                 try
                 {
+                    var progresoInspeccion = new DelegatingProgress<FileSafetyProgress>(p =>
+                    {
+                        var porcentajeArchivo = p.Percentage * 0.30;
+                        Reportar(
+                            porcentajeArchivo,
+                            TraducirEtapa(p.Stage),
+                            p.UserMessage);
+                    });
+
+                    archivoPreparado = await _fileSafety.PrepareForUploadAsync(
+                        ruta,
+                        stagingArchivos,
+                        progresoInspeccion,
+                        ct);
+
+                    rutaEnvio = archivoPreparado.UploadPath;
+                    archivosVerificados++;
+                    if (archivoPreparado.WasRepaired)
+                        archivosReparados++;
                     if (Path.GetExtension(ruta).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
                     {
-                        var progresoPdf = new Progress<string>(mensaje =>
-                            progreso.Report(new ProgresoCargaArchivo(ruta, 0, mensaje)));
-
-                        pdfPreparado = await _pdfSafety.PrepareForUploadAsync(
-                            ruta,
-                            stagingPdf,
-                            progresoPdf,
-                            ct);
-
-                        rutaEnvio = pdfPreparado.UploadPath;
                         pdfVerificados++;
-                        if (pdfPreparado.WasRepaired)
+                        if (archivoPreparado.WasRepaired)
                             pdfReparados++;
                     }
+
+                    Reportar(30, "Conexión segura", $"{nombreArchivo} superó la inspección; abriendo canal seguro con el servidor...");
 
                     var headers = new Metadata
                     {
@@ -178,8 +232,6 @@ namespace TransferClienteASE.Servicios
 
                     var fileUuid = Guid.NewGuid().ToString("N");
                     // El nombre se conserva; la ruta local del equipo no se transmite al servidor.
-                    var nombreArchivo = Path.GetFileName(ruta);
-
                     long offset = 0;
                     var buffer = new byte[TamanoBloque];
 
@@ -194,7 +246,7 @@ namespace TransferClienteASE.Servicios
                         options: FileOptions.Asynchronous | FileOptions.SequentialScan);
 
                     var total = fs.Length;
-                    progreso.Report(new ProgresoCargaArchivo(ruta, 0, $"Enviando {nombreArchivo}..."));
+                    Reportar(35, "Transferencia", $"Enviando {nombreArchivo}: 0% de sus bytes...");
 
                     while (true)
                     {
@@ -237,12 +289,13 @@ namespace TransferClienteASE.Servicios
 
                         offset += leidos;
                         var porcentaje = total > 0 ? (double)offset / total * 100.0 : 100.0;
-                        progreso.Report(new ProgresoCargaArchivo(
-                            ruta,
-                            porcentaje,
-                            $"Enviando {nombreArchivo}: {porcentaje:N0}%"));
+                        Reportar(
+                            35 + (porcentaje * 0.55),
+                            "Transferencia",
+                            $"Enviando {nombreArchivo}: {porcentaje:N0}% de sus bytes...");
                     }
 
+                    Reportar(92, "Integridad", $"Calculando y enviando la huella SHA-256 de {nombreArchivo}...");
                     var sha256Hex = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
 
                     var finalMeta = new UploadChunk
@@ -270,6 +323,7 @@ namespace TransferClienteASE.Servicios
 
                     await call.RequestStream.WriteAsync(finalMeta);
                     await call.RequestStream.CompleteAsync();
+                    Reportar(95, "Validación del servidor", $"El servidor está verificando integridad, estructura y ausencia de protección en {nombreArchivo}...");
                     var ack = await call.ResponseAsync;
 
                     if (!ack.Success || !ack.IntegrityOk)
@@ -280,19 +334,53 @@ namespace TransferClienteASE.Servicios
                     }
 
                     archivosEnviados++;
-                    var mensajeFinal = pdfPreparado?.WasRepaired == true
-                        ? $"{nombreArchivo} enviado correctamente después de reparar y verificar una copia."
+                    var mensajeFinal = archivoPreparado.WasRepaired
+                        ? $"{nombreArchivo} enviado correctamente después de reparar y revalidar una copia; el original no cambió."
                         : $"{nombreArchivo} enviado y verificado correctamente.";
-                    progreso.Report(new ProgresoCargaArchivo(ruta, 100.0, mensajeFinal));
+                    Reportar(100, "Completado", mensajeFinal);
+                }
+                catch (FileValidationException exception)
+                {
+                    Reportar(30, "Rechazado", exception.Message);
+                    throw;
                 }
                 finally
                 {
-                    if (pdfPreparado is not null)
-                        await pdfPreparado.DisposeAsync();
+                    if (archivoPreparado is not null)
+                        await archivoPreparado.DisposeAsync();
                 }
             }
 
-            return new ResultadoCargaArchivos(archivosEnviados, pdfVerificados, pdfReparados);
+            return new ResultadoCargaArchivos(
+                archivosEnviados,
+                archivosVerificados,
+                archivosReparados,
+                pdfVerificados,
+                pdfReparados);
+        }
+
+        private static string TraducirEtapa(FileSafetyStage stage) => stage switch
+        {
+            FileSafetyStage.DetectingType => "Identificación",
+            FileSafetyStage.CreatingSafeCopy => "Copia segura",
+            FileSafetyStage.CheckingProtection => "Contraseña y cifrado",
+            FileSafetyStage.CheckingStructure => "Estructura",
+            FileSafetyStage.CheckingContent => "Contenido",
+            FileSafetyStage.Repairing => "Reparación",
+            FileSafetyStage.Revalidating => "Revalidación",
+            FileSafetyStage.Ready => "Validado",
+            FileSafetyStage.Rejected => "Rechazado",
+            _ => "Validación"
+        };
+
+        private sealed class DelegatingProgress<T> : IProgress<T>
+        {
+            private readonly Action<T> _callback;
+
+            public DelegatingProgress(Action<T> callback) =>
+                _callback = callback ?? throw new ArgumentNullException(nameof(callback));
+
+            public void Report(T value) => _callback(value);
         }
 
         public Task<IReadOnlyList<string>> ObtenerDocumentosExistentesAsync(
