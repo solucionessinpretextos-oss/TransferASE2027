@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using FileXfer.Server.Data;
+using FileXfer.Server.Security;
 using FileXfer.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -36,10 +37,7 @@ public sealed class ReceiptsController : ControllerBase
         if (data is null)
             return NotFound();
 
-        var callerRfc = User.FindFirst("rfc")?.Value;
-        var hasPrivilegedRole = User.IsInRole("admin") || User.IsInRole("ops");
-        var privileged = hasPrivilegedRole && User.HasClaim("amr", "efirma+mfa");
-        if (!privileged && !string.Equals(callerRfc, data.UploadRfc, StringComparison.OrdinalIgnoreCase))
+        if (!RfcResourceAuthorization.CanAccess(User, data.UploadRfc))
             return Forbid();
 
         var chainLinkValid = string.IsNullOrWhiteSpace(data.Receipt.PreviousChainHash)

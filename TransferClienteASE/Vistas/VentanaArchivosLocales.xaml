@@ -91,11 +91,12 @@
             </Style.Triggers>
         </Style>
     </Window.Resources>
-<Grid>
+    <Grid>
         <Grid.RowDefinitions>
-<RowDefinition Height="78"/>
-<RowDefinition Height="*"/>
-<RowDefinition Height="Auto"/>
+            <RowDefinition Height="78"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 <Grid Grid.Row="0">
             <Grid.RowDefinitions>
@@ -126,7 +127,7 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 <TextBlock Grid.Row="0"
-                           Text="{Binding Contexto.Requerimiento.Descripcion}"
+                           Text="{Binding TituloArchivos}"
                            FontWeight="Bold"
                            Foreground="{StaticResource DocsLabelBrush}"
                            TextWrapping="Wrap"
@@ -169,11 +170,85 @@
                 </DataGrid>
             </Grid>
         </Border>
-<StackPanel Grid.Row="2"
+        <Border x:Name="PanelProgresoDescarga"
+                Grid.Row="2"
+                Visibility="Collapsed"
+                Margin="12,0,12,10"
+                Padding="12"
+                Background="#FFF8F2E8"
+                BorderBrush="#FFDDC9A3"
+                BorderThickness="1"
+                CornerRadius="4">
+            <StackPanel>
+                <TextBlock x:Name="TextoAccionDescarga"
+                           Text="Preparando descarga"
+                           FontWeight="SemiBold"
+                           Foreground="{StaticResource DocsLabelBrush}"/>
+                <TextBlock x:Name="TextoArchivoDescarga"
+                           Margin="0,3,0,6"
+                           Foreground="#FF555555"
+                           TextWrapping="Wrap"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="70"/>
+                    </Grid.ColumnDefinitions>
+                    <ProgressBar x:Name="ProgresoArchivoDescarga"
+                                 Grid.Column="0"
+                                 Height="14"
+                                 Minimum="0"
+                                 Maximum="100"/>
+                    <TextBlock x:Name="TextoPorcentajeArchivo"
+                               Grid.Column="1"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center"
+                               Text="0 %"/>
+                </Grid>
+                <TextBlock Margin="0,6,0,2" Text="Avance total" FontSize="11" Foreground="#FF666666"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="70"/>
+                    </Grid.ColumnDefinitions>
+                    <ProgressBar x:Name="ProgresoTotalDescarga"
+                                 Grid.Column="0"
+                                 Height="10"
+                                 Minimum="0"
+                                 Maximum="100"/>
+                    <TextBlock x:Name="TextoPorcentajeTotal"
+                               Grid.Column="1"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center"
+                               FontSize="11"
+                               Text="0 %"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+<StackPanel Grid.Row="3"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Margin="12,0,12,12">
+            <Button x:Name="BotonDescargar"
+                    Style="{StaticResource AseFlatButton}"
+                    Background="#FF356859"
+                    Foreground="White"
+                    MinWidth="190"
+                    Height="38"
+                    Margin="0,0,8,0"
+                    Click="BotonDescargar_Click"
+                    Content="Descargar seleccionados"/>
+            <Button x:Name="BotonCancelarDescarga"
+                    Style="{StaticResource AseFlatButton}"
+                    Background="#FF9B2C2C"
+                    Foreground="White"
+                    MinWidth="150"
+                    Height="38"
+                    Margin="0,0,8,0"
+                    Visibility="Collapsed"
+                    Click="BotonCancelarDescarga_Click"
+                    Content="Cancelar descarga"/>
 <Button Style="{StaticResource AseFlatButton}"
+                    x:Name="BotonEliminar"
                     Background="#FF754C24"
                     Foreground="White"
                     MinWidth="200"

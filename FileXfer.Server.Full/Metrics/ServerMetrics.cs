@@ -28,4 +28,8 @@ public static class ServerMetrics {
   public static readonly Counter<long> UploadReceiptsIssuedTotal = M.CreateCounter<long>("upload_receipts_issued_total");
   public static readonly Histogram<double> UploadValidationDurationMs = M.CreateHistogram<double>("upload_validation_duration_ms", "ms");
   public static readonly Histogram<double> UploadCatalogDurationMs = M.CreateHistogram<double>("upload_catalog_duration_ms", "ms");
+  public static readonly Counter<long> FileDownloadsPreparedTotal = M.CreateCounter<long>("file_downloads_prepared_total");
+  public static readonly Counter<long> FileDownloadsBlockedTotal = M.CreateCounter<long>("file_downloads_blocked_total");
+  public static readonly Counter<long> FileDownloadBytesPreparedTotal = M.CreateCounter<long>("file_download_bytes_prepared_total", "bytes");
+  public static readonly Histogram<double> FileDownloadVerificationDurationMs = M.CreateHistogram<double>("file_download_verification_duration_ms", "ms");
 }

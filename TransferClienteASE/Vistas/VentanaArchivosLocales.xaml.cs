@@ -9,10 +9,13 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
+using Microsoft.Win32;
 using TransferClienteASE.Infraestructura;
 using TransferClienteASE.Modelos;
 using TransferClienteASE.Servicios;
@@ -37,6 +40,7 @@ namespace TransferClienteASE.Vistas
         private readonly string _rfcUsuario;
         private readonly ServicioArchivosLocales _servicioArchivos;
         private readonly ObservableCollection<ArchivoLocalDto> _archivos;
+        private CancellationTokenSource? _descargaCts;
 
         private sealed class VmVentanaArchivos
         {
@@ -108,6 +112,217 @@ namespace TransferClienteASE.Vistas
         }
 
         private void BotonCerrar_Click(object sender, RoutedEventArgs e) => Close();
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _descargaCts?.Cancel();
+            _descargaCts?.Dispose();
+            _descargaCts = null;
+            base.OnClosed(e);
+        }
+
+        private async void BotonDescargar_Click(object sender, RoutedEventArgs e)
+        {
+            var seleccionados = DataGridArchivos.SelectedItems
+                .Cast<ArchivoLocalDto>()
+                .ToList();
+
+            if (seleccionados.Count == 0)
+            {
+                MessageBox.Show(
+                    "Seleccione al menos un archivo para descargar.",
+                    "Descargar archivos",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var destinos = SeleccionarDestinos(seleccionados);
+            if (destinos is null)
+                return;
+
+            _descargaCts?.Dispose();
+            _descargaCts = new CancellationTokenSource();
+            CambiarEstadoDescarga(true);
+
+            try
+            {
+                for (var index = 0; index < destinos.Count; index++)
+                {
+                    var actual = destinos[index];
+                    var fileIndex = index;
+                    TextoArchivoDescarga.Text =
+                        $"Archivo {index + 1}/{destinos.Count}: {actual.Archivo.NombreArchivo}";
+
+                    var progreso = new Progress<DescargaArchivoProgreso>(estado =>
+                    {
+                        ProgresoArchivoDescarga.Value = estado.Porcentaje;
+                        TextoPorcentajeArchivo.Text = $"{estado.Porcentaje:0.0} %";
+                        var totalPercentage = ((fileIndex + estado.Porcentaje / 100d) / destinos.Count) * 100d;
+                        ProgresoTotalDescarga.Value = totalPercentage;
+                        TextoPorcentajeTotal.Text = $"{totalPercentage:0.0} %";
+                        TextoAccionDescarga.Text = estado.Accion;
+
+                        if (estado.BytesTotales.GetValueOrDefault() > 0)
+                        {
+                            TextoArchivoDescarga.Text =
+                                $"Archivo {fileIndex + 1}/{destinos.Count}: {actual.Archivo.NombreArchivo} · " +
+                                $"{FormatearBytes(estado.BytesRecibidos)} de {FormatearBytes(estado.BytesTotales!.Value)}";
+                        }
+                    });
+
+                    await _servicioArchivos.DescargarArchivoAsync(
+                        actual.Archivo.IdArchivoLocal,
+                        actual.RutaDestino,
+                        progreso,
+                        _descargaCts.Token);
+                }
+
+                ProgresoArchivoDescarga.Value = 100;
+                ProgresoTotalDescarga.Value = 100;
+                TextoPorcentajeArchivo.Text = "100 %";
+                TextoPorcentajeTotal.Text = "100 %";
+                TextoAccionDescarga.Text = "Descargas verificadas y guardadas";
+
+                MessageBox.Show(
+                    seleccionados.Count == 1
+                        ? "El archivo se descargó y verificó correctamente."
+                        : $"Los {seleccionados.Count} archivos se descargaron y verificaron correctamente.",
+                    "Descarga completada",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                TextoAccionDescarga.Text = "Descarga cancelada; el avance se conservará para continuar después";
+            }
+            catch (Exception ex)
+            {
+                TextoAccionDescarga.Text = "La descarga fue detenida de forma segura";
+                MessageBox.Show(
+                    ex.Message,
+                    "No se pudo completar la descarga",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            finally
+            {
+                CambiarEstadoDescarga(false);
+                _descargaCts?.Dispose();
+                _descargaCts = null;
+            }
+        }
+
+        private void BotonCancelarDescarga_Click(object sender, RoutedEventArgs e)
+        {
+            TextoAccionDescarga.Text = "Cancelando descarga de forma segura...";
+            _descargaCts?.Cancel();
+        }
+
+        private List<(ArchivoLocalDto Archivo, string RutaDestino)>? SeleccionarDestinos(
+            IReadOnlyList<ArchivoLocalDto> archivos)
+        {
+            if (archivos.Count == 1)
+            {
+                var archivo = archivos[0];
+                var dialog = new SaveFileDialog
+                {
+                    Title = "Guardar archivo verificado",
+                    FileName = SanitizarNombreArchivo(archivo.NombreArchivo),
+                    AddExtension = true,
+                    OverwritePrompt = true,
+                    Filter = "Todos los archivos (*.*)|*.*"
+                };
+
+                return dialog.ShowDialog(this) == true
+                    ? new List<(ArchivoLocalDto, string)> { (archivo, dialog.FileName) }
+                    : null;
+            }
+
+            var folderDialog = new OpenFolderDialog
+            {
+                Title = $"Seleccione la carpeta para guardar {archivos.Count} archivos",
+                Multiselect = false
+            };
+            if (folderDialog.ShowDialog(this) != true)
+                return null;
+
+            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return archivos
+                .Select(archivo =>
+                {
+                    var destination = ObtenerRutaDisponible(
+                        folderDialog.FolderName,
+                        SanitizarNombreArchivo(archivo.NombreArchivo),
+                        reserved);
+                    reserved.Add(destination);
+                    return (archivo, destination);
+                })
+                .ToList();
+        }
+
+        private void CambiarEstadoDescarga(bool descargando)
+        {
+            PanelProgresoDescarga.Visibility = Visibility.Visible;
+            BotonDescargar.IsEnabled = !descargando;
+            BotonEliminar.IsEnabled = !descargando;
+            DataGridArchivos.IsEnabled = !descargando;
+            BotonCancelarDescarga.Visibility = descargando
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+            if (descargando)
+            {
+                ProgresoArchivoDescarga.Value = 0;
+                ProgresoTotalDescarga.Value = 0;
+                TextoPorcentajeArchivo.Text = "0 %";
+                TextoPorcentajeTotal.Text = "0 %";
+            }
+        }
+
+        private static string SanitizarNombreArchivo(string? name)
+        {
+            var safe = Path.GetFileName(name ?? string.Empty);
+            foreach (var invalid in Path.GetInvalidFileNameChars())
+                safe = safe.Replace(invalid, '_');
+            return string.IsNullOrWhiteSpace(safe) ? "archivo-descargado.bin" : safe;
+        }
+
+        private static string ObtenerRutaDisponible(
+            string folder,
+            string fileName,
+            ISet<string> reserved)
+        {
+            var candidate = Path.Combine(folder, fileName);
+            if (!File.Exists(candidate) && !reserved.Contains(candidate))
+                return candidate;
+
+            var baseName = Path.GetFileNameWithoutExtension(fileName);
+            var extension = Path.GetExtension(fileName);
+            for (var suffix = 1; suffix < 10_000; suffix++)
+            {
+                candidate = Path.Combine(folder, $"{baseName} ({suffix}){extension}");
+                if (!File.Exists(candidate) && !reserved.Contains(candidate))
+                    return candidate;
+            }
+
+            throw new IOException("No se pudo crear un nombre disponible para la descarga.");
+        }
+
+        private static string FormatearBytes(long bytes)
+        {
+            string[] units = { "B", "KB", "MB", "GB", "TB" };
+            var value = Math.Max(0, bytes);
+            var unit = 0;
+            double display = value;
+            while (display >= 1024 && unit < units.Length - 1)
+            {
+                display /= 1024;
+                unit++;
+            }
+
+            return $"{display:0.##} {units[unit]}";
+        }
 
         private async void BotonEliminar_Click(object sender, RoutedEventArgs e)
         {

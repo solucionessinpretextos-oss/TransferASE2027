@@ -166,6 +166,7 @@ if (!builder.Environment.IsDevelopment() &&
 builder.Services.AddSingleton<IPathProtector, AesGcmPathProtector>();
 builder.Services.AddSingleton<IMfaSecretProtector, AesGcmMfaSecretProtector>();
 builder.Services.AddSingleton<IBudiDevRepository, BudiDevRepository>();
+builder.Services.AddSingleton<ISecureFileDownloadService, SecureFileDownloadService>();
 builder.Services
     .AddHealthChecks()
     .AddCheck<PrimaryStoreHealthCheck>(

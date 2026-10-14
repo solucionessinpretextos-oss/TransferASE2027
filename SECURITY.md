@@ -9,6 +9,7 @@
 5. Una desactivación, cambio de roles/MFA o revocación de dispositivo invalida las sesiones aplicables inmediatamente.
 6. Producción nunca usa EF InMemory ni rutas de almacenamiento implícitas.
 7. Un rol `admin` u `ops` no accede a APIs privilegiadas sin un JWT emitido tras verificar e.firma y TOTP en la misma autenticación.
+8. Ninguna descarga entrega bytes si el registro BuDi no pertenece al RFC autorizado, la ruta sale del storage, atraviesa un reparse point o tamaño/SHA-256 difieren del registro interno de carga.
 
 ## Fuera de alcance del repositorio
 

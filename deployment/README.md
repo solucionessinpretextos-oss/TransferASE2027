@@ -11,7 +11,8 @@
 7. Validar `/healthz` (proceso vivo) y `/readyz` (FileXferDb y BuDi disponibles), login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
 8. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
 9. Cortar una carga a mitad, reintentar y comprobar que continúa desde un offset mayor que cero, genera una sola catalogación y un solo recibo.
-10. Reabrir tráfico gradualmente y vigilar errores, latencia, espacio, parciales reanudables, omisiones de verificación y recibos.
+10. Descargar un archivo, cancelar a mitad y reanudarlo; confirmar HTTP 206, progreso visible, SHA-256 coincidente y auditoría `file_download_verified`.
+11. Reabrir tráfico gradualmente y vigilar errores, latencia, espacio, parciales reanudables, omisiones de verificación, descargas bloqueadas y recibos.
 
 ## Bootstrap administrativo
 

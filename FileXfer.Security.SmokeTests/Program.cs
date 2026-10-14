@@ -33,6 +33,7 @@ Require(File.Exists(updaterPath), "No se encontró el updater compilado.");
 TestPathProtection();
 TestMfaSecretProtection();
 TestSqlTransportPolicy();
+TestRfcResourceAuthorization();
 TestUploadFileNamePolicy();
 TestUploadAdmission();
 await TestConcurrentMfaLockoutAsync();
@@ -40,17 +41,20 @@ await TestFilePoliciesAsync();
 await TestSignedReceiptsAsync();
 await TestReceiptAuthorizationAsync();
 await TestResumableAssemblerAsync();
+await TestSecureDownloadAsync();
 await TestUpdaterAsync(updaterPath);
 
 Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
+Console.WriteLine("PASS rfc-resource-authorization=owner privileged-mfa cross-rfc-blocked");
 Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
 Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
 Console.WriteLine("PASS mfa-lockout=concurrent-failures-serialized");
 Console.WriteLine("PASS file-policies=seed version conflict bypass limit rollback");
 Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent mfa-authorized");
 Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved");
+Console.WriteLine("PASS secure-download=hash-verified tamper-and-traversal-blocked");
 Console.WriteLine("PASS updater=signed-package-applied invalid-signature-rejected zip-slip-rejected");
 return 0;
 
@@ -78,6 +82,23 @@ static void TestSqlTransportPolicy()
             "LocalOnly",
             "Server=(localdb)\\MSSQLLocalDB;Database=FileXfer;Encrypt=True;TrustServerCertificate=False"),
         "La política SQL aceptó LocalDB en producción.");
+}
+
+static void TestRfcResourceAuthorization()
+{
+    var owner = Principal("RFCOWNER0101", Array.Empty<string>(), "efirma");
+    Require(RfcResourceAuthorization.CanAccess(owner, "RFCOWNER0101"),
+        "El propietario no pudo acceder a su propio recurso.");
+    Require(!RfcResourceAuthorization.CanAccess(owner, "RFCOTHER0101"),
+        "Un RFC obtuvo acceso al recurso de otro RFC.");
+
+    var adminWithoutMfa = Principal("RFCADMIN0101", new[] { "admin" }, "efirma");
+    Require(!RfcResourceAuthorization.CanAccess(adminWithoutMfa, "RFCOTHER0101"),
+        "Un administrador sin MFA obtuvo acceso cruzado.");
+
+    var adminWithMfa = Principal("RFCADMIN0101", new[] { "admin" }, "efirma+mfa");
+    Require(RfcResourceAuthorization.CanAccess(adminWithMfa, "RFCOTHER0101"),
+        "Un administrador con MFA no pudo ejercer acceso privilegiado.");
 }
 
 static void TestPathProtection()
@@ -454,6 +475,126 @@ static async Task TestResumableAssemblerAsync()
         if (Directory.Exists(root))
             Directory.Delete(root, recursive: true);
     }
+}
+
+static async Task TestSecureDownloadAsync()
+{
+    var testRoot = Path.Combine(Path.GetTempPath(), "FileXfer.Download.Smoke", Guid.NewGuid().ToString("N"));
+    var storageRoot = Path.Combine(testRoot, "storage");
+    var relativePath = Path.Combine("RFCOWNER0101", "2026", "verified.bin");
+    var physicalPath = Path.Combine(storageRoot, relativePath);
+    Directory.CreateDirectory(Path.GetDirectoryName(physicalPath)!);
+
+    try
+    {
+        var content = RandomNumberGenerator.GetBytes(256 * 1024);
+        await File.WriteAllBytesAsync(physicalPath, content);
+        var hash = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+
+        var options = new DbContextOptionsBuilder<FileXferDbContext>()
+            .UseInMemoryDatabase("secure-download-" + Guid.NewGuid().ToString("N"))
+            .Options;
+        var factory = new SmokeDbContextFactory(options);
+
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.Uploads.Add(new UploadEntry
+            {
+                Id = Guid.NewGuid(),
+                Rfc = "RFCOWNER0101",
+                FileUuid = Guid.NewGuid().ToString("N"),
+                OriginalFileName = "verified.bin",
+                StoredRelativePath = relativePath,
+                BytesReceived = content.LongLength,
+                ExpectedLength = content.LongLength,
+                Sha256Server = hash,
+                Status = "Completed",
+                CompletedUtc = DateTimeOffset.UtcNow,
+                LastActivityUtc = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var service = new SecureFileDownloadService(
+            factory,
+            new StorageOptions { BasePath = storageRoot });
+        var descriptor = new ArchivoLocalDownloadDescriptor(
+            1,
+            "RFCOWNER0101",
+            "verified.bin",
+            relativePath);
+
+        var prepared = await service.PrepareAsync(descriptor, CancellationToken.None);
+        await using (prepared.Stream)
+        {
+            using var copy = new MemoryStream();
+            await prepared.Stream.CopyToAsync(copy);
+            Require(copy.ToArray().SequenceEqual(content),
+                "La descarga verificada no devolvió los bytes originales.");
+            Require(prepared.Sha256 == hash && prepared.Length == content.LongLength,
+                "La descarga preparada no conservó hash o longitud.");
+        }
+
+        content[0] ^= 0xFF;
+        await File.WriteAllBytesAsync(physicalPath, content);
+        try
+        {
+            _ = await service.PrepareAsync(descriptor, CancellationToken.None);
+            throw new InvalidOperationException("La descarga aceptó un archivo alterado.");
+        }
+        catch (FileDownloadPreparationException ex)
+        {
+            Require(ex.Code == "hash_mismatch", "La alteración no produjo hash_mismatch.");
+        }
+
+        var outsideRelative = Path.Combine("..", "outside.bin");
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.Uploads.Add(new UploadEntry
+            {
+                Id = Guid.NewGuid(),
+                Rfc = "RFCOWNER0101",
+                FileUuid = Guid.NewGuid().ToString("N"),
+                OriginalFileName = "outside.bin",
+                StoredRelativePath = outsideRelative,
+                BytesReceived = content.LongLength,
+                ExpectedLength = content.LongLength,
+                Sha256Server = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(),
+                Status = "Completed",
+                CompletedUtc = DateTimeOffset.UtcNow,
+                LastActivityUtc = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+
+        try
+        {
+            _ = await service.PrepareAsync(
+                new ArchivoLocalDownloadDescriptor(2, "RFCOWNER0101", "outside.bin", outsideRelative),
+                CancellationToken.None);
+            throw new InvalidOperationException("La descarga aceptó una ruta fuera del storage.");
+        }
+        catch (FileDownloadPreparationException ex)
+        {
+            Require(ex.Code == "invalid_storage_path", "El traversal no produjo invalid_storage_path.");
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(testRoot))
+            Directory.Delete(testRoot, recursive: true);
+    }
+}
+
+static ClaimsPrincipal Principal(string rfc, IReadOnlyCollection<string> roles, string amr)
+{
+    var claims = new List<Claim>
+    {
+        new("rfc", rfc),
+        new("amr", amr)
+    };
+    claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
+    return new ClaimsPrincipal(new ClaimsIdentity(claims, "smoke", "rfc", ClaimTypes.Role));
 }
 
 static async Task TestUpdaterAsync(string updaterPath)

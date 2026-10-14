@@ -1143,6 +1143,51 @@ namespace FileXfer.Server.Services
             return list;
         }
 
+        public async Task<ArchivoLocalDownloadDescriptor?> GetArchivoLocalForDownloadAsync(
+            int idArchivoLocal,
+            string rfcOrigen,
+            CancellationToken ct)
+        {
+            if (idArchivoLocal <= 0 || string.IsNullOrWhiteSpace(rfcOrigen))
+                return null;
+
+            await using var cn = Conn();
+            const string sql = @"
+                SELECT TOP (1)
+                    [Id]                  AS IdArchivoLocal,
+                    [RFC_Origen]          AS RfcOrigen,
+                    [Nombre_Archivo]      AS NombreArchivo,
+                    [Ruta_ARchivo_Fisico] AS RutaEncriptada
+                FROM [dbo].[Transfer_ArchivosLocales]
+                WHERE [Id] = @IdArchivoLocal
+                  AND [RFC_Origen] = @RfcOrigen
+                  AND [Estatus] = 'A';";
+
+            var row = await cn.QuerySingleOrDefaultAsync<_ArchivoLocalDownloadDbRow>(
+                new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        IdArchivoLocal = idArchivoLocal,
+                        RfcOrigen = rfcOrigen.Trim().ToUpperInvariant()
+                    },
+                    commandType: CommandType.Text,
+                    cancellationToken: ct));
+
+            if (row is null || string.IsNullOrWhiteSpace(row.RutaEncriptada))
+                return null;
+
+            var decryptedPath = _pathProtector.Unprotect(row.RutaEncriptada);
+            var fullPath = ConstruirRutaAbsoluta(decryptedPath);
+            var relativePath = Path.GetRelativePath(_storageBasePath, fullPath);
+
+            return new ArchivoLocalDownloadDescriptor(
+                row.IdArchivoLocal,
+                row.RfcOrigen?.Trim().ToUpperInvariant() ?? string.Empty,
+                row.NombreArchivo ?? string.Empty,
+                relativePath);
+        }
+
         public async Task<int> EliminarArchivosLocalesAsync(
             string rfcUsuario,
             int requerimientoId,
@@ -1305,6 +1350,14 @@ namespace FileXfer.Server.Services
             public string Extension { get; set; } = string.Empty;
             public string Tamano { get; set; } = string.Empty;
             public DateTime FechaAlta { get; set; }
+            public string RutaEncriptada { get; set; } = string.Empty;
+        }
+
+        private sealed class _ArchivoLocalDownloadDbRow
+        {
+            public int IdArchivoLocal { get; set; }
+            public string RfcOrigen { get; set; } = string.Empty;
+            public string NombreArchivo { get; set; } = string.Empty;
             public string RutaEncriptada { get; set; } = string.Empty;
         }
 

@@ -21,6 +21,7 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 - Cargas reanudables por `FileUuid + longitud + SHA-256 + contexto + dispositivo`: ante una caída, el cliente consulta el offset físico confirmado y continúa desde ese byte. Los parciales vencen y se eliminan de forma controlada.
 - Políticas de archivo versionadas en base de datos: desde el Dashboard se habilita/bloquea cada extensión, se define límite de tamaño y se decide si requiere verificación profunda. Cada cambio exige motivo, control de concurrencia e historial con rollback.
 - El cliente muestra acción actual, archivo `n/N`, porcentaje por archivo y porcentaje total durante inspección, reparación, transferencia y confirmación del servidor.
+- La descarga servidor→cliente exige propietario o `admin/ops` con e.firma+MFA, revalida tamaño y SHA-256 sobre el mismo stream bloqueado que se entrega, admite HTTP Range y conserva parciales para reanudación. El cliente muestra progreso por archivo y total y vuelve a verificar SHA-256 antes de publicar el archivo descargado.
 - El cliente inspecciona una copia temporal; el servidor vuelve a validar los bytes persistidos antes de catalogarlos.
 - PDF cifrado, dañado no reparable o con acciones activas se rechaza. La reparación se hace sobre una copia y se revalida.
 - Office moderno sin macros, OpenDocument, EPUB, XPS, Visio, XML, JSON, SVG, texto, imágenes comunes y certificados tienen validadores específicos. Se bloquean cifrado, macros, relaciones externas, rutas internas inseguras y expansión excesiva.
@@ -48,6 +49,7 @@ El dashboard se construye desde `FileXfer.AdminDashboard` con `npm ci` y `npm ru
 - `GET /file-policies/effective`: política mínima que consume el cliente autenticado; no expone autor, motivo ni marcas de auditoría administrativas.
 - `/admin/file-policies`: consulta para `admin/ops` con MFA; las modificaciones y rollback exigen `admin` con MFA.
 - `GET /receipts/{receiptId}`: entrega payload canónico, firma, llave pública, hashes de cadena y resultado de verificación al propietario; el acceso cruzado de `admin/ops` exige `amr=efirma+mfa`.
+- `GET /archivos-locales/{id}/download`: descarga autenticada, auditable y reanudable; los archivos históricos que no puedan correlacionarse con hash y longitud internos se bloquean de forma segura.
 - La verificación del recibo compara su llave pública y `KeyId` contra la llave confiable configurada; sustituir toda la firma y su llave dentro de SQL no produce `signatureValid=true`.
 - Los spans usan `ActivitySource` `FileXfer.Server.Transfer` y las métricas el `Meter` `FileXfer.Server`, listos para el colector OpenTelemetry corporativo.
 

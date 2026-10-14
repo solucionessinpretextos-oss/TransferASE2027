@@ -26,6 +26,12 @@ using FileXfer.Server.Dtos.Combos;
 // ============================================================================
 namespace FileXfer.Server.Services
 {
+    public sealed record ArchivoLocalDownloadDescriptor(
+        int IdArchivoLocal,
+        string Rfc,
+        string FileName,
+        string StoredRelativePath);
+
     /// <summary>
     /// Define todas las operaciones que FileXfer.Server necesita de BuDi_dev para alimentar
     /// combos, resultados y archivos registrados. La implementación concreta está en
@@ -158,6 +164,11 @@ namespace FileXfer.Server.Services
             int resultadoId,
             int colaboraId,
             int movimientoId,
+            CancellationToken ct);
+
+        Task<ArchivoLocalDownloadDescriptor?> GetArchivoLocalForDownloadAsync(
+            int idArchivoLocal,
+            string rfcOrigen,
             CancellationToken ct);
 
         Task<int> EliminarArchivosLocalesAsync(
