@@ -222,11 +222,14 @@ namespace TransferClienteASE.Servicios
                     return (false, "El hash o la firma de la actualización tiene un formato inválido. " + MensajeSoporte);
                 }
 
-                var publicKeyPath = Environment.GetEnvironmentVariable("TRANSFER_UPDATE_PUBLIC_KEY_PATH");
-                if (string.IsNullOrWhiteSpace(publicKeyPath) || !File.Exists(publicKeyPath))
+                var publicKeyPath = ResolverArchivoConfiable(
+                    "TRANSFER_UPDATE_PUBLIC_KEY_PATH",
+                    "update-public.pem",
+                    "la clave pública de actualizaciones");
+                if (publicKeyPath is null)
                 {
                     return (false, "No está configurada la clave pública para verificar actualizaciones. "
-                                   + "Por seguridad no se ejecutará el paquete. " + MensajeSoporte);
+                                    + "Por seguridad no se ejecutará el paquete. " + MensajeSoporte);
                 }
 
                 using var verifier = RSA.Create();
@@ -266,14 +269,23 @@ namespace TransferClienteASE.Servicios
 
                 var nombreArchivo = Path.GetFileName(uri.LocalPath);
                 if (string.IsNullOrWhiteSpace(nombreArchivo))
-                    nombreArchivo = "TransferClienteASE-setup.exe";
+                    nombreArchivo = $"TransferClienteASE-{update.VersionDisponible}.zip";
 
                 var extension = Path.GetExtension(nombreArchivo);
-                if (!extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) &&
-                    !extension.Equals(".msi", StringComparison.OrdinalIgnoreCase))
+                if (!extension.Equals(".zip", StringComparison.OrdinalIgnoreCase))
                 {
-                    return (false, "El paquete de actualización no es un instalador EXE o MSI permitido. "
-                                   + MensajeSoporte);
+                    return (false, "El paquete de actualización no es un ZIP permitido. "
+                                    + MensajeSoporte);
+                }
+
+                var updaterPath = ResolverArchivoConfiable(
+                    "TRANSFER_UPDATER_PATH",
+                    "TransferClienteASE.Updater.exe",
+                    "el actualizador seguro");
+                if (updaterPath is null)
+                {
+                    return (false, "No se encontró el actualizador seguro instalado. "
+                                   + "Por seguridad no se modificará la aplicación. " + MensajeSoporte);
                 }
 
                 var carpeta = Path.Combine(
@@ -349,11 +361,38 @@ namespace TransferClienteASE.Servicios
                         }
                         else
                         {
-                            Process.Start(new ProcessStartInfo
+                            var destination = Path.GetFullPath(AppContext.BaseDirectory);
+                            var processPath = Environment.ProcessPath;
+                            var executableName = string.IsNullOrWhiteSpace(processPath)
+                                ? "TransferClienteASE.exe"
+                                : Path.GetFileName(processPath);
+                            if (string.IsNullOrWhiteSpace(executableName) ||
+                                !Path.GetExtension(executableName).Equals(".exe", StringComparison.OrdinalIgnoreCase))
                             {
-                                FileName = rutaDestino,
-                                UseShellExecute = true
-                            });
+                                verificationFailure = "No se pudo identificar el ejecutable principal instalado. ";
+                            }
+                            else
+                            {
+                                var startInfo = new ProcessStartInfo
+                                {
+                                    FileName = updaterPath,
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true,
+                                    WorkingDirectory = destination
+                                };
+                                startInfo.ArgumentList.Add(rutaDestino);
+                                startInfo.ArgumentList.Add(destination);
+                                startInfo.ArgumentList.Add(executableName);
+                                startInfo.ArgumentList.Add(update.VersionDisponible);
+                                startInfo.ArgumentList.Add(update.Sha256.ToLowerInvariant());
+                                startInfo.ArgumentList.Add(update.SignatureBase64);
+                                startInfo.ArgumentList.Add(publicKeyPath);
+                                startInfo.ArgumentList.Add(
+                                    Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+                                if (Process.Start(startInfo) is null)
+                                    verificationFailure = "No fue posible iniciar el actualizador seguro. ";
+                            }
                         }
                     }
                 }
@@ -385,6 +424,36 @@ namespace TransferClienteASE.Servicios
 
                 return (false, msg);
             }
+        }
+
+        private static string? ResolverArchivoConfiable(
+            string environmentVariable,
+            string defaultFileName,
+            string description)
+        {
+            var configured = Environment.GetEnvironmentVariable(environmentVariable);
+            var candidate = string.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(AppContext.BaseDirectory, defaultFileName)
+                : configured.Trim();
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(candidate);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                throw new InvalidOperationException($"La ruta configurada para {description} no es válida.", ex);
+            }
+
+            if (!File.Exists(fullPath))
+                return null;
+
+            var attributes = File.GetAttributes(fullPath);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"La ruta configurada para {description} es un enlace no permitido.");
+
+            return fullPath;
         }
 
         private static string ObtenerVersionActual()

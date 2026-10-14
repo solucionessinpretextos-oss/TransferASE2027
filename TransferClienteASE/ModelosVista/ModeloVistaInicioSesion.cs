@@ -296,8 +296,8 @@ namespace TransferClienteASE.ModelosVista
                     return;
                 }
 
-                MensajeEstado = "La actualización se descargó correctamente. "
-                                + "El instalador se abrirá a continuación.";
+                MensajeEstado = "La actualización fue verificada. "
+                                + "El actualizador seguro aplicará los cambios y volverá a abrir la aplicación.";
 
                 Application.Current.Shutdown();
             }

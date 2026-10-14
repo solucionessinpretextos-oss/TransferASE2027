@@ -33,6 +33,7 @@ logs/
 TestResults/
 coverage/
 *.trx
+artifacts/
 
 # Runtime qpdf versionado y verificado; excepción deliberada al patrón bin/
 !tools/qpdf/win-x64/bin/

@@ -1,5 +1,7 @@
 # Despliegue y rollback
 
+La generación, firma y verificación de binarios está documentada en `RELEASE.md`. No publique manualmente una carpeta `bin/Release`: use el manifiesto firmado generado por `build/Build-Release.ps1`.
+
 ## Orden de despliegue
 
 1. Ejecutar en BuDi el preflight de solo lectura `sql/000_budi_transfer_archivos_preflight.sql` y conservar su salida.

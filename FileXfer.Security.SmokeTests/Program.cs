@@ -34,6 +34,7 @@ TestPathProtection();
 TestMfaSecretProtection();
 TestSqlTransportPolicy();
 TestBudiSchemaRequirements();
+TestClientUpdateManifestEndpoint();
 TestRfcResourceAuthorization();
 TestUploadFileNamePolicy();
 TestUploadAdmission();
@@ -49,6 +50,7 @@ Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
 Console.WriteLine("PASS budi-schema=required-columns-and-indexes-enforced");
+Console.WriteLine("PASS client-update-manifest=https-zip-and-cryptographic-fields-required");
 Console.WriteLine("PASS rfc-resource-authorization=owner privileged-mfa cross-rfc-blocked");
 Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
 Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
@@ -57,7 +59,7 @@ Console.WriteLine("PASS file-policies=seed version conflict bypass limit rollbac
 Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent mfa-authorized");
 Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved");
 Console.WriteLine("PASS secure-download=hash-verified tamper-and-traversal-blocked");
-Console.WriteLine("PASS updater=signed-package-applied invalid-signature-rejected zip-slip-rejected");
+Console.WriteLine("PASS updater=signed-package-applied verify-only temp-relaunch rollback invalid-signature-and-zip-slip-rejected");
 return 0;
 
 static void TestSqlTransportPolicy()
@@ -101,6 +103,37 @@ static void TestBudiSchemaRequirements()
 
     var missingUniqueIndex = ready with { UploadIdUniqueIndexExists = false };
     Require(!missingUniqueIndex.IsReady, "Readiness aceptó BuDi sin índice único de carga.");
+}
+
+static void TestClientUpdateManifestEndpoint()
+{
+    var entry = new ClientUpdatesOptions.ClientUpdateEntry
+    {
+        LatestVersion = "2.1.0.1",
+        MinSupportedVersion = "2.1.0.0",
+        DownloadUrl = "https://updates.example.invalid/TransferClienteASE-2.1.0.1-win-x64.zip",
+        Sha256 = new string('a', 64),
+        SignatureBase64 = Convert.ToBase64String(new byte[384]),
+        SignatureAlgorithm = "RSA-PSS-SHA256"
+    };
+    var options = new ClientUpdatesOptions
+    {
+        Clients = new Dictionary<string, ClientUpdatesOptions.ClientUpdateEntry>
+        {
+            ["transfer-cliente-ase"] = entry
+        }
+    };
+    var controller = new ClientUpdatesController(
+        new SmokeOptionsSnapshot<ClientUpdatesOptions>(options));
+
+    var valid = controller.GetClientUpdate("transfer-cliente-ase", "2.1.0.0");
+    Require(valid.Result is OkObjectResult,
+        "El endpoint rechazó un manifiesto ZIP firmado válido.");
+
+    entry.DownloadUrl = "https://updates.example.invalid/setup.exe";
+    var executable = controller.GetClientUpdate("transfer-cliente-ase", "2.1.0.0");
+    Require(executable.Result is ObjectResult { StatusCode: StatusCodes.Status503ServiceUnavailable },
+        "El endpoint aceptó un ejecutable directo fuera del canal ZIP seguro.");
 }
 
 static void TestRfcResourceAuthorization()
@@ -718,6 +751,94 @@ static async Task TestUpdaterAsync(string updaterPath)
         Require(traversalResult.ExitCode == 2, "El updater no rechazó un ZIP con path traversal.");
         Require(!File.Exists(Path.Combine(traversalDestination, "SmokeClient.exe")),
             "El updater comenzó a aplicar un ZIP con path traversal.");
+
+        var verifyOnlyZip = Path.Combine(root, "verify-only.zip");
+        var publicPem = await File.ReadAllTextAsync(publicKeyPath);
+        CreateZip(verifyOnlyZip, archive =>
+        {
+            AddFile(archive, "SmokeClient.exe", GetHarmlessWindowsExecutable());
+            AddFile(archive, "TransferClienteASE.Updater.exe", updaterPath);
+            AddText(archive, "update-public.pem", publicPem);
+        });
+        var verifyOnlyManifest = Sign(verifyOnlyZip, version, rsa);
+        var verifyOnlyDestination = Path.Combine(root, "verify-only-destination");
+        Directory.CreateDirectory(verifyOnlyDestination);
+        var verifyOnlyResult = await RunUpdaterAsync(
+            updaterPath,
+            verifyOnlyZip,
+            verifyOnlyDestination,
+            "SmokeClient.exe",
+            version,
+            verifyOnlyManifest.Hash,
+            verifyOnlyManifest.Signature,
+            publicKeyPath,
+            "--verify-only");
+        Require(verifyOnlyResult.ExitCode == 0,
+            "El modo verify-only rechazó un paquete completo y firmado.");
+        Require(!File.Exists(Path.Combine(verifyOnlyDestination, "SmokeClient.exe")),
+            "El modo verify-only modificó el destino.");
+
+        var relaunchDestination = Path.Combine(root, "relaunch-destination");
+        Directory.CreateDirectory(relaunchDestination);
+        var updaterBaseName = Path.GetFileNameWithoutExtension(updaterPath);
+        foreach (var source in Directory.GetFiles(Path.GetDirectoryName(updaterPath)!))
+        {
+            var name = Path.GetFileName(source);
+            if (string.Equals(source, updaterPath, StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith(updaterBaseName + ".", StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(source, Path.Combine(relaunchDestination, name));
+            }
+        }
+        var installedUpdater = Path.Combine(relaunchDestination, Path.GetFileName(updaterPath));
+        Require(File.Exists(installedUpdater), "No se preparó el updater dentro del destino de prueba.");
+        var relaunchSentinel = Path.Combine(relaunchDestination, "config.txt");
+        await File.WriteAllTextAsync(relaunchSentinel, "old");
+        var relaunchResult = await RunUpdaterAsync(
+            installedUpdater,
+            validZip,
+            relaunchDestination,
+            "SmokeClient.exe",
+            version,
+            validManifest.Hash,
+            validManifest.Signature,
+            publicKeyPath);
+        Require(relaunchResult.ExitCode == 0, "El updater instalado no pudo relanzarse desde TEMP.");
+
+        var relaunchApplied = false;
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            if (File.Exists(Path.Combine(relaunchDestination, "SmokeClient.exe")) &&
+                await File.ReadAllTextAsync(relaunchSentinel) == "new")
+            {
+                relaunchApplied = true;
+                break;
+            }
+            await Task.Delay(250);
+        }
+        Require(relaunchApplied,
+            "El updater relanzado desde TEMP no aplicó el paquete dentro del tiempo esperado.");
+
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            var launchedClients = Process.GetProcessesByName("SmokeClient");
+            if (launchedClients.Length == 0)
+                break;
+            foreach (var process in launchedClients)
+                process.Dispose();
+            await Task.Delay(250);
+        }
+        var remainingClients = Process.GetProcessesByName("SmokeClient");
+        try
+        {
+            Require(remainingClients.Length == 0,
+                "El ejecutable simulado no terminó y no es seguro limpiar la prueba.");
+        }
+        finally
+        {
+            foreach (var process in remainingClients)
+                process.Dispose();
+        }
     }
     finally
     {
@@ -780,7 +901,8 @@ static async Task<(int ExitCode, string Output)> RunUpdaterAsync(
     string version,
     string hash,
     byte[] signature,
-    string publicKeyPath)
+    string publicKeyPath,
+    string? extraArgument = null)
 {
     var startInfo = new ProcessStartInfo
     {
@@ -797,6 +919,8 @@ static async Task<(int ExitCode, string Output)> RunUpdaterAsync(
     startInfo.ArgumentList.Add(hash);
     startInfo.ArgumentList.Add(Convert.ToBase64String(signature));
     startInfo.ArgumentList.Add(publicKeyPath);
+    if (!string.IsNullOrWhiteSpace(extraArgument))
+        startInfo.ArgumentList.Add(extraArgument);
 
     using var process = Process.Start(startInfo)
         ?? throw new InvalidOperationException("No se pudo iniciar el updater de prueba.");
@@ -868,4 +992,11 @@ file sealed class SmokeReceiptService : IUploadReceiptService
         throw new NotSupportedException();
 
     public bool Verify(UploadReceipt receipt) => true;
+}
+
+file sealed class SmokeOptionsSnapshot<T>(T value) : IOptionsSnapshot<T>
+    where T : class
+{
+    public T Value => value;
+    public T Get(string? name) => value;
 }

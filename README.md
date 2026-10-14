@@ -31,6 +31,7 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 - La opción “sin verificación profunda” es una excepción administrativa explícita y visible. Aun así se conservan autenticación, autorización, límites, copia inmutable, SHA-256, bloqueo de ejecutables y recibo; no demuestra ausencia de contraseña ni estructura sana.
 - Cada carga catalogada emite un recibo RSA-PSS-SHA256 firmado, idempotente y enlazado criptográficamente con el recibo anterior. El Dashboard expone `TraceId`, política aplicada, reanudaciones, omisiones y `ReceiptId`.
 - Actualizaciones firmadas con RSA-PSS, hash SHA-256, extracción segura y recuperación ante fallo.
+- Pipeline `build/Build-Release.ps1`: publica cliente, updater y servidor; ejecuta pruebas; genera ZIP, hashes, configuración y manifiesto firmado; `build/Verify-Release.ps1` realiza verificación independiente y ejecuta el updater en modo de solo validación.
 - Producción falla al arrancar si faltan SQL, storage, hosts DNS explícitos, raíces SAT o allowlist OCSP/CRL.
 
 ## Compilación y pruebas

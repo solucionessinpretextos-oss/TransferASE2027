@@ -17,10 +17,10 @@ internal static class Program
 
         try
         {
-            if (args.Length != 7)
+            if (args.Length is not 7 and not 8)
             {
                 Console.WriteLine(
-                    "Uso: TransferClienteASE.Updater <zip> <destino> <exe> <version> <sha256> <firmaBase64> <clavePublicaPem>");
+                    "Uso: TransferClienteASE.Updater <zip> <destino> <exe> <version> <sha256> <firmaBase64> <clavePublicaPem> [pidCliente|--verify-only]");
                 return 1;
             }
 
@@ -31,6 +31,21 @@ internal static class Program
             var expectedSha256 = args[4];
             var signatureBase64 = args[5];
             var publicKeyPath = Path.GetFullPath(args[6]);
+            int? clientProcessId = null;
+            var verifyOnly = false;
+            if (args.Length == 8)
+            {
+                if (string.Equals(args[7], "--verify-only", StringComparison.Ordinal))
+                {
+                    verifyOnly = true;
+                }
+                else
+                {
+                    if (!int.TryParse(args[7], out var parsedProcessId) || parsedProcessId <= 0)
+                        throw new InvalidOperationException("El PID del cliente no es válido.");
+                    clientProcessId = parsedProcessId;
+                }
+            }
 
             ValidateInputs(zipPath, destPath, exeName, version, publicKeyPath);
             using var verifiedPackage = VerifyPackageAndOpen(
@@ -39,6 +54,13 @@ internal static class Program
                 expectedSha256,
                 signatureBase64,
                 publicKeyPath);
+
+            if (verifyOnly)
+            {
+                VerifyPackageContents(verifiedPackage, exeName);
+                Console.WriteLine("Paquete firmado y contenido verificados correctamente.");
+                return 0;
+            }
 
             if (IsRunningInsideDestination(destPath))
             {
@@ -49,7 +71,8 @@ internal static class Program
                     version,
                     expectedSha256,
                     signatureBase64,
-                    publicKeyPath);
+                    publicKeyPath,
+                    clientProcessId);
             }
 
             var logDir = Path.Combine(Path.GetTempPath(), "TransferClienteASEUpdate", "logs");
@@ -69,7 +92,7 @@ internal static class Program
             L($"Destino: {destPath}");
             L("SHA-256 y firma RSA-PSS verificados.");
 
-            WaitForClientExit(exeName, L);
+            WaitForClientExit(exeName, clientProcessId, L);
 
             var operationRoot = Path.Combine(
                 Path.GetTempPath(),
@@ -276,6 +299,38 @@ internal static class Program
         }
     }
 
+    private static void VerifyPackageContents(Stream verifiedPackage, string exeName)
+    {
+        var verificationRoot = Path.Combine(
+            Path.GetTempPath(),
+            "TransferClienteASEUpdate",
+            "verification",
+            Guid.NewGuid().ToString("N"));
+        var stagingRoot = Path.Combine(verificationRoot, "staging");
+        Directory.CreateDirectory(stagingRoot);
+
+        try
+        {
+            ExtractSafely(verifiedPackage, stagingRoot);
+            var source = DetectExtractionSource(stagingRoot, _ => { });
+            var executable = Path.Combine(source, exeName);
+            if (!File.Exists(executable))
+                throw new InvalidDataException("El paquete no contiene el ejecutable principal esperado.");
+
+            var updater = Path.Combine(source, "TransferClienteASE.Updater.exe");
+            if (!File.Exists(updater))
+                throw new InvalidDataException("El paquete no contiene el actualizador seguro.");
+
+            var publicKey = Path.Combine(source, "update-public.pem");
+            if (!File.Exists(publicKey))
+                throw new InvalidDataException("El paquete no contiene la clave pública de actualización.");
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(verificationRoot);
+        }
+    }
+
     private static void ApplyWithRollback(
         string sourceDir,
         string destinationDir,
@@ -375,8 +430,31 @@ internal static class Program
         throw new IOException($"No se pudo reemplazar {Path.GetFileName(destination)}.", last);
     }
 
-    private static void WaitForClientExit(string exeName, Action<string> log)
+    private static void WaitForClientExit(string exeName, int? clientProcessId, Action<string> log)
     {
+        if (clientProcessId.HasValue)
+        {
+            for (var attempt = 1; attempt <= 90; attempt++)
+            {
+                try
+                {
+                    using var client = Process.GetProcessById(clientProcessId.Value);
+                    if (client.HasExited)
+                        return;
+
+                    log($"Cliente aún activo. Esperando {attempt}/90...");
+                    Thread.Sleep(1000);
+                }
+                catch (ArgumentException)
+                {
+                    Thread.Sleep(800);
+                    return;
+                }
+            }
+
+            throw new TimeoutException("El cliente no se cerró dentro del tiempo permitido; no se modificó la instalación.");
+        }
+
         var processName = Path.GetFileNameWithoutExtension(exeName);
         for (var attempt = 1; attempt <= 90; attempt++)
         {
@@ -411,7 +489,8 @@ internal static class Program
         string version,
         string sha256,
         string signatureBase64,
-        string publicKeyPath)
+        string publicKeyPath,
+        int? clientProcessId)
     {
         var currentExe = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(currentExe) || !File.Exists(currentExe))
@@ -424,10 +503,20 @@ internal static class Program
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
+        var updaterBaseName = Path.GetFileNameWithoutExtension(currentExe);
         foreach (var source in Directory.GetFiles(AppContext.BaseDirectory, "*", SearchOption.TopDirectoryOnly))
-            File.Copy(source, Path.Combine(tempDir, Path.GetFileName(source)), overwrite: true);
+        {
+            var name = Path.GetFileName(source);
+            if (string.Equals(source, currentExe, StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith(updaterBaseName + ".", StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(source, Path.Combine(tempDir, name), overwrite: false);
+            }
+        }
 
         var tempExe = Path.Combine(tempDir, Path.GetFileName(currentExe));
+        if (!File.Exists(tempExe))
+            throw new FileNotFoundException("No se pudo aislar el updater para ejecutar la actualización.", tempExe);
         var startInfo = new ProcessStartInfo
         {
             FileName = tempExe,
@@ -442,6 +531,8 @@ internal static class Program
         startInfo.ArgumentList.Add(sha256);
         startInfo.ArgumentList.Add(signatureBase64);
         startInfo.ArgumentList.Add(publicKeyPath);
+        if (clientProcessId.HasValue)
+            startInfo.ArgumentList.Add(clientProcessId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         Process.Start(startInfo);
         return 0;

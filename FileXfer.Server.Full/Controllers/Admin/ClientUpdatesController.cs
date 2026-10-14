@@ -49,6 +49,7 @@ namespace FileXfer.Server.Controllers.Admin
 
             if (!Uri.TryCreate(entry.DownloadUrl, UriKind.Absolute, out var downloadUri) ||
                 !downloadUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+                !downloadUri.AbsolutePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
                 !Version.TryParse(entry.LatestVersion, out _) ||
                 (!string.IsNullOrWhiteSpace(entry.MinSupportedVersion) &&
                  !Version.TryParse(entry.MinSupportedVersion, out _)) ||
