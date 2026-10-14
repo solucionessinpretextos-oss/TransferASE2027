@@ -114,7 +114,9 @@
 
   <ItemGroup>
     <!-- HTTP helpers -->
-    <PackageReference Include="System.Net.Http.Json" Version="8.0.0" />
+    <PackageReference Include="System.Net.Http.Json" Version="8.0.1" />
+    <!-- Fija explícitamente la implementación corregida que usa el cliente autocontenido. -->
+    <PackageReference Include="System.Text.Json" Version="8.0.6" />
 
     <!-- gRPC cliente -->
     <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />

@@ -51,6 +51,52 @@ function Invoke-Checked {
     }
 }
 
+function Assert-NoVulnerableNuGetPackages {
+    param([string]$ProjectPath)
+
+    Push-Location $repoRoot
+    try {
+        $json = (& dotnet list $ProjectPath package --vulnerable --include-transitive --format json 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+            throw "No fue posible auditar dependencias NuGet de $ProjectPath."
+        }
+
+        try {
+            $report = $json | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw "La auditoría NuGet de $ProjectPath no devolvió JSON válido."
+        }
+
+        $vulnerable = [Collections.Generic.List[string]]::new()
+        foreach ($project in @($report.projects)) {
+            $frameworksProperty = $project.PSObject.Properties['frameworks']
+            if ($null -eq $frameworksProperty) { continue }
+
+            foreach ($framework in @($frameworksProperty.Value)) {
+                foreach ($propertyName in @('topLevelPackages', 'transitivePackages')) {
+                    $packagesProperty = $framework.PSObject.Properties[$propertyName]
+                    if ($null -eq $packagesProperty) { continue }
+
+                    foreach ($package in @($packagesProperty.Value)) {
+                        $advisories = $package.PSObject.Properties['vulnerabilities']
+                        if ($null -ne $advisories -and @($advisories.Value).Count -gt 0) {
+                            $vulnerable.Add("$($package.id) $($package.resolvedVersion)")
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($vulnerable.Count -gt 0) {
+            throw "La liberación contiene paquetes NuGet vulnerables: $($vulnerable -join ', ')."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Write-Utf8NoBom {
     param([string]$Path, [string]$Content)
     [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
@@ -160,7 +206,17 @@ try {
     $updaterPublish = Join-Path $workRoot 'updater'
     New-Item -ItemType Directory -Path $clientPublish, $serverPublish, $updaterPublish | Out-Null
 
+    foreach ($project in @(
+        'FileXfer.Server.Full/FileXfer.Server.csproj',
+        'TransferClienteASE/TransferClienteASE.csproj',
+        'TransferClienteASEUpdater/TransferClienteASE.Updater.csproj'
+    )) {
+        Invoke-Checked dotnet @('restore', $project)
+        Assert-NoVulnerableNuGetPackages $project
+    }
+
     Invoke-Checked npm @('ci', '--ignore-scripts') (Join-Path $repoRoot 'FileXfer.AdminDashboard')
+    Invoke-Checked npm @('audit', '--audit-level=high') (Join-Path $repoRoot 'FileXfer.AdminDashboard')
     Invoke-Checked npm @('run', 'build') (Join-Path $repoRoot 'FileXfer.AdminDashboard')
 
     $versionProperties = @(

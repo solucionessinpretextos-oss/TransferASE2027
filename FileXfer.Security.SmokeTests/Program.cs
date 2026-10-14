@@ -57,7 +57,7 @@ Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
 Console.WriteLine("PASS mfa-lockout=concurrent-failures-serialized");
 Console.WriteLine("PASS file-policies=seed version conflict bypass limit rollback");
 Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent mfa-authorized");
-Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved");
+Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved reparse-points-rejected");
 Console.WriteLine("PASS secure-download=hash-verified tamper-and-traversal-blocked");
 Console.WriteLine("PASS updater=signed-package-applied complete-package-required verify-only temp-relaunch rollback invalid-signature-and-zip-slip-rejected");
 return 0;
@@ -485,7 +485,10 @@ static async Task TestReceiptAuthorizationAsync()
 static async Task TestResumableAssemblerAsync()
 {
     var root = Path.Combine(Path.GetTempPath(), "FileXfer.Resume.Smoke", Guid.NewGuid().ToString("N"));
+    var outside = root + "-outside";
+    var linkedDirectory = Path.Combine(root, "linked");
     Directory.CreateDirectory(root);
+    Directory.CreateDirectory(outside);
     try
     {
         var dbOptions = new DbContextOptionsBuilder<FileXferDbContext>()
@@ -521,11 +524,73 @@ static async Task TestResumableAssemblerAsync()
         var actual = Convert.FromHexString(await assembler.ComputeSha256Async(
             key, uuid, name, CancellationToken.None));
         Require(actual.SequenceEqual(expected), "La reanudación alteró el contenido o el hash final.");
+
+        if (TryCreateDirectoryLink(linkedDirectory, outside))
+        {
+            Expect<InvalidDataException>(
+                () => assembler.ResolveAbsolutePath("linked", Guid.NewGuid().ToString("N"), "escape.bin"),
+                "El ensamblador aceptó una ruta de carga que atraviesa un punto de reanálisis.");
+        }
+        else
+        {
+            Console.WriteLine("SKIP resumable-storage reparse-point smoke: el host no permite crear vínculos o junctions.");
+        }
     }
     finally
     {
+        if (Directory.Exists(linkedDirectory) &&
+            (File.GetAttributes(linkedDirectory) & FileAttributes.ReparsePoint) != 0)
+        {
+            Directory.Delete(linkedDirectory);
+        }
         if (Directory.Exists(root))
             Directory.Delete(root, recursive: true);
+        if (Directory.Exists(outside))
+            Directory.Delete(outside, recursive: true);
+    }
+}
+
+static bool TryCreateDirectoryLink(string linkPath, string targetPath)
+{
+    try
+    {
+        Directory.CreateSymbolicLink(linkPath, targetPath);
+        return true;
+    }
+    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+    }
+
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+    };
+    startInfo.ArgumentList.Add("/d");
+    startInfo.ArgumentList.Add("/c");
+    startInfo.ArgumentList.Add("mklink");
+    startInfo.ArgumentList.Add("/J");
+    startInfo.ArgumentList.Add(linkPath);
+    startInfo.ArgumentList.Add(targetPath);
+
+    try
+    {
+        using var process = Process.Start(startInfo);
+        if (process is null || !process.WaitForExit(5_000))
+        {
+            try { process?.Kill(entireProcessTree: true); } catch { }
+            return false;
+        }
+        return process.ExitCode == 0 && Directory.Exists(linkPath);
+    }
+    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+    {
+        return false;
     }
 }
 

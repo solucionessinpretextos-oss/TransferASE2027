@@ -23,6 +23,10 @@ Requisitos:
 - Para producción, certificado Authenticode con llave privada y servidor RFC 3161 de sellado de tiempo.
 - Árbol Git limpio.
 
+Antes de compilar, el pipeline restaura y audita dependencias directas y transitivas de
+servidor, cliente y updater. También ejecuta `npm audit`; cualquier vulnerabilidad NuGet
+o vulnerabilidad npm de severidad alta o crítica detiene la liberación.
+
 Ejemplo productivo:
 
 ```powershell

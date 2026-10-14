@@ -196,16 +196,21 @@ namespace FileXfer.Server.Uploading
             var safeName = SanitizePathSegment(name);
 
             var storageRoot = Path.GetFullPath(_storage.BasePath);
+            Directory.CreateDirectory(storageRoot);
+            RejectReparsePoint(new DirectoryInfo(storageRoot), "la raíz de almacenamiento");
             var dirParts = new List<string> { storageRoot };
             dirParts.AddRange(segments);
 
             var dir = Path.GetFullPath(Path.Combine(dirParts.ToArray()));
             EnsureWithinStorage(dir, storageRoot);
             Directory.CreateDirectory(dir);
+            EnsureDirectoryChainHasNoReparsePoints(dir, storageRoot);
 
             var safeNameFinal = BuildSafeFileNameForWindows(dir, safeName, fileUuid, _log);
             var absolutePath = Path.GetFullPath(Path.Combine(dir, safeNameFinal));
             EnsureWithinStorage(absolutePath, storageRoot);
+            if (File.Exists(absolutePath))
+                RejectReparsePoint(new FileInfo(absolutePath), "el archivo de carga");
             return absolutePath;
         }
 
@@ -231,6 +236,44 @@ namespace FileXfer.Server.Uploading
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException("La ruta de almacenamiento calculada salió de la raíz configurada.");
+            }
+        }
+
+        private static void EnsureDirectoryChainHasNoReparsePoints(
+            string directory,
+            string storageRoot)
+        {
+            var normalizedRoot = Path.GetFullPath(storageRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var normalizedDirectory = Path.GetFullPath(directory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            EnsureWithinStorage(normalizedDirectory, normalizedRoot);
+            RejectReparsePoint(new DirectoryInfo(normalizedRoot), "la raíz de almacenamiento");
+
+            var relative = Path.GetRelativePath(normalizedRoot, normalizedDirectory);
+            if (relative == ".")
+                return;
+
+            var current = normalizedRoot;
+            foreach (var segment in relative.Split(
+                         new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = Path.Combine(current, segment);
+                RejectReparsePoint(new DirectoryInfo(current), "la ruta de almacenamiento");
+            }
+        }
+
+        private static void RejectReparsePoint(FileSystemInfo item, string description)
+        {
+            item.Refresh();
+            if (!item.Exists)
+                throw new IOException($"No existe {description} después de prepararla.");
+            if ((item.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidDataException(
+                    $"Se rechazó {description} porque atraviesa un vínculo o punto de reanálisis.");
             }
         }
 
