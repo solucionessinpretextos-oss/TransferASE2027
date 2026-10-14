@@ -8,7 +8,7 @@
 4. Revisar y ejecutar `sql/002_filexferdb_idempotent.sql` en FileXferDb. Sus preflight abortan antes de truncar datos o crear índices sobre duplicados.
 5. Aplicar la migración EF `TransferCapabilities2027`; confirmar tablas de políticas, revisiones, recibos, cadena e índices de reanudación.
 6. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.1.0.0 y updater desde artefactos firmados.
-7. Validar `/healthz`, login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
+7. Validar `/healthz` (proceso vivo) y `/readyz` (FileXferDb y BuDi disponibles), login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
 8. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
 9. Cortar una carga a mitad, reintentar y comprobar que continúa desde un offset mayor que cero, genera una sola catalogación y un solo recibo.
 10. Reabrir tráfico gradualmente y vigilar errores, latencia, espacio, parciales reanudables, omisiones de verificación y recibos.
@@ -35,6 +35,10 @@ La cuenta sembrada en una base vacía puede iniciar sesión únicamente para enr
 
 Nunca active `AllowDevelopmentBypass` fuera de Development.
 
+En producción, ambas cadenas SQL deben exigir cifrado (`Encrypt=True` o `Strict`), validar el certificado (`TrustServerCertificate=False`) y usar un certificado emitido para el nombre DNS configurado. El servidor rechazará el arranque si alguna conexión incumple estas condiciones o apunta a LocalDB. No convierta `TrustServerCertificate=True` en una solución permanente: cifra el canal, pero no autentica al servidor y conserva exposición a intermediarios.
+
+El entorno BuDi validado durante la preparación negocia TLS 1.0 y presenta una cadena de certificado no confiable. Antes del corte productivo, habilite TLS 1.2 o superior en SQL Server/SChannel, instale un certificado corporativo cuyo SAN coincida con el DNS de conexión y confirme `Encrypt=True;TrustServerCertificate=False`. La compatibilidad temporal de Development no constituye autorización para desplegar ese perfil.
+
 El servicio falla al arrancar en producción si no existe una llave persistente de recibos. Una llave efímera solo está permitida en `Development`. La llave configurada es también la raíz de confianza de la verificación: no la rote sin un procedimiento que exporte/verifique el historial y despliegue soporte explícito para llaves anteriores; cambiarla directamente hará que los recibos históricos dejen de validarse en línea.
 
 ## Política de archivos
@@ -45,6 +49,7 @@ La lista aceptada ya no vive en el ejecutable. Adminístrela en **Dashboard → 
 
 ## Validaciones productivas obligatorias
 
+- `/healthz` debe responder 200 cuando el proceso esté vivo. `/readyz` debe responder 200 con ambas dependencias en `ready`; debe responder 503, sin filtrar mensajes SQL, si FileXferDb o BuDi no están disponibles.
 - Certificado e.firma SAT real vigente y otro revocado/expirado.
 - Cadena SAT con egress limitado a los hosts OCSP/CRL declarados.
 - TLS con nombre correcto, cadena completa y rotación de pin con solapamiento.

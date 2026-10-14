@@ -32,6 +32,7 @@ Require(File.Exists(updaterPath), "No se encontró el updater compilado.");
 
 TestPathProtection();
 TestMfaSecretProtection();
+TestSqlTransportPolicy();
 TestUploadFileNamePolicy();
 TestUploadAdmission();
 await TestConcurrentMfaLockoutAsync();
@@ -43,6 +44,7 @@ await TestUpdaterAsync(updaterPath);
 
 Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
+Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
 Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
 Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
 Console.WriteLine("PASS mfa-lockout=concurrent-failures-serialized");
@@ -51,6 +53,32 @@ Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejec
 Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved");
 Console.WriteLine("PASS updater=signed-package-applied invalid-signature-rejected zip-slip-rejected");
 return 0;
+
+static void TestSqlTransportPolicy()
+{
+    SqlTransportPolicy.ValidateProduction(
+        "Secure",
+        "Server=sql.internal.example;Database=FileXfer;User ID=service;Password=placeholder;" +
+        "Encrypt=True;TrustServerCertificate=False");
+
+    Expect<InvalidOperationException>(
+        () => SqlTransportPolicy.ValidateProduction(
+            "Plaintext",
+            "Server=sql.internal.example;Database=FileXfer;Encrypt=False;TrustServerCertificate=False"),
+        "La política SQL aceptó transporte sin cifrar.");
+
+    Expect<InvalidOperationException>(
+        () => SqlTransportPolicy.ValidateProduction(
+            "Untrusted",
+            "Server=sql.internal.example;Database=FileXfer;Encrypt=True;TrustServerCertificate=True"),
+        "La política SQL aceptó un certificado sin validar.");
+
+    Expect<InvalidOperationException>(
+        () => SqlTransportPolicy.ValidateProduction(
+            "LocalOnly",
+            "Server=(localdb)\\MSSQLLocalDB;Database=FileXfer;Encrypt=True;TrustServerCertificate=False"),
+        "La política SQL aceptó LocalDB en producción.");
+}
 
 static void TestPathProtection()
 {

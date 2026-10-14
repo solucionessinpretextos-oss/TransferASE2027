@@ -21,7 +21,9 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using System.Data.SqlClient;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -145,6 +147,14 @@ if (!builder.Environment.IsDevelopment() &&
         "ConnectionStrings:BudiDev es obligatoria fuera de Development.");
 }
 
+if (!builder.Environment.IsDevelopment())
+{
+    SqlTransportPolicy.ValidateProduction("FileXferDb", cs);
+    SqlTransportPolicy.ValidateProduction(
+        "BudiDev",
+        builder.Configuration.GetConnectionString("BudiDev"));
+}
+
 var allowedHosts = builder.Configuration["AllowedHosts"]?.Trim();
 if (!builder.Environment.IsDevelopment() &&
     (string.IsNullOrWhiteSpace(allowedHosts) || allowedHosts == "*"))
@@ -156,6 +166,18 @@ if (!builder.Environment.IsDevelopment() &&
 builder.Services.AddSingleton<IPathProtector, AesGcmPathProtector>();
 builder.Services.AddSingleton<IMfaSecretProtector, AesGcmMfaSecretProtector>();
 builder.Services.AddSingleton<IBudiDevRepository, BudiDevRepository>();
+builder.Services
+    .AddHealthChecks()
+    .AddCheck<PrimaryStoreHealthCheck>(
+        "primary_store",
+        failureStatus: HealthStatus.Unhealthy,
+        tags: new[] { "ready" },
+        timeout: TimeSpan.FromSeconds(5))
+    .AddCheck<BusinessStoreHealthCheck>(
+        "business_store",
+        failureStatus: HealthStatus.Unhealthy,
+        tags: new[] { "ready" },
+        timeout: TimeSpan.FromSeconds(5));
 
 var jwt = builder.Configuration.GetSection("Security:Jwt").Get<JwtOptions>() ?? new JwtOptions();
 if (string.IsNullOrWhiteSpace(jwt.Issuer) || string.IsNullOrWhiteSpace(jwt.Audience))
@@ -441,6 +463,42 @@ app.MapGet("/healthz", () => Results.Ok(new
     status = "ok",
     time = DateTimeOffset.UtcNow
 }));
+
+app.MapHealthChecks("/readyz", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready"),
+    ResultStatusCodes =
+    {
+        [HealthStatus.Healthy] = StatusCodes.Status200OK,
+        [HealthStatus.Degraded] = StatusCodes.Status503ServiceUnavailable,
+        [HealthStatus.Unhealthy] = StatusCodes.Status503ServiceUnavailable
+    },
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store, no-cache";
+
+        var payload = new
+        {
+            status = report.Status == HealthStatus.Healthy ? "ready" : "not_ready",
+            time = DateTimeOffset.UtcNow,
+            totalDurationMs = Math.Round(report.TotalDuration.TotalMilliseconds, 1),
+            dependencies = report.Entries
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => new
+                {
+                    name = entry.Key,
+                    status = entry.Value.Status == HealthStatus.Healthy ? "ready" : "unavailable",
+                    durationMs = Math.Round(entry.Value.Duration.TotalMilliseconds, 1)
+                })
+        };
+
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            payload,
+            cancellationToken: context.RequestAborted);
+    }
+});
 
 app.Run();
 
