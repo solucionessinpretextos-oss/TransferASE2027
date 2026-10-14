@@ -33,6 +33,7 @@ Require(File.Exists(updaterPath), "No se encontró el updater compilado.");
 TestPathProtection();
 TestMfaSecretProtection();
 TestSqlTransportPolicy();
+TestAlertConfigurationPolicy();
 TestBudiSchemaRequirements();
 TestClientUpdateManifestEndpoint();
 TestRfcResourceAuthorization();
@@ -49,6 +50,7 @@ await TestUpdaterAsync(updaterPath);
 Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
+Console.WriteLine("PASS alert-configuration=https tls complete-channels bounded-timeouts");
 Console.WriteLine("PASS budi-schema=required-columns-and-indexes-enforced");
 Console.WriteLine("PASS client-update-manifest=https-zip-and-cryptographic-fields-required");
 Console.WriteLine("PASS rfc-resource-authorization=owner privileged-mfa cross-rfc-blocked");
@@ -86,6 +88,66 @@ static void TestSqlTransportPolicy()
             "LocalOnly",
             "Server=(localdb)\\MSSQLLocalDB;Database=FileXfer;Encrypt=True;TrustServerCertificate=False"),
         "La política SQL aceptó LocalDB en producción.");
+}
+
+static void TestAlertConfigurationPolicy()
+{
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions { Enabled = false }).Count == 0,
+        "La política rechazó alertas deshabilitadas sin canales externos.");
+
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions
+        {
+            Enabled = true,
+            WebhookUrl = "https://alerts.example.test/hooks/security?token=placeholder"
+        }).Count == 0,
+        "La política rechazó un webhook HTTPS válido.");
+
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions
+        {
+            Enabled = true,
+            SmtpHost = "smtp.example.test",
+            SmtpPort = 587,
+            SmtpUseTls = true,
+            EmailFrom = "transfer@example.test",
+            EmailTo = "security@example.test,ops@example.test"
+        }).Count == 0,
+        "La política rechazó una configuración SMTP TLS válida.");
+
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions { Enabled = true }).Count > 0,
+        "La política aceptó alertas habilitadas sin canal externo.");
+    Require(
+        new AlertOptionsValidator().Validate(null, new AlertOptions { Enabled = true }).Failed,
+        "El validador de arranque aceptó alertas habilitadas sin canal externo.");
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions
+        {
+            Enabled = true,
+            WebhookUrl = "http://alerts.example.test/hook"
+        }).Count > 0,
+        "La política aceptó un webhook sin HTTPS.");
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions
+        {
+            Enabled = true,
+            WebhookUrl = "https://user:password@alerts.example.test/hook#secret"
+        }).Count >= 2,
+        "La política aceptó credenciales o fragmentos en el webhook.");
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions
+        {
+            Enabled = true,
+            SmtpHost = "smtp.example.test",
+            SmtpPort = 587,
+            SmtpUseTls = false,
+            SmtpUser = "service",
+            EmailFrom = "transfer@example.test",
+            EmailTo = "security@example.test"
+        }).Count >= 2,
+        "La política aceptó SMTP sin TLS o credenciales incompletas.");
 }
 
 static void TestBudiSchemaRequirements()

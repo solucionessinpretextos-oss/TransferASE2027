@@ -23,6 +23,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
+using System.Security.Authentication;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -44,7 +46,11 @@ builder.Services.Configure<RateLimitOptions>(builder.Configuration.GetSection("S
 builder.Services.Configure<DevicePolicyOptions>(builder.Configuration.GetSection("Security:DevicePolicy"));
 builder.Services.Configure<SatOptions>(builder.Configuration.GetSection("Security:SAT"));
 builder.Services.Configure<DebugFeaturesOptions>(builder.Configuration.GetSection("DebugFeatures"));
-builder.Services.Configure<AlertOptions>(builder.Configuration.GetSection("Alerts"));
+builder.Services
+    .AddOptions<AlertOptions>()
+    .Bind(builder.Configuration.GetSection("Alerts"))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<AlertOptions>, AlertOptionsValidator>();
 var receiptSigning = builder.Configuration.GetSection("Security:Receipts").Get<ReceiptSigningOptions>()
                      ?? new ReceiptSigningOptions();
 builder.Services.AddSingleton(receiptSigning);
@@ -309,6 +315,26 @@ builder.Services.AddSingleton<ISystemHealthService, SystemHealthService>();
 builder.Services.AddSingleton<LogAlertSink>();
 builder.Services.AddSingleton<EmailAlertSink>();
 builder.Services.AddSingleton<WebhookAlertSink>();
+builder.Services
+    .AddHttpClient(WebhookAlertSink.HttpClientName, (services, http) =>
+    {
+        var options = services.GetRequiredService<IOptions<AlertOptions>>().Value;
+        http.Timeout = TimeSpan.FromSeconds(options.WebhookTimeoutSeconds);
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("FileXfer-Server/2.1");
+    })
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        ConnectTimeout = TimeSpan.FromSeconds(5),
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        MaxConnectionsPerServer = 4,
+        MaxResponseHeadersLength = 16,
+        SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+        {
+            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+        }
+    });
 builder.Services.AddSingleton<IAlertSink>(sp =>
 {
     var opts = sp.GetRequiredService<
@@ -320,7 +346,9 @@ builder.Services.AddSingleton<IAlertSink>(sp =>
         sinks.Add(sp.GetRequiredService<EmailAlertSink>());
         sinks.Add(sp.GetRequiredService<WebhookAlertSink>());
     }
-    return new CompositeAlertSink(sinks);
+    return new CompositeAlertSink(
+        sinks,
+        sp.GetRequiredService<ILogger<CompositeAlertSink>>());
 });
 
 var app = builder.Build();

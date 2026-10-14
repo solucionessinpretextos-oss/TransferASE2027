@@ -74,7 +74,9 @@ namespace FileXfer.Server.Options
         public string? SmtpUser { get; set; }
         public string? SmtpPassword { get; set; }
         public string? EmailFrom { get; set; }
+        public int SmtpTimeoutSeconds { get; set; } = 15;
 
         public string? WebhookUrl { get; set; }
+        public int WebhookTimeoutSeconds { get; set; } = 10;
     }
 }

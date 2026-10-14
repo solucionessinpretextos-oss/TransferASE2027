@@ -47,6 +47,12 @@ La cuenta sembrada en una base vacía puede iniciar sesión únicamente para enr
 - certificado TLS de Kestrel o terminación TLS corporativa
 - `FILEXFER_QPDF_PATH` si qpdf no se despliega junto al servicio
 
+Si se activa `Alerts__Enabled=true`, el arranque exige al menos un canal externo completo:
+
+- Webhook: `Alerts__WebhookUrl` debe ser HTTPS, sin credenciales embebidas ni fragmentos. El cliente no sigue redirecciones, limita conexiones y termina la petición según `Alerts__WebhookTimeoutSeconds` (1–120 segundos).
+- Email: `Alerts__SmtpHost`, `Alerts__SmtpPort`, `Alerts__EmailFrom` y `Alerts__EmailTo`; `Alerts__SmtpUseTls` debe permanecer en `true`. Usuario y contraseña SMTP se proporcionan juntos y la contraseña debe venir del almacén secreto mediante `Alerts__SmtpPassword`, nunca de un archivo versionado.
+- `Alerts__SmtpTimeoutSeconds` debe estar entre 1 y 120 segundos. Un fallo de entrega se registra, pero no revierte la operación de negocio que originó la alerta.
+
 Nunca active `AllowDevelopmentBypass` fuera de Development.
 
 En producción, ambas cadenas SQL deben exigir cifrado (`Encrypt=True` o `Strict`), validar el certificado (`TrustServerCertificate=False`) y usar un certificado emitido para el nombre DNS configurado. El servidor rechazará el arranque si alguna conexión incumple estas condiciones o apunta a LocalDB. No convierta `TrustServerCertificate=True` en una solución permanente: cifra el canal, pero no autentica al servidor y conserva exposición a intermediarios.
