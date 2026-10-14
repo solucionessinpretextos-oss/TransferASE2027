@@ -1152,12 +1152,31 @@ namespace FileXfer.Server.Services
                 return null;
 
             await using var cn = Conn();
-            const string sql = @"
+            var hasUploadId = await cn.ExecuteScalarAsync<int>(
+                new CommandDefinition(
+                    "SELECT CASE WHEN COL_LENGTH(N'dbo.Transfer_ArchivosLocales', N'ID_Upload') IS NULL THEN 0 ELSE 1 END;",
+                    commandType: CommandType.Text,
+                    cancellationToken: ct)) == 1;
+
+            const string sqlV2 = @"
                 SELECT TOP (1)
                     [Id]                  AS IdArchivoLocal,
                     [RFC_Origen]          AS RfcOrigen,
                     [Nombre_Archivo]      AS NombreArchivo,
-                    [Ruta_ARchivo_Fisico] AS RutaEncriptada
+                    [Ruta_ARchivo_Fisico] AS RutaEncriptada,
+                    [ID_Upload]           AS IdUpload
+                FROM [dbo].[Transfer_ArchivosLocales]
+                WHERE [Id] = @IdArchivoLocal
+                  AND [RFC_Origen] = @RfcOrigen
+                  AND [Estatus] = 'A';";
+
+            const string sqlV1 = @"
+                SELECT TOP (1)
+                    [Id]                  AS IdArchivoLocal,
+                    [RFC_Origen]          AS RfcOrigen,
+                    [Nombre_Archivo]      AS NombreArchivo,
+                    [Ruta_ARchivo_Fisico] AS RutaEncriptada,
+                    CAST(NULL AS uniqueidentifier) AS IdUpload
                 FROM [dbo].[Transfer_ArchivosLocales]
                 WHERE [Id] = @IdArchivoLocal
                   AND [RFC_Origen] = @RfcOrigen
@@ -1165,7 +1184,7 @@ namespace FileXfer.Server.Services
 
             var row = await cn.QuerySingleOrDefaultAsync<_ArchivoLocalDownloadDbRow>(
                 new CommandDefinition(
-                    sql,
+                    hasUploadId ? sqlV2 : sqlV1,
                     new
                     {
                         IdArchivoLocal = idArchivoLocal,
@@ -1185,7 +1204,8 @@ namespace FileXfer.Server.Services
                 row.IdArchivoLocal,
                 row.RfcOrigen?.Trim().ToUpperInvariant() ?? string.Empty,
                 row.NombreArchivo ?? string.Empty,
-                relativePath);
+                relativePath,
+                row.IdUpload);
         }
 
         public async Task<int> EliminarArchivosLocalesAsync(
@@ -1359,6 +1379,7 @@ namespace FileXfer.Server.Services
             public string RfcOrigen { get; set; } = string.Empty;
             public string NombreArchivo { get; set; } = string.Empty;
             public string RutaEncriptada { get; set; } = string.Empty;
+            public Guid? IdUpload { get; set; }
         }
 
         private sealed class OficioDbRow

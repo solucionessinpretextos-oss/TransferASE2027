@@ -33,6 +33,7 @@ Require(File.Exists(updaterPath), "No se encontró el updater compilado.");
 TestPathProtection();
 TestMfaSecretProtection();
 TestSqlTransportPolicy();
+TestBudiSchemaRequirements();
 TestRfcResourceAuthorization();
 TestUploadFileNamePolicy();
 TestUploadAdmission();
@@ -47,6 +48,7 @@ await TestUpdaterAsync(updaterPath);
 Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
+Console.WriteLine("PASS budi-schema=required-columns-and-indexes-enforced");
 Console.WriteLine("PASS rfc-resource-authorization=owner privileged-mfa cross-rfc-blocked");
 Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
 Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
@@ -82,6 +84,23 @@ static void TestSqlTransportPolicy()
             "LocalOnly",
             "Server=(localdb)\\MSSQLLocalDB;Database=FileXfer;Encrypt=True;TrustServerCertificate=False"),
         "La política SQL aceptó LocalDB en producción.");
+}
+
+static void TestBudiSchemaRequirements()
+{
+    var ready = new BudiSchemaStatus(
+        TableExists: true,
+        MovimientoIdExists: true,
+        UploadIdExists: true,
+        UploadIdUniqueIndexExists: true,
+        ResultContextIndexExists: true);
+    Require(ready.IsReady, "El esquema BuDi completo no fue reconocido como listo.");
+
+    var missingUploadId = ready with { UploadIdExists = false };
+    Require(!missingUploadId.IsReady, "Readiness aceptó BuDi sin ID_Upload.");
+
+    var missingUniqueIndex = ready with { UploadIdUniqueIndexExists = false };
+    Require(!missingUniqueIndex.IsReady, "Readiness aceptó BuDi sin índice único de carga.");
 }
 
 static void TestRfcResourceAuthorization()
@@ -496,11 +515,13 @@ static async Task TestSecureDownloadAsync()
             .Options;
         var factory = new SmokeDbContextFactory(options);
 
+        Guid targetUploadId;
         await using (var db = await factory.CreateDbContextAsync())
         {
+            targetUploadId = Guid.NewGuid();
             db.Uploads.Add(new UploadEntry
             {
-                Id = Guid.NewGuid(),
+                Id = targetUploadId,
                 Rfc = "RFCOWNER0101",
                 FileUuid = Guid.NewGuid().ToString("N"),
                 OriginalFileName = "verified.bin",
@@ -512,6 +533,20 @@ static async Task TestSecureDownloadAsync()
                 CompletedUtc = DateTimeOffset.UtcNow,
                 LastActivityUtc = DateTimeOffset.UtcNow
             });
+            db.Uploads.Add(new UploadEntry
+            {
+                Id = Guid.NewGuid(),
+                Rfc = "RFCOWNER0101",
+                FileUuid = Guid.NewGuid().ToString("N"),
+                OriginalFileName = "decoy.bin",
+                StoredRelativePath = relativePath,
+                BytesReceived = content.LongLength,
+                ExpectedLength = content.LongLength,
+                Sha256Server = new string('0', 64),
+                Status = "Completed",
+                CompletedUtc = DateTimeOffset.UtcNow.AddMinutes(1),
+                LastActivityUtc = DateTimeOffset.UtcNow.AddMinutes(1)
+            });
             await db.SaveChangesAsync();
         }
 
@@ -522,7 +557,8 @@ static async Task TestSecureDownloadAsync()
             1,
             "RFCOWNER0101",
             "verified.bin",
-            relativePath);
+            relativePath,
+            targetUploadId);
 
         var prepared = await service.PrepareAsync(descriptor, CancellationToken.None);
         await using (prepared.Stream)
@@ -570,7 +606,7 @@ static async Task TestSecureDownloadAsync()
         try
         {
             _ = await service.PrepareAsync(
-                new ArchivoLocalDownloadDescriptor(2, "RFCOWNER0101", "outside.bin", outsideRelative),
+                new ArchivoLocalDownloadDescriptor(2, "RFCOWNER0101", "outside.bin", outsideRelative, null),
                 CancellationToken.None);
             throw new InvalidOperationException("La descarga aceptó una ruta fuera del storage.");
         }

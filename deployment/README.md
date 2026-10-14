@@ -2,17 +2,28 @@
 
 ## Orden de despliegue
 
-1. Crear backup consistente de FileXferDb, BuDi y del volumen de archivos; verificar una restauración de muestra.
-2. Detener nuevas cargas o poner el servicio en drenado.
-3. Ejecutar `sql/001_budi_transfer_archivos_hardening.sql` en BuDi. El script aborta si detecta duplicados de `ID_Upload`.
-4. Revisar y ejecutar `sql/002_filexferdb_idempotent.sql` en FileXferDb. Sus preflight abortan antes de truncar datos o crear índices sobre duplicados.
-5. Aplicar la migración EF `TransferCapabilities2027`; confirmar tablas de políticas, revisiones, recibos, cadena e índices de reanudación.
-6. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.1.0.0 y updater desde artefactos firmados.
-7. Validar `/healthz` (proceso vivo) y `/readyz` (FileXferDb y BuDi disponibles), login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
-8. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
-9. Cortar una carga a mitad, reintentar y comprobar que continúa desde un offset mayor que cero, genera una sola catalogación y un solo recibo.
-10. Descargar un archivo, cancelar a mitad y reanudarlo; confirmar HTTP 206, progreso visible, SHA-256 coincidente y auditoría `file_download_verified`.
-11. Reabrir tráfico gradualmente y vigilar errores, latencia, espacio, parciales reanudables, omisiones de verificación, descargas bloqueadas y recibos.
+1. Ejecutar en BuDi el preflight de solo lectura `sql/000_budi_transfer_archivos_preflight.sql` y conservar su salida.
+2. Crear backup consistente de FileXferDb, BuDi y del volumen de archivos; verificar una restauración de muestra. Para BuDi puede usarse `sql/010_budi_backup_before_hardening.sql`, suministrando una ruta nueva mediante `-v BackupFile=...`; el script ejecuta `RESTORE VERIFYONLY`.
+3. Detener nuevas cargas o poner el servicio en drenado.
+4. Ejecutar `sql/001_budi_transfer_archivos_hardening.sql` en BuDi con `sqlcmd -b -I`. El script usa una transacción, bloqueo de aplicación y postcondiciones; aborta y revierte si detecta duplicados o índices incompatibles.
+5. Revisar y ejecutar `sql/002_filexferdb_idempotent.sql` en FileXferDb. Sus preflight abortan antes de truncar datos o crear índices sobre duplicados.
+6. Aplicar la migración EF `TransferCapabilities2027`; confirmar tablas de políticas, revisiones, recibos, cadena e índices de reanudación.
+7. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.1.0.0 y updater desde artefactos firmados.
+8. Validar `/healthz` (proceso vivo) y `/readyz` (FileXferDb disponible y contrato de esquema BuDi completo), login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
+9. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
+10. Cortar una carga a mitad, reintentar y comprobar que continúa desde un offset mayor que cero, genera una sola catalogación y un solo recibo.
+11. Descargar un archivo, cancelar a mitad y reanudarlo; confirmar HTTP 206, progreso visible, SHA-256 coincidente y auditoría `file_download_verified`.
+12. Reabrir tráfico gradualmente y vigilar errores, latencia, espacio, parciales reanudables, omisiones de verificación, descargas bloqueadas y recibos.
+
+Ejemplo con autenticación integrada; reemplace servidor y ruta por los autorizados:
+
+```powershell
+sqlcmd -S "SERVIDOR" -E -d BUZONDIGITAL -b -I -i deployment/sql/000_budi_transfer_archivos_preflight.sql
+sqlcmd -S "SERVIDOR" -E -d BUZONDIGITAL -b -I -v BackupFile="D:\Backups\BUZONDIGITAL_YYYYMMDD_HHMM.bak" -i deployment/sql/010_budi_backup_before_hardening.sql
+sqlcmd -S "SERVIDOR" -E -d BUZONDIGITAL -b -I -i deployment/sql/001_budi_transfer_archivos_hardening.sql
+```
+
+No coloque usuario ni contraseña en scripts, historial de consola o archivos del repositorio. Use autenticación integrada o el almacén secreto del agente de despliegue.
 
 ## Bootstrap administrativo
 
@@ -50,7 +61,7 @@ La lista aceptada ya no vive en el ejecutable. Adminístrela en **Dashboard → 
 
 ## Validaciones productivas obligatorias
 
-- `/healthz` debe responder 200 cuando el proceso esté vivo. `/readyz` debe responder 200 con ambas dependencias en `ready`; debe responder 503, sin filtrar mensajes SQL, si FileXferDb o BuDi no están disponibles.
+- `/healthz` debe responder 200 cuando el proceso esté vivo. `/readyz` debe responder 200 solo cuando ambas dependencias y el esquema BuDi requerido estén listos; debe responder 503, sin filtrar mensajes SQL, si FileXferDb, BuDi, `ID_Upload` o los índices obligatorios no están disponibles.
 - Certificado e.firma SAT real vigente y otro revocado/expirado.
 - Cadena SAT con egress limitado a los hosts OCSP/CRL declarados.
 - TLS con nombre correcto, cadena completa y rotación de pin con solapamiento.
@@ -66,7 +77,7 @@ La lista aceptada ya no vive en el ejecutable. Adminístrela en **Dashboard → 
 1. Detener tráfico y conservar logs/evidencia.
 2. Restaurar primero el cliente anterior y después los binarios anteriores del servidor/updater. No despliegue el cliente 2.1 contra un servidor que aún no expone políticas ni estado reanudable.
 3. Preferir restaurar el backup de FileXferDb tomado antes del despliegue. `sql/099_rollback_session_security.sql` solo revierte la última migración y elimina columnas de sesión; úselo únicamente tras confirmar que se revierte también el servidor.
-4. No retire las columnas/índices agregados a BuDi durante un rollback ordinario: son compatibles hacia atrás y eliminarlos aumenta el riesgo. Restaure el backup de BuDi si fuese indispensable.
+4. No retire las columnas/índices agregados a BuDi durante un rollback ordinario: son compatibles hacia atrás y eliminarlos aumenta el riesgo. Si la restauración fuese indispensable, mantenga el tráfico detenido, conserve un respaldo posterior al incidente y restaure el backup verificado tomado por el procedimiento anterior.
 5. No borre el volumen de archivos. Reconciliar filas y archivos antes de cualquier limpieza.
 6. Confirmar login, consulta y descarga con la versión anterior antes de reabrir tráfico.
 

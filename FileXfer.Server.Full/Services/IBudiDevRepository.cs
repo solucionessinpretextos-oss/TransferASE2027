@@ -30,7 +30,8 @@ namespace FileXfer.Server.Services
         int IdArchivoLocal,
         string Rfc,
         string FileName,
-        string StoredRelativePath);
+        string StoredRelativePath,
+        Guid? UploadId);
 
     /// <summary>
     /// Define todas las operaciones que FileXfer.Server necesita de BuDi_dev para alimentar

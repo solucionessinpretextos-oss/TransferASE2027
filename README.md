@@ -22,6 +22,8 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 - Políticas de archivo versionadas en base de datos: desde el Dashboard se habilita/bloquea cada extensión, se define límite de tamaño y se decide si requiere verificación profunda. Cada cambio exige motivo, control de concurrencia e historial con rollback.
 - El cliente muestra acción actual, archivo `n/N`, porcentaje por archivo y porcentaje total durante inspección, reparación, transferencia y confirmación del servidor.
 - La descarga servidor→cliente exige propietario o `admin/ops` con e.firma+MFA, revalida tamaño y SHA-256 sobre el mismo stream bloqueado que se entrega, admite HTTP Range y conserva parciales para reanudación. El cliente muestra progreso por archivo y total y vuelve a verificar SHA-256 antes de publicar el archivo descargado.
+- Las cargas nuevas se correlacionan entre BuDi y FileXfer mediante `ID_Upload`; los registros históricos sin identificador conservan una ruta de lectura compatible y siempre verifican hash/tamaño antes de descargarse.
+- Readiness valida conectividad, columnas e índices obligatorios de BuDi para no declarar listo un servidor incapaz de catalogar cargas idempotentes.
 - El cliente inspecciona una copia temporal; el servidor vuelve a validar los bytes persistidos antes de catalogarlos.
 - PDF cifrado, dañado no reparable o con acciones activas se rechaza. La reparación se hace sobre una copia y se revalida.
 - Office moderno sin macros, OpenDocument, EPUB, XPS, Visio, XML, JSON, SVG, texto, imágenes comunes y certificados tienen validadores específicos. Se bloquean cifrado, macros, relaciones externas, rutas internas inseguras y expansión excesiva.

@@ -52,14 +52,20 @@ public sealed class SecureFileDownloadService : ISecureFileDownloadService
         ArgumentNullException.ThrowIfNull(descriptor);
 
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
-        var upload = await db.Uploads.AsNoTracking()
+        var candidates = db.Uploads.AsNoTracking()
             .Where(candidate =>
                 candidate.Rfc == descriptor.Rfc &&
                 candidate.StoredRelativePath == descriptor.StoredRelativePath &&
                 candidate.Status == "Completed" &&
-                candidate.Sha256Server != null)
-            .OrderByDescending(candidate => candidate.CompletedUtc)
-            .FirstOrDefaultAsync(cancellationToken);
+                candidate.Sha256Server != null);
+
+        var upload = descriptor.UploadId.HasValue
+            ? await candidates.SingleOrDefaultAsync(
+                candidate => candidate.Id == descriptor.UploadId.Value,
+                cancellationToken)
+            : await candidates
+                .OrderByDescending(candidate => candidate.CompletedUtc)
+                .FirstOrDefaultAsync(cancellationToken);
 
         if (upload is null || string.IsNullOrWhiteSpace(upload.Sha256Server))
         {
