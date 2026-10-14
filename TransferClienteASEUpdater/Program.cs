@@ -109,6 +109,7 @@ internal static class Program
                 L("Validando y extrayendo el ZIP en staging...");
                 ExtractSafely(verifiedPackage, stagingRoot);
                 var source = DetectExtractionSource(stagingRoot, L);
+                ValidateExtractedPackageContents(source, exeName);
 
                 L("Aplicando actualización con respaldo transaccional...");
                 ApplyWithRollback(source, destPath, backupRoot, L);
@@ -313,22 +314,27 @@ internal static class Program
         {
             ExtractSafely(verifiedPackage, stagingRoot);
             var source = DetectExtractionSource(stagingRoot, _ => { });
-            var executable = Path.Combine(source, exeName);
-            if (!File.Exists(executable))
-                throw new InvalidDataException("El paquete no contiene el ejecutable principal esperado.");
-
-            var updater = Path.Combine(source, "TransferClienteASE.Updater.exe");
-            if (!File.Exists(updater))
-                throw new InvalidDataException("El paquete no contiene el actualizador seguro.");
-
-            var publicKey = Path.Combine(source, "update-public.pem");
-            if (!File.Exists(publicKey))
-                throw new InvalidDataException("El paquete no contiene la clave pública de actualización.");
+            ValidateExtractedPackageContents(source, exeName);
         }
         finally
         {
             DeleteTemporaryDirectory(verificationRoot);
         }
+    }
+
+    private static void ValidateExtractedPackageContents(string source, string exeName)
+    {
+        var executable = Path.Combine(source, exeName);
+        if (!File.Exists(executable))
+            throw new InvalidDataException("El paquete no contiene el ejecutable principal esperado.");
+
+        var updater = Path.Combine(source, "TransferClienteASE.Updater.exe");
+        if (!File.Exists(updater))
+            throw new InvalidDataException("El paquete no contiene el actualizador seguro.");
+
+        var publicKey = Path.Combine(source, "update-public.pem");
+        if (!File.Exists(publicKey))
+            throw new InvalidDataException("El paquete no contiene la clave pública de actualización.");
     }
 
     private static void ApplyWithRollback(
@@ -343,7 +349,9 @@ internal static class Program
 
         try
         {
-            foreach (var sourceFile in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+            var sourceFiles = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories)
+                .OrderBy(path => Path.GetRelativePath(sourceDir, path), StringComparer.OrdinalIgnoreCase);
+            foreach (var sourceFile in sourceFiles)
             {
                 var relative = Path.GetRelativePath(sourceDir, sourceFile);
                 var destination = Path.GetFullPath(Path.Combine(destinationDir, relative));
@@ -354,22 +362,23 @@ internal static class Program
                 EnsureSafeDestinationPath(destinationDir, destinationDirectory);
                 Directory.CreateDirectory(destinationDirectory);
 
-                if (File.Exists(destination))
+                var destinationExists = File.Exists(destination);
+                if (destinationExists)
                     RejectReparsePoint(new FileInfo(destination));
 
-                if (File.Exists(destination))
+                string? backup = null;
+                if (destinationExists)
                 {
-                    var backup = Path.Combine(backupRoot, relative);
+                    backup = Path.Combine(backupRoot, relative);
                     Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
                     File.Copy(destination, backup, overwrite: false);
-                    backups.Add((backup, destination));
-                }
-                else
-                {
-                    created.Add(destination);
                 }
 
-                CopyWithRetry(sourceFile, destination);
+                PublishAtomically(sourceFile, destination, destinationExists);
+                if (backup is not null)
+                    backups.Add((backup, destination));
+                else
+                    created.Add(destination);
                 log($"Actualizado: {relative}");
             }
         }
@@ -407,6 +416,41 @@ internal static class Program
                 throw new AggregateException("La actualización falló y el rollback quedó incompleto.", new[] { applyError }.Concat(rollbackErrors));
 
             throw new InvalidOperationException("La actualización falló; la instalación anterior fue restaurada.", applyError);
+        }
+    }
+
+    private static void PublishAtomically(string source, string destination, bool destinationExists)
+    {
+        var replacement = Path.Combine(
+            Path.GetDirectoryName(destination)!,
+            $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.update");
+        try
+        {
+            CopyWithRetry(source, replacement);
+            Exception? last = null;
+            for (var attempt = 1; attempt <= 25; attempt++)
+            {
+                try
+                {
+                    if (destinationExists)
+                        File.Replace(replacement, destination, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                    else
+                        File.Move(replacement, destination);
+                    return;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    last = ex;
+                    Thread.Sleep(250);
+                }
+            }
+
+            throw new IOException($"No se pudo publicar {Path.GetFileName(destination)}.", last);
+        }
+        finally
+        {
+            if (File.Exists(replacement))
+                File.Delete(replacement);
         }
     }
 

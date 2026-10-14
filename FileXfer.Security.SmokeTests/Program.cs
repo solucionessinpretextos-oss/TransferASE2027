@@ -59,7 +59,7 @@ Console.WriteLine("PASS file-policies=seed version conflict bypass limit rollbac
 Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent mfa-authorized");
 Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved");
 Console.WriteLine("PASS secure-download=hash-verified tamper-and-traversal-blocked");
-Console.WriteLine("PASS updater=signed-package-applied verify-only temp-relaunch rollback invalid-signature-and-zip-slip-rejected");
+Console.WriteLine("PASS updater=signed-package-applied complete-package-required verify-only temp-relaunch rollback invalid-signature-and-zip-slip-rejected");
 return 0;
 
 static void TestSqlTransportPolicy()
@@ -686,6 +686,8 @@ static async Task TestUpdaterAsync(string updaterPath)
         {
             AddFile(archive, "SmokeClient.exe", GetHarmlessWindowsExecutable());
             AddText(archive, "config.txt", "new");
+            AddFile(archive, "TransferClienteASE.Updater.exe", updaterPath);
+            AddText(archive, "update-public.pem", rsa.ExportSubjectPublicKeyInfoPem());
         });
         var validManifest = Sign(validZip, version, rsa);
         var validDestination = Path.Combine(root, "valid-destination");
@@ -707,6 +709,76 @@ static async Task TestUpdaterAsync(string updaterPath)
             "El updater no instaló el ejecutable validado.");
         Require(await File.ReadAllTextAsync(Path.Combine(validDestination, "config.txt")) == "new",
             "El updater no aplicó el contenido del paquete validado.");
+
+        var incompleteZip = Path.Combine(root, "incomplete.zip");
+        CreateZip(incompleteZip, archive =>
+        {
+            AddFile(archive, "SmokeClient.exe", GetHarmlessWindowsExecutable());
+            AddText(archive, "config.txt", "new");
+        });
+        var incompleteManifest = Sign(incompleteZip, version, rsa);
+        var incompleteDestination = Path.Combine(root, "incomplete-destination");
+        Directory.CreateDirectory(incompleteDestination);
+        var incompleteSentinel = Path.Combine(incompleteDestination, "config.txt");
+        await File.WriteAllTextAsync(incompleteSentinel, "old");
+        var incompleteResult = await RunUpdaterAsync(
+            updaterPath,
+            incompleteZip,
+            incompleteDestination,
+            "SmokeClient.exe",
+            version,
+            incompleteManifest.Hash,
+            incompleteManifest.Signature,
+            publicKeyPath);
+        Require(incompleteResult.ExitCode == 2,
+            "El updater aceptó un paquete incompleto aunque estaba firmado.");
+        Require(await File.ReadAllTextAsync(incompleteSentinel) == "old" &&
+                !File.Exists(Path.Combine(incompleteDestination, "SmokeClient.exe")),
+            "El updater modificó el destino antes de validar el contenido obligatorio.");
+
+        var rollbackZip = Path.Combine(root, "rollback.zip");
+        CreateZip(rollbackZip, archive =>
+        {
+            AddText(archive, "00-config.txt", "new");
+            AddText(archive, "10-locked.txt", "new");
+            AddFile(archive, "SmokeClient.exe", GetHarmlessWindowsExecutable());
+            AddFile(archive, "TransferClienteASE.Updater.exe", updaterPath);
+            AddText(archive, "update-public.pem", rsa.ExportSubjectPublicKeyInfoPem());
+        });
+        var rollbackManifest = Sign(rollbackZip, version, rsa);
+        var rollbackDestination = Path.Combine(root, "rollback-destination");
+        Directory.CreateDirectory(rollbackDestination);
+        var rollbackConfig = Path.Combine(rollbackDestination, "00-config.txt");
+        var rollbackLocked = Path.Combine(rollbackDestination, "10-locked.txt");
+        await File.WriteAllTextAsync(rollbackConfig, "old");
+        await File.WriteAllTextAsync(rollbackLocked, "old");
+
+        (int ExitCode, string Output) rollbackResult;
+        using (var lockedFile = new FileStream(
+                   rollbackLocked,
+                   FileMode.Open,
+                   FileAccess.ReadWrite,
+                   FileShare.None))
+        {
+            rollbackResult = await RunUpdaterAsync(
+                updaterPath,
+                rollbackZip,
+                rollbackDestination,
+                "SmokeClient.exe",
+                version,
+                rollbackManifest.Hash,
+                rollbackManifest.Signature,
+                publicKeyPath);
+        }
+
+        Require(rollbackResult.ExitCode == 2,
+            "El updater no reportó el fallo provocado por un archivo bloqueado.");
+        Require(rollbackResult.Output.Contains("restaurada", StringComparison.OrdinalIgnoreCase),
+            $"El updater no confirmó el rollback completo: {rollbackResult.Output}");
+        Require(await File.ReadAllTextAsync(rollbackConfig) == "old" &&
+                await File.ReadAllTextAsync(rollbackLocked) == "old" &&
+                !File.Exists(Path.Combine(rollbackDestination, "SmokeClient.exe")),
+            "El rollback no restauró exactamente el estado anterior de la instalación.");
 
         var rejectedDestination = Path.Combine(root, "rejected-destination");
         Directory.CreateDirectory(rejectedDestination);
