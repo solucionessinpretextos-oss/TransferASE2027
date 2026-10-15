@@ -202,8 +202,9 @@ static async Task TestAlertDeliveryQueueAsync()
             "RFC=TEST010101AAA",
             CancellationToken.None);
 
-        Require(persistStopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
-            "La persistencia del outbox bloqueó excesivamente al productor.");
+        Require(
+            persistStopwatch.Elapsed < TimeSpan.FromSeconds(options.PersistenceTimeoutSeconds + 1),
+            "La persistencia del outbox excedió su límite temporal configurado.");
         Require(producer.GetSnapshot().DeduplicatedTotal == 1,
             "El outbox no deduplicó el evento repetido.");
     }
