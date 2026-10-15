@@ -31,6 +31,7 @@ namespace FileXfer.Server.Data
         public DbSet<FileTypePolicyRevision> FileTypePolicyRevisions => Set<FileTypePolicyRevision>();
         public DbSet<UploadReceipt> UploadReceipts => Set<UploadReceipt>();
         public DbSet<ReceiptChainState> ReceiptChainStates => Set<ReceiptChainState>();
+        public DbSet<AlertOutboxDelivery> AlertOutboxDeliveries => Set<AlertOutboxDelivery>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -153,6 +154,41 @@ namespace FileXfer.Server.Data
                 .IsUnique();
             modelBuilder.Entity<RefreshToken>()
                 .HasIndex(x => new { x.FamilyId, x.IsRevoked });
+
+            modelBuilder.Entity<AlertOutboxDelivery>()
+                .HasIndex(x => new { x.Transport, x.DeduplicationKey, x.DeduplicationBucket })
+                .IsUnique();
+
+            modelBuilder.Entity<AlertOutboxDelivery>()
+                .HasIndex(x => new { x.Status, x.NextAttemptUtc, x.LeaseExpiresUtc });
+
+            modelBuilder.Entity<AlertOutboxDelivery>()
+                .HasIndex(x => new { x.Status, x.UpdatedUtc });
+
+            modelBuilder.Entity<AlertOutboxDelivery>()
+                .HasIndex(x => x.EventId);
+
+            modelBuilder.Entity<AlertOutboxDelivery>()
+                .Property(x => x.RowVersion)
+                .IsRowVersion();
+
+            modelBuilder.Entity<AlertOutboxDelivery>()
+                .ToTable(table =>
+                {
+                    table.HasCheckConstraint(
+                        "CK_AlertOutboxDeliveries_Status",
+                        "[Status] IN (N'Pending', N'Processing', N'Delivered', N'DeadLetter')");
+                    table.HasCheckConstraint(
+                        "CK_AlertOutboxDeliveries_AttemptCount",
+                        "[AttemptCount] >= 0");
+                    table.HasCheckConstraint(
+                        "CK_AlertOutboxDeliveries_Lease",
+                        "([Status] = N'Processing' AND [LeaseId] IS NOT NULL AND [LeaseExpiresUtc] IS NOT NULL) OR " +
+                        "([Status] <> N'Processing' AND [LeaseId] IS NULL AND [LeaseExpiresUtc] IS NULL)");
+                    table.HasCheckConstraint(
+                        "CK_AlertOutboxDeliveries_DeliveredUtc",
+                        "[Status] <> N'Delivered' OR [DeliveredUtc] IS NOT NULL");
+                });
         }
     }
 }

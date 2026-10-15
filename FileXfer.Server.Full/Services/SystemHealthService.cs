@@ -174,6 +174,7 @@ namespace FileXfer.Server.Services
                 AlertingEnabled = alertDelivery.Enabled,
                 AlertQueuePending = alertDelivery.Pending,
                 AlertQueueInFlight = alertDelivery.InFlight,
+                AlertDeadLetter = alertDelivery.DeadLetter,
                 AlertQueueCapacity = alertDelivery.Capacity,
                 AlertEnqueuedTotal = alertDelivery.EnqueuedTotal,
                 AlertDeliveredTotal = alertDelivery.DeliveredTotal,

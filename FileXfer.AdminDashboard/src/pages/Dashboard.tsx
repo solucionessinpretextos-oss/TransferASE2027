@@ -337,7 +337,7 @@ export function Dashboard() {
             helperText={buildServicesHelper(server)}
           />
           <KpiCard
-            title="Cola de alertas"
+            title="Outbox SQL de alertas"
             value={
               server.alertingEnabled
                 ? `${server.alertQueuePending + server.alertQueueInFlight}/${server.alertQueueCapacity}`
@@ -345,7 +345,7 @@ export function Dashboard() {
             }
             helperText={
               server.alertingEnabled
-                ? `${server.alertDeliveredTotal} entregadas · ${server.alertDeduplicatedTotal} agrupadas · ${server.alertRetryTotal} reintentos · ${server.alertDroppedTotal} descartadas${server.alertLastFailureUtc ? ` · última falla ${formatDateTime(server.alertLastFailureUtc)}` : ""}`
+                ? `${server.alertDeliveredTotal} entregadas · ${server.alertDeadLetter} requieren atención · ${server.alertDeduplicatedTotal} agrupadas · ${server.alertRetryTotal} reintentos · ${server.alertDroppedTotal} no persistidas${server.alertLastFailureUtc ? ` · última falla ${formatDateTime(server.alertLastFailureUtc)}` : ""}`
                 : "Solo registro local"
             }
           />

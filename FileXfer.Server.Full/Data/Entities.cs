@@ -153,3 +153,62 @@ public sealed class RefreshToken
     [MaxLength(64)]
     public string? CreatedFromIp { get; set; }
 }
+
+public static class AlertOutboxStatuses
+{
+    public const string Pending = "Pending";
+    public const string Processing = "Processing";
+    public const string Delivered = "Delivered";
+    public const string DeadLetter = "DeadLetter";
+}
+
+/// <summary>
+/// Entrega externa durable de una alerta de seguridad. Cada transporte obtiene
+/// su propia fila para que un fallo SMTP no repita una entrega webhook exitosa.
+/// </summary>
+public sealed class AlertOutboxDelivery
+{
+    [Key]
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid EventId { get; set; }
+
+    [Required, MaxLength(32)]
+    public string Transport { get; set; } = "";
+
+    [Required, MaxLength(64)]
+    public string DeduplicationKey { get; set; } = "";
+
+    public long DeduplicationBucket { get; set; }
+
+    [Required, MaxLength(200)]
+    public string Title { get; set; } = "";
+
+    [Required, MaxLength(16_384)]
+    public string Message { get; set; } = "";
+
+    public DateTimeOffset OccurredUtc { get; set; }
+
+    [Required, MaxLength(24)]
+    public string Status { get; set; } = AlertOutboxStatuses.Pending;
+
+    public int AttemptCount { get; set; }
+
+    public DateTimeOffset NextAttemptUtc { get; set; }
+
+    public Guid? LeaseId { get; set; }
+
+    public DateTimeOffset? LeaseExpiresUtc { get; set; }
+
+    [MaxLength(128)]
+    public string? LastFailureCode { get; set; }
+
+    public DateTimeOffset? DeliveredUtc { get; set; }
+
+    public DateTimeOffset CreatedUtc { get; set; }
+
+    public DateTimeOffset UpdatedUtc { get; set; }
+
+    [Timestamp]
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+}

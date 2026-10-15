@@ -24,6 +24,7 @@ namespace FileXfer.Server.Dtos.Admin
         public bool AlertingEnabled { get; set; }
         public int AlertQueuePending { get; set; }
         public int AlertQueueInFlight { get; set; }
+        public int AlertDeadLetter { get; set; }
         public int AlertQueueCapacity { get; set; }
         public long AlertEnqueuedTotal { get; set; }
         public long AlertDeliveredTotal { get; set; }

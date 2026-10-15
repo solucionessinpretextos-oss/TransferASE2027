@@ -8,8 +8,8 @@ La generación, firma y verificación de binarios está documentada en `RELEASE.
 2. Crear backup consistente de FileXferDb, BuDi y del volumen de archivos; verificar una restauración de muestra. Para BuDi puede usarse `sql/010_budi_backup_before_hardening.sql`, suministrando una ruta nueva mediante `-v BackupFile=...`; el script ejecuta `RESTORE VERIFYONLY`.
 3. Detener nuevas cargas o poner el servicio en drenado.
 4. Ejecutar `sql/001_budi_transfer_archivos_hardening.sql` en BuDi con `sqlcmd -b -I`. El script usa una transacción, bloqueo de aplicación y postcondiciones; aborta y revierte si detecta duplicados o índices incompatibles.
-5. Revisar y ejecutar `sql/002_filexferdb_idempotent.sql` en FileXferDb. Sus preflight abortan antes de truncar datos o crear índices sobre duplicados.
-6. Aplicar la migración EF `TransferCapabilities2027`; confirmar tablas de políticas, revisiones, recibos, cadena e índices de reanudación.
+5. Revisar y ejecutar, en orden, `sql/002_filexferdb_idempotent.sql`, `sql/003_transfer_capabilities_2027.sql` y `sql/004_durable_alert_outbox_2027.sql` en FileXferDb. Los scripts son idempotentes; sus preflight abortan antes de truncar datos o crear índices sobre duplicados.
+6. Confirmar en `__EFMigrationsHistory` que se aplicó hasta `DurableAlertOutbox2027`; verificar tablas de políticas, revisiones, recibos, cadena, índices de reanudación y `AlertOutboxDeliveries`.
 7. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.1.0.0 y updater desde artefactos firmados.
 8. Validar `/healthz` (proceso vivo) y `/readyz` (FileXferDb disponible y contrato de esquema BuDi completo), login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
 9. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
@@ -52,9 +52,10 @@ Si se activa `Alerts__Enabled=true`, el arranque exige al menos un canal externo
 - Webhook: `Alerts__WebhookUrl` debe ser HTTPS, sin credenciales embebidas ni fragmentos. El cliente no sigue redirecciones, limita conexiones y termina la petición según `Alerts__WebhookTimeoutSeconds` (1–120 segundos).
 - Email: `Alerts__SmtpHost`, `Alerts__SmtpPort`, `Alerts__EmailFrom` y `Alerts__EmailTo`; `Alerts__SmtpUseTls` debe permanecer en `true`. Usuario y contraseña SMTP se proporcionan juntos y la contraseña debe venir del almacén secreto mediante `Alerts__SmtpPassword`, nunca de un archivo versionado.
 - `Alerts__SmtpTimeoutSeconds` debe estar entre 1 y 120 segundos. Un fallo de entrega se registra, pero no revierte la operación de negocio que originó la alerta.
-- La entrega externa usa una cola acotada (`Alerts__QueueCapacity`, 16–10000) y `Alerts__WorkerCount` consumidores (1–16). El evento siempre se escribe primero en el log local; si la cola se llena, el canal externo se descarta de forma explícita, incrementa métricas y el Dashboard marca Alertas con error.
+- La entrega externa usa un outbox persistente en FileXferDb y `Alerts__WorkerCount` consumidores (1–16). `Alerts__QueueCapacity` es ahora el umbral de backlog que degrada la salud; alcanzar ese valor no descarta filas SQL.
 - `Alerts__MaxDeliveryAttempts` controla los intentos (1–10) y `Alerts__RetryInitialDelayMilliseconds` el backoff exponencial inicial (100–30000 ms). El mismo evento se suprime durante `Alerts__DeduplicationWindowSeconds` (0–3600) para evitar tormentas.
-- En apagado ordenado, `Alerts__ShutdownDrainSeconds` concede entre 1 y 120 segundos para vaciar la cola. La cola reside en memoria: una terminación abrupta puede perder entregas externas pendientes, pero no el registro local. Si el SLA exige entrega garantizada entre reinicios, debe sustituirse por un outbox persistente y no ocultar esta limitación operativa.
+- La persistencia tiene un límite independiente (`Alerts__PersistenceTimeoutSeconds`). Los workers toman leases recuperables (`Alerts__LeaseSeconds`), consultan por lotes (`Alerts__BatchSize`) y vuelven a intentar después de reinicios o caídas.
+- Las entregas exitosas se conservan `Alerts__DeliveredRetentionDays` (30 por omisión); las que agotan reintentos pasan a dead-letter y se conservan `Alerts__DeadLetterRetentionDays` (90 por omisión). El Dashboard marca el subsistema con error mientras exista dead-letter pendiente de atención.
 - La semántica externa es al menos una vez: un timeout ocurrido después de que el proveedor aceptó el mensaje puede producir un duplicado. El webhook recibe `Idempotency-Key` con el identificador del evento; configure el receptor para respetarlo cuando soporte idempotencia.
 
 Nunca active `AllowDevelopmentBypass` fuera de Development.
@@ -95,4 +96,4 @@ La lista aceptada ya no vive en el ejecutable. Adminístrela en **Dashboard → 
 
 ## Retención física
 
-Las APIs realizan baja lógica y no borran archivos físicos. Defina plazo legal, cuarentena, doble aprobación, comparación de rutas descifradas en todo el catálogo y registro de auditoría antes de habilitar un job de purga.
+Las APIs realizan baja lógica y no borran archivos físicos. La línea base recomendada está en `OPERATIONAL-BASELINE.md`: ningún expediente completado se purga hasta que Jurídico/Archivo apruebe la clasificación; después, la eliminación requiere legal hold, cuarentena de 30 días, doble aprobación, comparación de rutas descifradas en todo el catálogo y registro de auditoría.

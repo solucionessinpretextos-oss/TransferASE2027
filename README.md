@@ -58,4 +58,4 @@ El dashboard se construye desde `FileXfer.AdminDashboard` con `npm ci` y `npm ru
 
 ## Producción
 
-No copie secretos a `appsettings.json`. Use variables de entorno, el almacén de secretos de la plataforma o un proveedor administrado. Siga obligatoriamente [deployment/README.md](deployment/README.md) antes de publicar.
+No copie secretos a `appsettings.json`. Use variables de entorno, el almacén de secretos de la plataforma o un proveedor administrado. Siga obligatoriamente [deployment/README.md](deployment/README.md) antes de publicar; las decisiones pendientes y la propuesta de retención/RPO/RTO están en [deployment/OPERATIONAL-BASELINE.md](deployment/OPERATIONAL-BASELINE.md).

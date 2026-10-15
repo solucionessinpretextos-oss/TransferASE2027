@@ -19,6 +19,7 @@ export interface ServerHealthDto {
   alertingEnabled: boolean;
   alertQueuePending: number;
   alertQueueInFlight: number;
+  alertDeadLetter: number;
   alertQueueCapacity: number;
   alertEnqueuedTotal: number;
   alertDeliveredTotal: number;

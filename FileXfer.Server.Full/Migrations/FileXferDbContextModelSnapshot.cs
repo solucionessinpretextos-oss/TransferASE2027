@@ -17,10 +17,104 @@ namespace FileXfer.Server.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.8")
+                .HasAnnotation("ProductVersion", "8.0.32")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
+
+            modelBuilder.Entity("FileXfer.Server.Data.AlertOutboxDelivery", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset>("CreatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<long>("DeduplicationBucket")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("DeduplicationKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset?>("DeliveredUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("LastFailureCode")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("LeaseId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(16384)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTimeOffset>("NextAttemptUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("OccurredUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("nvarchar(24)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Transport")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<DateTimeOffset>("UpdatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventId");
+
+                    b.HasIndex("Status", "UpdatedUtc");
+
+                    b.HasIndex("Status", "NextAttemptUtc", "LeaseExpiresUtc");
+
+                    b.HasIndex("Transport", "DeduplicationKey", "DeduplicationBucket")
+                        .IsUnique();
+
+                    b.ToTable("AlertOutboxDeliveries", t =>
+                        {
+                            t.HasCheckConstraint("CK_AlertOutboxDeliveries_AttemptCount", "[AttemptCount] >= 0");
+
+                            t.HasCheckConstraint("CK_AlertOutboxDeliveries_DeliveredUtc", "[Status] <> N'Delivered' OR [DeliveredUtc] IS NOT NULL");
+
+                            t.HasCheckConstraint("CK_AlertOutboxDeliveries_Lease", "([Status] = N'Processing' AND [LeaseId] IS NOT NULL AND [LeaseExpiresUtc] IS NOT NULL) OR ([Status] <> N'Processing' AND [LeaseId] IS NULL AND [LeaseExpiresUtc] IS NULL)");
+
+                            t.HasCheckConstraint("CK_AlertOutboxDeliveries_Status", "[Status] IN (N'Pending', N'Processing', N'Delivered', N'DeadLetter')");
+                        });
+                });
 
             modelBuilder.Entity("FileXfer.Server.Data.AuditLog", b =>
                 {

@@ -52,7 +52,7 @@ Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
 Console.WriteLine("PASS alert-configuration=https tls complete-channels bounded-timeouts");
-Console.WriteLine("PASS alert-delivery=nonblocking bounded deduplicated retried observable drained");
+Console.WriteLine("PASS alert-delivery=sql-durable restart-recovered lease-recovered deduplicated retried observable");
 Console.WriteLine("PASS budi-schema=required-columns-and-indexes-enforced");
 Console.WriteLine("PASS client-update-manifest=https-zip-and-cryptographic-fields-required");
 Console.WriteLine("PASS rfc-resource-authorization=owner privileged-mfa cross-rfc-blocked");
@@ -164,6 +164,11 @@ static void TestAlertConfigurationPolicy()
 
 static async Task TestAlertDeliveryQueueAsync()
 {
+    var databaseName = "alert-outbox-smoke-" + Guid.NewGuid().ToString("N");
+    var dbOptions = new DbContextOptionsBuilder<FileXferDbContext>()
+        .UseInMemoryDatabase(databaseName)
+        .Options;
+    var factory = new SmokeDbContextFactory(dbOptions);
     var options = new AlertOptions
     {
         Enabled = true,
@@ -171,59 +176,116 @@ static async Task TestAlertDeliveryQueueAsync()
         QueueCapacity = 16,
         WorkerCount = 1,
         MaxDeliveryAttempts = 2,
-        RetryInitialDelayMilliseconds = 1,
+        RetryInitialDelayMilliseconds = 100,
         DeduplicationWindowSeconds = 60,
-        ShutdownDrainSeconds = 2
+        ShutdownDrainSeconds = 2,
+        PollIntervalMilliseconds = 100,
+        LeaseSeconds = 30,
+        BatchSize = 8
     };
+
+    using (var producer = new AlertDeliveryQueue(
+               factory,
+               new LogAlertSink(NullLogger<LogAlertSink>.Instance),
+               new[] { new SmokeAlertTransport() },
+               Options.Create(options),
+               NullLogger<AlertDeliveryQueue>.Instance))
+    {
+        var persistStopwatch = Stopwatch.StartNew();
+        await producer.NotifySecurityEventAsync(
+            "Evento repetido",
+            "RFC=TEST010101AAA",
+            CancellationToken.None);
+        persistStopwatch.Stop();
+        await producer.NotifySecurityEventAsync(
+            "Evento repetido",
+            "RFC=TEST010101AAA",
+            CancellationToken.None);
+
+        Require(persistStopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
+            "La persistencia del outbox bloqueó excesivamente al productor.");
+        Require(producer.GetSnapshot().DeduplicatedTotal == 1,
+            "El outbox no deduplicó el evento repetido.");
+    }
+
+    await using (var db = await factory.CreateDbContextAsync())
+    {
+        Require(await db.AlertOutboxDeliveries.CountAsync() == 1,
+            "El outbox no persistió exactamente una entrega antes de iniciar el worker.");
+        Require((await db.AlertOutboxDeliveries.SingleAsync()).Status == AlertOutboxStatuses.Pending,
+            "La alerta no quedó pendiente para recuperarse después del reinicio.");
+    }
+
     var transport = new SmokeAlertTransport(failuresBeforeSuccess: 1);
     using var queue = new AlertDeliveryQueue(
+        factory,
         new LogAlertSink(NullLogger<LogAlertSink>.Instance),
         new[] { transport },
         Options.Create(options),
         NullLogger<AlertDeliveryQueue>.Instance);
 
     await queue.StartAsync(CancellationToken.None);
-    var enqueueStopwatch = Stopwatch.StartNew();
-    await queue.NotifySecurityEventAsync("Evento repetido", "RFC=TEST010101AAA", CancellationToken.None);
-    enqueueStopwatch.Stop();
-    await queue.NotifySecurityEventAsync("Evento repetido", "RFC=TEST010101AAA", CancellationToken.None);
-
-    Require(enqueueStopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
-        "La entrega de alertas bloqueó al productor.");
     await WaitUntilAsync(
         () => queue.GetSnapshot().DeliveredTotal == 1,
         TimeSpan.FromSeconds(3),
-        "La cola no entregó la alerta después del reintento.");
+        "El outbox no recuperó y entregó la alerta después del reinicio.");
 
     var snapshot = queue.GetSnapshot();
     Require(snapshot.Pending == 0 && snapshot.InFlight == 0,
-        "La cola conservó trabajo pendiente después de entregar.");
-    Require(snapshot.DeduplicatedTotal == 1,
-        "La cola no deduplicó el evento repetido.");
+        "El outbox conservó trabajo pendiente después de entregar.");
     Require(snapshot.RetryTotal == 1 && snapshot.TerminalFailureTotal == 0,
-        "La cola no registró correctamente el reintento exitoso.");
+        "El outbox no registró correctamente el reintento exitoso.");
     Require(transport.Attempts == 2,
         "El transporte no recibió exactamente dos intentos.");
     await queue.StopAsync(CancellationToken.None);
 
-    var saturatedOptions = new AlertOptions
+    await using (var db = await factory.CreateDbContextAsync())
     {
-        Enabled = true,
-        WebhookUrl = "https://alerts.example.test/hook",
-        QueueCapacity = 1,
-        WorkerCount = 1,
-        DeduplicationWindowSeconds = 0
-    };
-    using var saturatedQueue = new AlertDeliveryQueue(
+        var stored = await db.AlertOutboxDeliveries.SingleAsync();
+        Require(stored.Status == AlertOutboxStatuses.Delivered && stored.AttemptCount == 1,
+            "El estado SQL final no refleja la entrega recuperada y su reintento.");
+    }
+
+    var leaseOptions = new DbContextOptionsBuilder<FileXferDbContext>()
+        .UseInMemoryDatabase("alert-lease-smoke-" + Guid.NewGuid().ToString("N"))
+        .Options;
+    var leaseFactory = new SmokeDbContextFactory(leaseOptions);
+    await using (var db = await leaseFactory.CreateDbContextAsync())
+    {
+        db.AlertOutboxDeliveries.Add(new AlertOutboxDelivery
+        {
+            EventId = Guid.NewGuid(),
+            Transport = "smoke",
+            DeduplicationKey = new string('A', 64),
+            DeduplicationBucket = 1,
+            Title = "Lease vencido",
+            Message = "Debe recuperarse",
+            OccurredUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            Status = AlertOutboxStatuses.Processing,
+            LeaseId = Guid.NewGuid(),
+            LeaseExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+            NextAttemptUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            CreatedUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            UpdatedUtc = DateTimeOffset.UtcNow.AddMinutes(-1)
+        });
+        await db.SaveChangesAsync();
+    }
+
+    var leaseTransport = new SmokeAlertTransport();
+    using var leaseQueue = new AlertDeliveryQueue(
+        leaseFactory,
         new LogAlertSink(NullLogger<LogAlertSink>.Instance),
-        new[] { new SmokeAlertTransport() },
-        Options.Create(saturatedOptions),
+        new[] { leaseTransport },
+        Options.Create(options),
         NullLogger<AlertDeliveryQueue>.Instance);
-    await saturatedQueue.NotifySecurityEventAsync("Evento 1", "Uno", CancellationToken.None);
-    await saturatedQueue.NotifySecurityEventAsync("Evento 2", "Dos", CancellationToken.None);
-    var saturated = saturatedQueue.GetSnapshot();
-    Require(saturated.Pending == 1 && saturated.DroppedTotal == 1 && !saturated.IsHealthy,
-        "La cola no aplicó presión controlada cuando alcanzó su capacidad.");
+    await leaseQueue.StartAsync(CancellationToken.None);
+    await WaitUntilAsync(
+        () => leaseQueue.GetSnapshot().DeliveredTotal == 1,
+        TimeSpan.FromSeconds(3),
+        "El outbox no recuperó un lease vencido.");
+    await leaseQueue.StopAsync(CancellationToken.None);
+    Require(leaseTransport.Attempts == 1,
+        "La recuperación del lease no produjo exactamente una entrega.");
 }
 
 static async Task WaitUntilAsync(

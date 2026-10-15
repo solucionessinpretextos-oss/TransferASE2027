@@ -133,7 +133,12 @@ var cs = builder.Configuration.GetConnectionString("FileXferDb");
 
 if (!string.IsNullOrWhiteSpace(cs))
 {
-    builder.Services.AddDbContextFactory<FileXferDbContext>(o => o.UseSqlServer(cs));
+    builder.Services.AddDbContextFactory<FileXferDbContext>(o => o.UseSqlServer(
+        cs,
+        sql => sql.EnableRetryOnFailure(
+            maxRetryCount: 3,
+            maxRetryDelay: TimeSpan.FromSeconds(5),
+            errorNumbersToAdd: null)));
 }
 else if (builder.Environment.IsDevelopment())
 {

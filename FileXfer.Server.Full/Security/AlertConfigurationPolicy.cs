@@ -61,6 +61,27 @@ public static class AlertConfigurationPolicy
         if (options.ShutdownDrainSeconds is < 1 or > 120)
             errors.Add("Alerts:ShutdownDrainSeconds debe estar entre 1 y 120.");
 
+        if (options.PersistenceTimeoutSeconds is < 1 or > 30)
+            errors.Add("Alerts:PersistenceTimeoutSeconds debe estar entre 1 y 30.");
+
+        if (options.PollIntervalMilliseconds is < 100 or > 10_000)
+            errors.Add("Alerts:PollIntervalMilliseconds debe estar entre 100 y 10000.");
+
+        if (options.LeaseSeconds is < 30 or > 600)
+            errors.Add("Alerts:LeaseSeconds debe estar entre 30 y 600.");
+
+        if (options.BatchSize is < 1 or > 256)
+            errors.Add("Alerts:BatchSize debe estar entre 1 y 256.");
+
+        if (options.DeliveredRetentionDays is < 1 or > 365)
+            errors.Add("Alerts:DeliveredRetentionDays debe estar entre 1 y 365.");
+
+        if (options.DeadLetterRetentionDays is < 30 or > 730)
+            errors.Add("Alerts:DeadLetterRetentionDays debe estar entre 30 y 730.");
+
+        if (options.CleanupIntervalHours is < 1 or > 168)
+            errors.Add("Alerts:CleanupIntervalHours debe estar entre 1 y 168.");
+
         return errors;
     }
 

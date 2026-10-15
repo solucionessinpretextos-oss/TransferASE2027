@@ -85,5 +85,12 @@ namespace FileXfer.Server.Options
         public int RetryInitialDelayMilliseconds { get; set; } = 1000;
         public int DeduplicationWindowSeconds { get; set; } = 60;
         public int ShutdownDrainSeconds { get; set; } = 15;
+        public int PersistenceTimeoutSeconds { get; set; } = 5;
+        public int PollIntervalMilliseconds { get; set; } = 500;
+        public int LeaseSeconds { get; set; } = 180;
+        public int BatchSize { get; set; } = 32;
+        public int DeliveredRetentionDays { get; set; } = 30;
+        public int DeadLetterRetentionDays { get; set; } = 90;
+        public int CleanupIntervalHours { get; set; } = 6;
     }
 }
