@@ -314,7 +314,9 @@ builder.Services.AddSingleton<ISystemHealthService, SystemHealthService>();
 
 builder.Services.AddSingleton<LogAlertSink>();
 builder.Services.AddSingleton<EmailAlertSink>();
+builder.Services.AddSingleton<IAlertTransport>(sp => sp.GetRequiredService<EmailAlertSink>());
 builder.Services.AddSingleton<WebhookAlertSink>();
+builder.Services.AddSingleton<IAlertTransport>(sp => sp.GetRequiredService<WebhookAlertSink>());
 builder.Services
     .AddHttpClient(WebhookAlertSink.HttpClientName, (services, http) =>
     {
@@ -335,21 +337,10 @@ builder.Services
             EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
         }
     });
-builder.Services.AddSingleton<IAlertSink>(sp =>
-{
-    var opts = sp.GetRequiredService<
-        Microsoft.Extensions.Options.IOptions<AlertOptions>>().Value;
-
-    var sinks = new List<IAlertSink> { sp.GetRequiredService<LogAlertSink>() };
-    if (opts.Enabled)
-    {
-        sinks.Add(sp.GetRequiredService<EmailAlertSink>());
-        sinks.Add(sp.GetRequiredService<WebhookAlertSink>());
-    }
-    return new CompositeAlertSink(
-        sinks,
-        sp.GetRequiredService<ILogger<CompositeAlertSink>>());
-});
+builder.Services.AddSingleton<AlertDeliveryQueue>();
+builder.Services.AddSingleton<IAlertSink>(sp => sp.GetRequiredService<AlertDeliveryQueue>());
+builder.Services.AddSingleton<IAlertDeliveryState>(sp => sp.GetRequiredService<AlertDeliveryQueue>());
+builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<AlertDeliveryQueue>());
 
 var app = builder.Build();
 

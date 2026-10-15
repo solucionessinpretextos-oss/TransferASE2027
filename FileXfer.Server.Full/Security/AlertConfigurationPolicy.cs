@@ -43,6 +43,24 @@ public static class AlertConfigurationPolicy
         if (options.WebhookTimeoutSeconds is < 1 or > 120)
             errors.Add("Alerts:WebhookTimeoutSeconds debe estar entre 1 y 120.");
 
+        if (options.QueueCapacity is < 16 or > 10_000)
+            errors.Add("Alerts:QueueCapacity debe estar entre 16 y 10000.");
+
+        if (options.WorkerCount is < 1 or > 16)
+            errors.Add("Alerts:WorkerCount debe estar entre 1 y 16.");
+
+        if (options.MaxDeliveryAttempts is < 1 or > 10)
+            errors.Add("Alerts:MaxDeliveryAttempts debe estar entre 1 y 10.");
+
+        if (options.RetryInitialDelayMilliseconds is < 100 or > 30_000)
+            errors.Add("Alerts:RetryInitialDelayMilliseconds debe estar entre 100 y 30000.");
+
+        if (options.DeduplicationWindowSeconds is < 0 or > 3_600)
+            errors.Add("Alerts:DeduplicationWindowSeconds debe estar entre 0 y 3600.");
+
+        if (options.ShutdownDrainSeconds is < 1 or > 120)
+            errors.Add("Alerts:ShutdownDrainSeconds debe estar entre 1 y 120.");
+
         return errors;
     }
 

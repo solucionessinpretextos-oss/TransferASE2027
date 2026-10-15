@@ -20,6 +20,19 @@ namespace FileXfer.Server.Dtos.Admin
         public bool DatabaseOk { get; set; }
         public bool StorageOk { get; set; }
         public bool MessageBusOk { get; set; }
+        public bool AlertingOk { get; set; }
+        public bool AlertingEnabled { get; set; }
+        public int AlertQueuePending { get; set; }
+        public int AlertQueueInFlight { get; set; }
+        public int AlertQueueCapacity { get; set; }
+        public long AlertEnqueuedTotal { get; set; }
+        public long AlertDeliveredTotal { get; set; }
+        public long AlertDeduplicatedTotal { get; set; }
+        public long AlertDroppedTotal { get; set; }
+        public long AlertRetryTotal { get; set; }
+        public long AlertTerminalFailureTotal { get; set; }
+        public DateTimeOffset? AlertLastDeliveredUtc { get; set; }
+        public DateTimeOffset? AlertLastFailureUtc { get; set; }
     }
 
     public sealed class TransferSummaryDto

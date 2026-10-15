@@ -52,6 +52,10 @@ Si se activa `Alerts__Enabled=true`, el arranque exige al menos un canal externo
 - Webhook: `Alerts__WebhookUrl` debe ser HTTPS, sin credenciales embebidas ni fragmentos. El cliente no sigue redirecciones, limita conexiones y termina la petición según `Alerts__WebhookTimeoutSeconds` (1–120 segundos).
 - Email: `Alerts__SmtpHost`, `Alerts__SmtpPort`, `Alerts__EmailFrom` y `Alerts__EmailTo`; `Alerts__SmtpUseTls` debe permanecer en `true`. Usuario y contraseña SMTP se proporcionan juntos y la contraseña debe venir del almacén secreto mediante `Alerts__SmtpPassword`, nunca de un archivo versionado.
 - `Alerts__SmtpTimeoutSeconds` debe estar entre 1 y 120 segundos. Un fallo de entrega se registra, pero no revierte la operación de negocio que originó la alerta.
+- La entrega externa usa una cola acotada (`Alerts__QueueCapacity`, 16–10000) y `Alerts__WorkerCount` consumidores (1–16). El evento siempre se escribe primero en el log local; si la cola se llena, el canal externo se descarta de forma explícita, incrementa métricas y el Dashboard marca Alertas con error.
+- `Alerts__MaxDeliveryAttempts` controla los intentos (1–10) y `Alerts__RetryInitialDelayMilliseconds` el backoff exponencial inicial (100–30000 ms). El mismo evento se suprime durante `Alerts__DeduplicationWindowSeconds` (0–3600) para evitar tormentas.
+- En apagado ordenado, `Alerts__ShutdownDrainSeconds` concede entre 1 y 120 segundos para vaciar la cola. La cola reside en memoria: una terminación abrupta puede perder entregas externas pendientes, pero no el registro local. Si el SLA exige entrega garantizada entre reinicios, debe sustituirse por un outbox persistente y no ocultar esta limitación operativa.
+- La semántica externa es al menos una vez: un timeout ocurrido después de que el proveedor aceptó el mensaje puede producir un duplicado. El webhook recibe `Idempotency-Key` con el identificador del evento; configure el receptor para respetarlo cuando soporte idempotencia.
 
 Nunca active `AllowDevelopmentBypass` fuera de Development.
 

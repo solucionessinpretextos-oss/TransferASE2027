@@ -34,6 +34,7 @@ TestPathProtection();
 TestMfaSecretProtection();
 TestSqlTransportPolicy();
 TestAlertConfigurationPolicy();
+await TestAlertDeliveryQueueAsync();
 TestBudiSchemaRequirements();
 TestClientUpdateManifestEndpoint();
 TestRfcResourceAuthorization();
@@ -51,6 +52,7 @@ Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
 Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
 Console.WriteLine("PASS alert-configuration=https tls complete-channels bounded-timeouts");
+Console.WriteLine("PASS alert-delivery=nonblocking bounded deduplicated retried observable drained");
 Console.WriteLine("PASS budi-schema=required-columns-and-indexes-enforced");
 Console.WriteLine("PASS client-update-manifest=https-zip-and-cryptographic-fields-required");
 Console.WriteLine("PASS rfc-resource-authorization=owner privileged-mfa cross-rfc-blocked");
@@ -148,6 +150,94 @@ static void TestAlertConfigurationPolicy()
             EmailTo = "security@example.test"
         }).Count >= 2,
         "La política aceptó SMTP sin TLS o credenciales incompletas.");
+    Require(
+        AlertConfigurationPolicy.GetErrors(new AlertOptions
+        {
+            Enabled = true,
+            WebhookUrl = "https://alerts.example.test/hook",
+            QueueCapacity = 0,
+            WorkerCount = 0,
+            MaxDeliveryAttempts = 0
+        }).Count >= 3,
+        "La política aceptó límites inválidos para la cola de alertas.");
+}
+
+static async Task TestAlertDeliveryQueueAsync()
+{
+    var options = new AlertOptions
+    {
+        Enabled = true,
+        WebhookUrl = "https://alerts.example.test/hook",
+        QueueCapacity = 16,
+        WorkerCount = 1,
+        MaxDeliveryAttempts = 2,
+        RetryInitialDelayMilliseconds = 1,
+        DeduplicationWindowSeconds = 60,
+        ShutdownDrainSeconds = 2
+    };
+    var transport = new SmokeAlertTransport(failuresBeforeSuccess: 1);
+    using var queue = new AlertDeliveryQueue(
+        new LogAlertSink(NullLogger<LogAlertSink>.Instance),
+        new[] { transport },
+        Options.Create(options),
+        NullLogger<AlertDeliveryQueue>.Instance);
+
+    await queue.StartAsync(CancellationToken.None);
+    var enqueueStopwatch = Stopwatch.StartNew();
+    await queue.NotifySecurityEventAsync("Evento repetido", "RFC=TEST010101AAA", CancellationToken.None);
+    enqueueStopwatch.Stop();
+    await queue.NotifySecurityEventAsync("Evento repetido", "RFC=TEST010101AAA", CancellationToken.None);
+
+    Require(enqueueStopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
+        "La entrega de alertas bloqueó al productor.");
+    await WaitUntilAsync(
+        () => queue.GetSnapshot().DeliveredTotal == 1,
+        TimeSpan.FromSeconds(3),
+        "La cola no entregó la alerta después del reintento.");
+
+    var snapshot = queue.GetSnapshot();
+    Require(snapshot.Pending == 0 && snapshot.InFlight == 0,
+        "La cola conservó trabajo pendiente después de entregar.");
+    Require(snapshot.DeduplicatedTotal == 1,
+        "La cola no deduplicó el evento repetido.");
+    Require(snapshot.RetryTotal == 1 && snapshot.TerminalFailureTotal == 0,
+        "La cola no registró correctamente el reintento exitoso.");
+    Require(transport.Attempts == 2,
+        "El transporte no recibió exactamente dos intentos.");
+    await queue.StopAsync(CancellationToken.None);
+
+    var saturatedOptions = new AlertOptions
+    {
+        Enabled = true,
+        WebhookUrl = "https://alerts.example.test/hook",
+        QueueCapacity = 1,
+        WorkerCount = 1,
+        DeduplicationWindowSeconds = 0
+    };
+    using var saturatedQueue = new AlertDeliveryQueue(
+        new LogAlertSink(NullLogger<LogAlertSink>.Instance),
+        new[] { new SmokeAlertTransport() },
+        Options.Create(saturatedOptions),
+        NullLogger<AlertDeliveryQueue>.Instance);
+    await saturatedQueue.NotifySecurityEventAsync("Evento 1", "Uno", CancellationToken.None);
+    await saturatedQueue.NotifySecurityEventAsync("Evento 2", "Dos", CancellationToken.None);
+    var saturated = saturatedQueue.GetSnapshot();
+    Require(saturated.Pending == 1 && saturated.DroppedTotal == 1 && !saturated.IsHealthy,
+        "La cola no aplicó presión controlada cuando alcanzó su capacidad.");
+}
+
+static async Task WaitUntilAsync(
+    Func<bool> condition,
+    TimeSpan timeout,
+    string errorMessage)
+{
+    var deadline = DateTimeOffset.UtcNow + timeout;
+    while (!condition())
+    {
+        if (DateTimeOffset.UtcNow >= deadline)
+            throw new InvalidOperationException(errorMessage);
+        await Task.Delay(10);
+    }
 }
 
 static void TestBudiSchemaRequirements()
@@ -1198,4 +1288,23 @@ file sealed class SmokeOptionsSnapshot<T>(T value) : IOptionsSnapshot<T>
 {
     public T Value => value;
     public T Get(string? name) => value;
+}
+
+file sealed class SmokeAlertTransport(int failuresBeforeSuccess = 0) : IAlertTransport
+{
+    private int _remainingFailures = failuresBeforeSuccess;
+    private int _attempts;
+
+    public string Name => "smoke";
+    public bool IsConfigured => true;
+    public int Attempts => Volatile.Read(ref _attempts);
+
+    public Task<AlertTransportResult> SendAsync(SecurityAlertEnvelope alert, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _attempts);
+        if (Interlocked.Decrement(ref _remainingFailures) >= 0)
+            return Task.FromResult(AlertTransportResult.Failed("planned_failure"));
+
+        return Task.FromResult(AlertTransportResult.Delivered());
+    }
 }

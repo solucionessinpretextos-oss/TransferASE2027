@@ -323,18 +323,31 @@ export function Dashboard() {
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
           Recursos del servidor
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <KpiCard title="Uso CPU" value={server.cpuUsagePercent.toFixed(1) + " %"} />
           <KpiCard title="Uso memoria" value={server.memoryUsagePercent.toFixed(1) + " %"} />
           <KpiCard title="Uso disco" value={server.diskUsagePercent.toFixed(1) + " %"} />
           <KpiCard
             title="Servicios internos"
             value={
-              server.databaseOk && server.storageOk && server.messageBusOk
+              server.databaseOk && server.storageOk && server.messageBusOk && server.alertingOk
                 ? "OK"
                 : "Con alertas"
             }
             helperText={buildServicesHelper(server)}
+          />
+          <KpiCard
+            title="Cola de alertas"
+            value={
+              server.alertingEnabled
+                ? `${server.alertQueuePending + server.alertQueueInFlight}/${server.alertQueueCapacity}`
+                : "Desactivada"
+            }
+            helperText={
+              server.alertingEnabled
+                ? `${server.alertDeliveredTotal} entregadas · ${server.alertDeduplicatedTotal} agrupadas · ${server.alertRetryTotal} reintentos · ${server.alertDroppedTotal} descartadas${server.alertLastFailureUtc ? ` · última falla ${formatDateTime(server.alertLastFailureUtc)}` : ""}`
+                : "Solo registro local"
+            }
           />
         </div>
       </section>
@@ -511,5 +524,8 @@ function buildServicesHelper(server: SummaryResponse["server"]): string {
   parts.push(`DB: ${server.databaseOk ? "OK" : "Error"}`);
   parts.push(`Storage: ${server.storageOk ? "OK" : "Error"}`);
   parts.push(`Bus: ${server.messageBusOk ? "OK" : "Error"}`);
+  parts.push(
+    `Alertas: ${server.alertingEnabled ? (server.alertingOk ? "OK" : "Error") : "Desactivadas"}`,
+  );
   return parts.join(" · ");
 }

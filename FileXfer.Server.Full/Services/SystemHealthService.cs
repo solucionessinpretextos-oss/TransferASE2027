@@ -29,15 +29,18 @@ namespace FileXfer.Server.Services
     {
         private readonly IDbContextFactory<FileXferDbContext> _dbFactory;
         private readonly StorageOptions _storageOptions;
+        private readonly IAlertDeliveryState _alertDeliveryState;
         private readonly ILogger<SystemHealthService> _log;
 
         public SystemHealthService(
             IDbContextFactory<FileXferDbContext> dbFactory,
             StorageOptions storageOptions,
+            IAlertDeliveryState alertDeliveryState,
             ILogger<SystemHealthService> log)
         {
             _dbFactory = dbFactory;
             _storageOptions = storageOptions;
+            _alertDeliveryState = alertDeliveryState;
             _log = log;
         }
 
@@ -46,6 +49,8 @@ namespace FileXfer.Server.Services
             bool databaseOk = true;
             bool storageOk = true;
             bool messageBusOk = true; // por ahora no tenemos bus, lo marcamos OK.
+            var alertDelivery = _alertDeliveryState.GetSnapshot();
+            var alertingOk = alertDelivery.IsHealthy;
 
             double cpuUsagePercent = 0;
             double memoryUsagePercent = 0;
@@ -146,24 +151,38 @@ namespace FileXfer.Server.Services
                 diskUsagePercent = 0;
             }
 
-            if (!databaseOk || !storageOk || !messageBusOk)
+            if (!databaseOk || !storageOk || !messageBusOk || !alertingOk)
             {
                 message = "Advertencias: " +
                           (databaseOk ? "" : "[DB] ") +
                           (storageOk ? "" : "[Storage] ") +
-                          (messageBusOk ? "" : "[Bus] ");
+                          (messageBusOk ? "" : "[Bus] ") +
+                          (alertingOk ? "" : "[Alertas] ");
             }
 
             var dto = new ServerHealthDto
             {
-                IsHealthy = databaseOk && storageOk && messageBusOk,
+                IsHealthy = databaseOk && storageOk && messageBusOk && alertingOk,
                 Message = message,
                 CpuUsagePercent = Math.Round(cpuUsagePercent, 1),
                 MemoryUsagePercent = Math.Round(memoryUsagePercent, 1),
                 DiskUsagePercent = Math.Round(diskUsagePercent, 1),
                 DatabaseOk = databaseOk,
                 StorageOk = storageOk,
-                MessageBusOk = messageBusOk
+                MessageBusOk = messageBusOk,
+                AlertingOk = alertingOk,
+                AlertingEnabled = alertDelivery.Enabled,
+                AlertQueuePending = alertDelivery.Pending,
+                AlertQueueInFlight = alertDelivery.InFlight,
+                AlertQueueCapacity = alertDelivery.Capacity,
+                AlertEnqueuedTotal = alertDelivery.EnqueuedTotal,
+                AlertDeliveredTotal = alertDelivery.DeliveredTotal,
+                AlertDeduplicatedTotal = alertDelivery.DeduplicatedTotal,
+                AlertDroppedTotal = alertDelivery.DroppedTotal,
+                AlertRetryTotal = alertDelivery.RetryTotal,
+                AlertTerminalFailureTotal = alertDelivery.TerminalFailureTotal,
+                AlertLastDeliveredUtc = alertDelivery.LastDeliveredUtc,
+                AlertLastFailureUtc = alertDelivery.LastFailureUtc
             };
 
             return dto;

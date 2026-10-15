@@ -78,5 +78,12 @@ namespace FileXfer.Server.Options
 
         public string? WebhookUrl { get; set; }
         public int WebhookTimeoutSeconds { get; set; } = 10;
+
+        public int QueueCapacity { get; set; } = 256;
+        public int WorkerCount { get; set; } = 2;
+        public int MaxDeliveryAttempts { get; set; } = 3;
+        public int RetryInitialDelayMilliseconds { get; set; } = 1000;
+        public int DeduplicationWindowSeconds { get; set; } = 60;
+        public int ShutdownDrainSeconds { get; set; } = 15;
     }
 }

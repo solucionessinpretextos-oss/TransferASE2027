@@ -15,6 +15,19 @@ export interface ServerHealthDto {
   databaseOk: boolean;
   storageOk: boolean;
   messageBusOk: boolean;
+  alertingOk: boolean;
+  alertingEnabled: boolean;
+  alertQueuePending: number;
+  alertQueueInFlight: number;
+  alertQueueCapacity: number;
+  alertEnqueuedTotal: number;
+  alertDeliveredTotal: number;
+  alertDeduplicatedTotal: number;
+  alertDroppedTotal: number;
+  alertRetryTotal: number;
+  alertTerminalFailureTotal: number;
+  alertLastDeliveredUtc?: string | null;
+  alertLastFailureUtc?: string | null;
 }
 
 export interface TransferSummaryDto {

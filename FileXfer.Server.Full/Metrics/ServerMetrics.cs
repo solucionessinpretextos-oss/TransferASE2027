@@ -32,4 +32,11 @@ public static class ServerMetrics {
   public static readonly Counter<long> FileDownloadsBlockedTotal = M.CreateCounter<long>("file_downloads_blocked_total");
   public static readonly Counter<long> FileDownloadBytesPreparedTotal = M.CreateCounter<long>("file_download_bytes_prepared_total", "bytes");
   public static readonly Histogram<double> FileDownloadVerificationDurationMs = M.CreateHistogram<double>("file_download_verification_duration_ms", "ms");
+  public static readonly Counter<long> AlertDeliveryEnqueuedTotal = M.CreateCounter<long>("alert_delivery_enqueued_total");
+  public static readonly Counter<long> AlertDeliveryDeliveredTotal = M.CreateCounter<long>("alert_delivery_delivered_total");
+  public static readonly Counter<long> AlertDeliveryDeduplicatedTotal = M.CreateCounter<long>("alert_delivery_deduplicated_total");
+  public static readonly Counter<long> AlertDeliveryDroppedTotal = M.CreateCounter<long>("alert_delivery_dropped_total");
+  public static readonly Counter<long> AlertDeliveryRetryTotal = M.CreateCounter<long>("alert_delivery_retry_total");
+  public static readonly Counter<long> AlertDeliveryFailedTotal = M.CreateCounter<long>("alert_delivery_failed_total");
+  public static readonly Histogram<double> AlertQueueLatencyMs = M.CreateHistogram<double>("alert_queue_latency_ms", "ms");
 }
