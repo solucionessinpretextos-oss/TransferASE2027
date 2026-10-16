@@ -1,0 +1,28 @@
+{
+  "environment": "Staging",
+  "serverBaseUrl": "https://transfer-staging.corp.example",
+  "allowedHosts": [
+    "transfer-staging.corp.example"
+  ],
+  "fileXferDb": {
+    "connectionStringEnvironmentVariable": "FILEXFER_FILEXFERDB_CONNECTION"
+  },
+  "budiDev": {
+    "connectionStringEnvironmentVariable": "FILEXFER_BUDI_CONNECTION"
+  },
+  "storage": {
+    "basePath": "D:\\FileXfer\\Storage",
+    "minimumFreeSpaceGb": 100,
+    "serviceAccount": "CORP\\gmsa-filexfer$"
+  },
+  "alerts": {
+    "enabled": true,
+    "smtpHost": "smtp.corp.example",
+    "smtpPort": 587,
+    "useTls": true,
+    "emailFrom": "filexfer@corp.example",
+    "emailTo": [
+      "operaciones@corp.example"
+    ]
+  }
+}

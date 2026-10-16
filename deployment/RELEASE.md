@@ -70,7 +70,7 @@ pwsh -NoProfile -File build/Verify-Release.ps1 `
   -TrustedPublicKeyPath "D:\Configuracion\transfer-update-public.pem"
 ```
 
-El verificador comprueba firma del manifiesto, hash y longitud de todos los artefactos, firma canónica del cliente, confinamiento del ZIP, presencia del cliente/updater/llave pública y ejecuta el updater en modo `--verify-only`.
+El verificador comprueba firma del manifiesto, hash y longitud de todos los artefactos, firma canónica del cliente, confinamiento del ZIP, presencia del cliente/updater/llave pública y ejecuta el updater en modo `--verify-only`. El build también ejecuta `Test-StagingReadiness.Smoke.ps1` para demostrar que el preflight acepta una configuración segura y bloquea una insegura.
 
 ## Publicación y rollback
 

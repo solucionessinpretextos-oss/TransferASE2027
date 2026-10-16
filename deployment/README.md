@@ -2,16 +2,51 @@
 
 La generación, firma y verificación de binarios está documentada en `RELEASE.md`. No publique manualmente una carpeta `bin/Release`: use el manifiesto firmado generado por `build/Build-Release.ps1`.
 
+## Preflight automatizado
+
+Copie `staging-readiness.example.json` fuera del repositorio, reemplace todos los valores `.example` y configure las dos cadenas SQL exclusivamente en las variables de entorno indicadas por el perfil. El JSON no admite contraseñas, tokens, llaves ni cadenas de conexión embebidas.
+
+Ejecute las fases en orden y conserve cada reporte JSON como evidencia del cambio:
+
+```powershell
+$env:FILEXFER_FILEXFERDB_CONNECTION = '<obtener desde el almacén secreto>'
+$env:FILEXFER_BUDI_CONNECTION = '<obtener desde el almacén secreto>'
+
+pwsh -NoProfile -File deployment/Test-StagingReadiness.ps1 `
+  -ConfigurationPath 'C:\FileXfer\staging-readiness.json' `
+  -Phase Infrastructure `
+  -ReportPath 'C:\FileXfer\evidence\01-infrastructure.json'
+
+pwsh -NoProfile -File deployment/Test-StagingReadiness.ps1 `
+  -ConfigurationPath 'C:\FileXfer\staging-readiness.json' `
+  -Phase PostMigration `
+  -ReportPath 'C:\FileXfer\evidence\02-post-migration.json'
+
+pwsh -NoProfile -File deployment/Test-StagingReadiness.ps1 `
+  -ConfigurationPath 'C:\FileXfer\staging-readiness.json' `
+  -Phase PostDeploy `
+  -ReportPath 'C:\FileXfer\evidence\03-post-deploy.json'
+```
+
+- `Configuration` valida el perfil sin conectarse a servicios; esta fase se usa también en el pipeline de liberación.
+- `Infrastructure` comprueba DNS, sesiones SQL cifradas, identidad y ACL exclusiva del storage, ausencia de reparse points, escritura confirmada y negociación SMTP TLS 1.2 con certificado válido. No envía correo ni modifica bases de datos.
+- `PostMigration` añade validación de migraciones, tablas, columnas, constraints e índices de FileXferDb y BuDi.
+- `PostDeploy` añade `/healthz` y `/readyz` mediante HTTPS, exige HTTP 200 y rechaza redirecciones.
+
+El proceso termina con código distinto de cero ante cualquier `FAIL`. No continúe a la fase siguiente aunque el resto de las comprobaciones aparezca como correcto.
+
+La comprobación de storage debe ejecutarse bajo la misma cuenta configurada en `storage.serviceAccount`; no existe un interruptor para omitirla. La ACL solo admite acceso de datos para esa cuenta, `SYSTEM`, `Administradores` y `CREATOR OWNER`. Cualquier otro principal bloquea el despliegue.
+
 ## Orden de despliegue
 
-1. Ejecutar en BuDi el preflight de solo lectura `sql/000_budi_transfer_archivos_preflight.sql` y conservar su salida.
+1. Ejecutar la fase automatizada `Infrastructure`; después ejecutar en BuDi el preflight de solo lectura `sql/000_budi_transfer_archivos_preflight.sql` y conservar ambas salidas.
 2. Crear backup consistente de FileXferDb, BuDi y del volumen de archivos; verificar una restauración de muestra. Para BuDi puede usarse `sql/010_budi_backup_before_hardening.sql`, suministrando una ruta nueva mediante `-v BackupFile=...`; el script ejecuta `RESTORE VERIFYONLY`.
 3. Detener nuevas cargas o poner el servicio en drenado.
 4. Ejecutar `sql/001_budi_transfer_archivos_hardening.sql` en BuDi con `sqlcmd -b -I`. El script usa una transacción, bloqueo de aplicación y postcondiciones; aborta y revierte si detecta duplicados o índices incompatibles.
 5. Revisar y ejecutar, en orden, `sql/002_filexferdb_idempotent.sql`, `sql/003_transfer_capabilities_2027.sql` y `sql/004_durable_alert_outbox_2027.sql` en FileXferDb. Los scripts son idempotentes; sus preflight abortan antes de truncar datos o crear índices sobre duplicados.
-6. Confirmar en `__EFMigrationsHistory` que se aplicó hasta `DurableAlertOutbox2027`; verificar tablas de políticas, revisiones, recibos, cadena, índices de reanudación y `AlertOutboxDeliveries`.
+6. Ejecutar la fase `PostMigration`; esta confirma en `__EFMigrationsHistory` que se aplicó hasta `DurableAlertOutbox2027` y verifica tablas de políticas, revisiones, recibos, cadena, índices de reanudación y `AlertOutboxDeliveries`.
 7. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.1.0.0 y updater desde artefactos firmados.
-8. Validar `/healthz` (proceso vivo) y `/readyz` (FileXferDb disponible y contrato de esquema BuDi completo), login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
+8. Ejecutar la fase `PostDeploy`; después validar login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
 9. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
 10. Cortar una carga a mitad, reintentar y comprobar que continúa desde un offset mayor que cero, genera una sola catalogación y un solo recibo.
 11. Descargar un archivo, cancelar a mitad y reanudarlo; confirmar HTTP 206, progreso visible, SHA-256 coincidente y auditoría `file_download_verified`.

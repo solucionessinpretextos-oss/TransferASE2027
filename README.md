@@ -11,6 +11,7 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 - `FileXfer.Pdf`: motor común de inspección de archivos y reparación controlada de PDF mediante qpdf.
 - `FileXfer.Pdf.SmokeTests`, `FileXfer.FileSafety.SmokeTests` y `FileXfer.Security.SmokeTests`: pruebas ejecutables de controles críticos.
 - `deployment/sql`: migraciones idempotentes para FileXferDb y BuDi.
+- `deployment/Test-StagingReadiness.ps1`: preflight bloqueante y auditable para configuración, infraestructura, esquema y salud posterior al despliegue.
 
 ## Garantías relevantes
 
@@ -32,6 +33,7 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 - Cada carga catalogada emite un recibo RSA-PSS-SHA256 firmado, idempotente y enlazado criptográficamente con el recibo anterior. El Dashboard expone `TraceId`, política aplicada, reanudaciones, omisiones y `ReceiptId`.
 - Actualizaciones firmadas con RSA-PSS, hash SHA-256, extracción segura y recuperación ante fallo.
 - Pipeline `build/Build-Release.ps1`: publica cliente, updater y servidor; ejecuta pruebas; genera ZIP, hashes, configuración y manifiesto firmado; `build/Verify-Release.ps1` realiza verificación independiente y ejecuta el updater en modo de solo validación.
+- El preflight de staging rechaza comodines DNS, marcadores, secretos embebidos, LocalDB fuera de desarrollo, SQL sin cifrado/certificado validado, SMTP sin TLS, storage inaccesible y contratos de esquema incompletos.
 - Producción falla al arrancar si faltan SQL, storage, hosts DNS explícitos, raíces SAT o allowlist OCSP/CRL.
 
 ## Compilación y pruebas
@@ -43,6 +45,7 @@ dotnet build TransferClienteASEUpdater/TransferClienteASE.Updater.csproj -c Rele
 dotnet run --project FileXfer.Pdf.SmokeTests/FileXfer.Pdf.SmokeTests.csproj -c Release -- tools/qpdf/win-x64/bin/qpdf.exe
 dotnet run --project FileXfer.FileSafety.SmokeTests/FileXfer.FileSafety.SmokeTests.csproj -c Release
 dotnet run --project FileXfer.Security.SmokeTests/FileXfer.Security.SmokeTests.csproj -c Release -- <updater.exe>
+pwsh -NoProfile -File deployment/Test-StagingReadiness.Smoke.ps1
 ```
 
 El dashboard se construye desde `FileXfer.AdminDashboard` con `npm ci` y `npm run build`.

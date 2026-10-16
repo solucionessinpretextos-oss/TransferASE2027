@@ -243,6 +243,8 @@ try {
     Invoke-Checked dotnet @('run', '--project', 'FileXfer.Security.SmokeTests/FileXfer.Security.SmokeTests.csproj', '-c', 'Release', '--', $updaterExe)
     Invoke-Checked dotnet @('run', '--project', 'FileXfer.FileSafety.SmokeTests/FileXfer.FileSafety.SmokeTests.csproj', '-c', 'Release')
     Invoke-Checked dotnet @('run', '--project', 'FileXfer.Pdf.SmokeTests/FileXfer.Pdf.SmokeTests.csproj', '-c', 'Release', '--', (Join-Path $repoRoot 'tools/qpdf/win-x64/bin/qpdf.exe'))
+    $powerShellExecutable = (Get-Process -Id $PID).Path
+    Invoke-Checked $powerShellExecutable @('-NoProfile', '-NonInteractive', '-File', 'deployment/Test-StagingReadiness.Smoke.ps1')
 
     $productionReady = -not $isDirty
     if (-not [string]::IsNullOrWhiteSpace($CodeSigningCertificateThumbprint)) {
