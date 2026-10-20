@@ -55,9 +55,9 @@ La comprobación de storage debe ejecutarse bajo la misma cuenta configurada en 
 Ejemplo con autenticación integrada; reemplace servidor y ruta por los autorizados:
 
 ```powershell
-sqlcmd -S "SERVIDOR" -E -d BUZONDIGITAL -b -I -i deployment/sql/000_budi_transfer_archivos_preflight.sql
-sqlcmd -S "SERVIDOR" -E -d BUZONDIGITAL -b -I -v BackupFile="D:\Backups\BUZONDIGITAL_YYYYMMDD_HHMM.bak" -i deployment/sql/010_budi_backup_before_hardening.sql
-sqlcmd -S "SERVIDOR" -E -d BUZONDIGITAL -b -I -i deployment/sql/001_budi_transfer_archivos_hardening.sql
+sqlcmd -S "SERVIDOR" -E -d Budi_Dev -b -I -i deployment/sql/000_budi_transfer_archivos_preflight.sql
+sqlcmd -S "SERVIDOR" -E -d Budi_Dev -b -I -v BackupFile="D:\Backups\Budi_Dev_YYYYMMDD_HHMM.bak" -i deployment/sql/010_budi_backup_before_hardening.sql
+sqlcmd -S "SERVIDOR" -E -d Budi_Dev -b -I -i deployment/sql/001_budi_transfer_archivos_hardening.sql
 ```
 
 No coloque usuario ni contraseña en scripts, historial de consola o archivos del repositorio. Use autenticación integrada o el almacén secreto del agente de despliegue.

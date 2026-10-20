@@ -174,7 +174,10 @@ namespace FileXfer.Server.Uploading
                 };
             }
 
-            if (entry.Status is "Failed" or "CatalogFailed")
+            // Failed implica que el contenido no superó integridad/seguridad y ya no debe
+            // reutilizarse. CatalogFailed, en cambio, conserva un archivo íntegro: se permite
+            // reabrir desde el largo completo para repetir idempotentemente catálogo/recibo.
+            if (entry.Status is "Failed")
             {
                 return new UploadStatusReply
                 {

@@ -2,15 +2,15 @@ SET XACT_ABORT ON;
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 
-IF DB_NAME() <> N'BUZONDIGITAL'
-    THROW 51000, 'Ejecute la migración únicamente en la base BUZONDIGITAL.', 1;
+IF DB_NAME() <> N'Budi_Dev'
+    THROW 51000, 'Ejecute la migración únicamente en la base Budi_Dev.', 1;
 
 BEGIN TRY
     BEGIN TRANSACTION;
 
     DECLARE @ApplicationLockResult int;
     EXEC @ApplicationLockResult = sys.sp_getapplock
-        @Resource = N'FileXfer:BUZONDIGITAL:001_budi_transfer_archivos_hardening',
+        @Resource = N'FileXfer:Budi_Dev:001_budi_transfer_archivos_hardening',
         @LockMode = N'Exclusive',
         @LockOwner = N'Transaction',
         @LockTimeout = 0;

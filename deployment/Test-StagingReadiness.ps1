@@ -321,7 +321,7 @@ WHERE IsPresent = 0;
         $query = @'
 SELECT RequirementName
 FROM (VALUES
-    (N'Base BUZONDIGITAL', CASE WHEN DB_NAME() = N'BUZONDIGITAL' THEN 1 ELSE 0 END),
+    (N'Base Budi_Dev', CASE WHEN DB_NAME() = N'Budi_Dev' THEN 1 ELSE 0 END),
     (N'Tabla Transfer_ArchivosLocales', CASE WHEN OBJECT_ID(N'dbo.Transfer_ArchivosLocales', N'U') IS NOT NULL THEN 1 ELSE 0 END),
     (N'Columna MovimientoId int', CASE WHEN EXISTS (SELECT 1 FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(N'dbo.Transfer_ArchivosLocales') AND c.name = N'MovimientoId' AND t.name = N'int') THEN 1 ELSE 0 END),
     (N'Columna ID_Upload uniqueidentifier', CASE WHEN EXISTS (SELECT 1 FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(N'dbo.Transfer_ArchivosLocales') AND c.name = N'ID_Upload' AND t.name = N'uniqueidentifier') THEN 1 ELSE 0 END),

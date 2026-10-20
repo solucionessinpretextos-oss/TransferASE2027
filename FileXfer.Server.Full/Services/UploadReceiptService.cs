@@ -95,72 +95,12 @@ public sealed class UploadReceiptService : IUploadReceiptService, IDisposable
             {
                 try
                 {
-                    await using var db = await _dbFactory.CreateDbContextAsync(ct);
-                    await using var transaction = db.Database.IsRelational()
-                        ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct)
-                        : null;
-
-                    var existing = await db.UploadReceipts
-                        .SingleOrDefaultAsync(receipt => receipt.UploadId == draft.UploadId, ct);
-                    if (existing is not null)
-                        return existing;
-
-                    var chainState = await db.ReceiptChainStates.SingleOrDefaultAsync(state => state.Id == 1, ct);
-                    if (chainState is null)
-                    {
-                        chainState = new ReceiptChainState
-                        {
-                            Id = 1,
-                            HeadHash = null,
-                            Version = 0,
-                            UpdatedUtc = DateTimeOffset.UtcNow
-                        };
-                        db.ReceiptChainStates.Add(chainState);
-                    }
-
-                    var receiptId = Guid.NewGuid();
-                    var issuedUtc = DateTimeOffset.UtcNow;
-                    var payload = BuildCanonicalPayload(receiptId, issuedUtc, draft);
-                    var payloadHashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
-                    var payloadHash = Convert.ToHexString(payloadHashBytes).ToLowerInvariant();
-                    var previousHash = chainState.HeadHash;
-                    var previousBytes = string.IsNullOrWhiteSpace(previousHash)
-                        ? new byte[32]
-                        : Convert.FromHexString(previousHash);
-                    var chainMaterial = new byte[previousBytes.Length + payloadHashBytes.Length];
-                    previousBytes.CopyTo(chainMaterial, 0);
-                    payloadHashBytes.CopyTo(chainMaterial, previousBytes.Length);
-                    var chainHashBytes = SHA256.HashData(chainMaterial);
-                    var chainHash = Convert.ToHexString(chainHashBytes).ToLowerInvariant();
-                    var signature = _rsa.SignHash(
-                        chainHashBytes,
-                        HashAlgorithmName.SHA256,
-                        RSASignaturePadding.Pss);
-
-                    var receipt = new UploadReceipt
-                    {
-                        Id = receiptId,
-                        UploadId = draft.UploadId,
-                        IssuedUtc = issuedUtc,
-                        CanonicalPayloadJson = payload,
-                        PayloadSha256 = payloadHash,
-                        PreviousChainHash = previousHash,
-                        ChainHash = chainHash,
-                        SignatureBase64 = Convert.ToBase64String(signature),
-                        SignatureAlgorithm = "RSA-PSS-SHA256",
-                        KeyId = _keyId,
-                        PublicKeyPem = _publicKeyPem
-                    };
-                    db.UploadReceipts.Add(receipt);
-                    chainState.HeadHash = chainHash;
-                    chainState.Version++;
-                    chainState.UpdatedUtc = issuedUtc;
-                    await db.SaveChangesAsync(ct);
-                    if (transaction is not null)
-                        await transaction.CommitAsync(ct);
-
-                    ServerMetrics.UploadReceiptsIssuedTotal.Add(1);
-                    return receipt;
+                    // SQL Server está configurado con reintentos transitorios. EF Core exige que
+                    // toda transacción explícita se ejecute dentro de su estrategia; de otro modo
+                    // la primera consulta dentro de BeginTransaction falla antes de emitir recibo.
+                    await using var strategyContext = await _dbFactory.CreateDbContextAsync(ct);
+                    var strategy = strategyContext.Database.CreateExecutionStrategy();
+                    return await strategy.ExecuteAsync(() => CreateTransactionalAsync(draft, ct));
                 }
                 catch (Exception exception) when (attempt < 3 && IsRetryableChainConflict(exception))
                 {
@@ -174,6 +114,82 @@ public sealed class UploadReceiptService : IUploadReceiptService, IDisposable
         {
             ChainGate.Release();
         }
+    }
+
+    private async Task<UploadReceipt> CreateTransactionalAsync(
+        UploadReceiptDraft draft,
+        CancellationToken ct)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct)
+            : null;
+
+        var existing = await db.UploadReceipts
+            .SingleOrDefaultAsync(receipt => receipt.UploadId == draft.UploadId, ct);
+        if (existing is not null)
+        {
+            if (transaction is not null)
+                await transaction.CommitAsync(ct);
+            return existing;
+        }
+
+        var chainState = await db.ReceiptChainStates.SingleOrDefaultAsync(state => state.Id == 1, ct);
+        if (chainState is null)
+        {
+            chainState = new ReceiptChainState
+            {
+                Id = 1,
+                HeadHash = null,
+                Version = 0,
+                UpdatedUtc = DateTimeOffset.UtcNow
+            };
+            db.ReceiptChainStates.Add(chainState);
+        }
+
+        var receiptId = Guid.NewGuid();
+        var issuedUtc = DateTimeOffset.UtcNow;
+        var payload = BuildCanonicalPayload(receiptId, issuedUtc, draft);
+        var payloadHashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
+        var payloadHash = Convert.ToHexString(payloadHashBytes).ToLowerInvariant();
+        var previousHash = chainState.HeadHash;
+        var previousBytes = string.IsNullOrWhiteSpace(previousHash)
+            ? new byte[32]
+            : Convert.FromHexString(previousHash);
+        var chainMaterial = new byte[previousBytes.Length + payloadHashBytes.Length];
+        previousBytes.CopyTo(chainMaterial, 0);
+        payloadHashBytes.CopyTo(chainMaterial, previousBytes.Length);
+        var chainHashBytes = SHA256.HashData(chainMaterial);
+        var chainHash = Convert.ToHexString(chainHashBytes).ToLowerInvariant();
+        var signature = _rsa.SignHash(
+            chainHashBytes,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pss);
+
+        var receipt = new UploadReceipt
+        {
+            Id = receiptId,
+            UploadId = draft.UploadId,
+            IssuedUtc = issuedUtc,
+            CanonicalPayloadJson = payload,
+            PayloadSha256 = payloadHash,
+            PreviousChainHash = previousHash,
+            ChainHash = chainHash,
+            SignatureBase64 = Convert.ToBase64String(signature),
+            SignatureAlgorithm = "RSA-PSS-SHA256",
+            KeyId = _keyId,
+            PublicKeyPem = _publicKeyPem
+        };
+        db.UploadReceipts.Add(receipt);
+        chainState.HeadHash = chainHash;
+        chainState.Version++;
+        chainState.UpdatedUtc = issuedUtc;
+        await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
+
+        ServerMetrics.UploadReceiptsIssuedTotal.Add(1);
+        return receipt;
     }
 
     public bool Verify(UploadReceipt receipt)

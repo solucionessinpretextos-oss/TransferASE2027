@@ -93,10 +93,10 @@ try {
     Test-BoundedHttpReader
     [Environment]::SetEnvironmentVariable(
         $fileXferVariable,
-        'Server=tcp:sql-stg.corp.local,1433;Database=FileXferDb;Integrated Security=True;Encrypt=Strict;TrustServerCertificate=False;')
+        'Server=tcp:sql-stg.corp.local,1433;Database=FileXferDev;Integrated Security=True;Encrypt=Strict;TrustServerCertificate=False;')
     [Environment]::SetEnvironmentVariable(
         $budiVariable,
-        'Server=tcp:budi-stg.corp.local,1433;Database=BUZONDIGITAL;Integrated Security=True;Encrypt=True;TrustServerCertificate=False;')
+        'Server=tcp:budi-stg.corp.local,1433;Database=Budi_Dev;Integrated Security=True;Encrypt=True;TrustServerCertificate=False;')
 
     $profile = [ordered]@{
         environment = 'Staging'
@@ -167,7 +167,7 @@ try {
 
     [Environment]::SetEnvironmentVariable(
         $fileXferVariable,
-        'Server=tcp:sql-stg.corp.local,1433;Database=FileXferDb;Integrated Security=True;Encrypt=False;TrustServerCertificate=True;')
+        'Server=tcp:sql-stg.corp.local,1433;Database=FileXferDev;Integrated Security=True;Encrypt=False;TrustServerCertificate=True;')
     $unsafeSqlProfile = Join-Path $temporaryRoot 'unsafe-sql.json'
     $unsafeSqlReport = Join-Path $temporaryRoot 'unsafe-sql-report.json'
     Write-JsonFile $unsafeSqlProfile $profile

@@ -3,8 +3,8 @@ SET XACT_ABORT ON;
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 
-IF DB_NAME() <> N'BUZONDIGITAL'
-    THROW 51000, 'Ejecute el preflight únicamente en la base BUZONDIGITAL.', 1;
+IF DB_NAME() <> N'Budi_Dev'
+    THROW 51000, 'Ejecute el preflight únicamente en la base Budi_Dev.', 1;
 
 IF OBJECT_ID(N'dbo.Transfer_ArchivosLocales', N'U') IS NULL
     THROW 51001, 'No existe dbo.Transfer_ArchivosLocales.', 1;
