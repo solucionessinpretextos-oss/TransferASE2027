@@ -8,7 +8,7 @@ namespace FileXfer.Server.Controllers.Admin;
 
 [ApiController]
 [Route("admin/file-policies")]
-[Authorize(Policy = "PrivilegedMfa")]
+[Authorize(Policy = "PrivilegedEfirma")]
 public sealed class FilePoliciesController : ControllerBase
 {
     private readonly IFilePolicyService _policies;
@@ -57,7 +57,7 @@ public sealed class FilePoliciesController : ControllerBase
     }
 
     [HttpPut("{extension}")]
-    [Authorize(Policy = "AdminMfa")]
+    [Authorize(Policy = "AdminEfirma")]
     public async Task<ActionResult<FilePolicyDto>> Upsert(
         string extension,
         [FromBody] UpdateFilePolicyRequest request,
@@ -98,7 +98,7 @@ public sealed class FilePoliciesController : ControllerBase
     }
 
     [HttpPost("rollback")]
-    [Authorize(Policy = "AdminMfa")]
+    [Authorize(Policy = "AdminEfirma")]
     public async Task<ActionResult<FilePolicyDto>> Rollback(
         [FromBody] RollbackFilePolicyRequest request,
         CancellationToken ct)

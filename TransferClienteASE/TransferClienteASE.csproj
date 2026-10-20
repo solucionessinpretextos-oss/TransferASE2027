@@ -22,9 +22,9 @@
 
     <!-- 🔹 Versión del cliente (usada por el auto-update) -->
     <!-- Esta es la que leerá ServicioVersion.ObtenerVersionActual() -->
-    <Version>2.1.0.0</Version>
-    <AssemblyVersion>2.1.0.0</AssemblyVersion>
-    <FileVersion>2.1.0.0</FileVersion>
+    <Version>2.2.0.0</Version>
+    <AssemblyVersion>2.2.0.0</AssemblyVersion>
+    <FileVersion>2.2.0.0</FileVersion>
     <ApplicationIcon>Recursos\ase_icon.ico</ApplicationIcon>
 
     <!-- (Opcional, pero muy útil para publicación) -->
@@ -122,6 +122,8 @@
     <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
     <PackageReference Include="Google.Protobuf" Version="3.27.2" />
     <PackageReference Include="Grpc.Tools" Version="2.62.0" PrivateAssets="All" />
+    <!-- Diario durable de cargas: permite reconstruir la cola después de reiniciar Windows. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.32" />
   </ItemGroup>
 
   <ItemGroup>

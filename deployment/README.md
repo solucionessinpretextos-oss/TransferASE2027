@@ -43,10 +43,10 @@ La comprobación de storage debe ejecutarse bajo la misma cuenta configurada en 
 2. Crear backup consistente de FileXferDb, BuDi y del volumen de archivos; verificar una restauración de muestra. Para BuDi puede usarse `sql/010_budi_backup_before_hardening.sql`, suministrando una ruta nueva mediante `-v BackupFile=...`; el script ejecuta `RESTORE VERIFYONLY`.
 3. Detener nuevas cargas o poner el servicio en drenado.
 4. Ejecutar `sql/001_budi_transfer_archivos_hardening.sql` en BuDi con `sqlcmd -b -I`. El script usa una transacción, bloqueo de aplicación y postcondiciones; aborta y revierte si detecta duplicados o índices incompatibles.
-5. Revisar y ejecutar, en orden, `sql/002_filexferdb_idempotent.sql`, `sql/003_transfer_capabilities_2027.sql` y `sql/004_durable_alert_outbox_2027.sql` en FileXferDb. Los scripts son idempotentes; sus preflight abortan antes de truncar datos o crear índices sobre duplicados.
-6. Ejecutar la fase `PostMigration`; esta confirma en `__EFMigrationsHistory` que se aplicó hasta `DurableAlertOutbox2027` y verifica tablas de políticas, revisiones, recibos, cadena, índices de reanudación y `AlertOutboxDeliveries`.
-7. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.1.0.0 y updater desde artefactos firmados.
-8. Ejecutar la fase `PostDeploy`; después validar login e.firma+MFA, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
+5. Revisar y ejecutar, en orden, `sql/002_filexferdb_idempotent.sql`, `sql/003_transfer_capabilities_2027.sql`, `sql/004_durable_alert_outbox_2027.sql` y `sql/005_disable_mfa_2027.sql` en FileXferDb. Los scripts son idempotentes; sus preflight abortan antes de truncar datos o crear índices sobre duplicados. El último normaliza cuentas heredadas y revoca sesiones antiguas.
+6. Ejecutar la fase `PostMigration`; esta confirma en `__EFMigrationsHistory` que se aplicó hasta `DisableMfa2027`, comprueba que no queden cuentas o enrolamientos MFA activos y verifica tablas de políticas, revisiones, recibos, cadena, índices de reanudación y `AlertOutboxDeliveries`.
+7. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.2.0.0 y updater desde artefactos firmados.
+8. Ejecutar la fase `PostDeploy`; después validar login de cliente y administrativo únicamente con e.firma, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
 9. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
 10. Cortar una carga a mitad, reintentar y comprobar que continúa desde un offset mayor que cero, genera una sola catalogación y un solo recibo.
 11. Descargar un archivo, cancelar a mitad y reanudarlo; confirmar HTTP 206, progreso visible, SHA-256 coincidente y auditoría `file_download_verified`.
@@ -64,7 +64,7 @@ No coloque usuario ni contraseña en scripts, historial de consola o archivos de
 
 ## Bootstrap administrativo
 
-La cuenta sembrada en una base vacía puede iniciar sesión únicamente para enrolar su primer TOTP. Hasta obtener un JWT con `amr=efirma+mfa`, la política `PrivilegedMfa` bloquea todas las APIs de `admin` y `ops`. Envíe el código a `POST /auth/mfa/verify` como JSON (`{"code":"123456"}`), nunca en la URL. Después de verificar el enrolamiento, la sesión previa se revoca y el usuario debe iniciar sesión nuevamente con e.firma + TOTP. No deshabilite esta política para “facilitar” el alta: convierta el procedimiento en runbook, no en puerta trasera.
+La cuenta sembrada en una base vacía inicia sesión con e.firma y recibe sus permisos mediante rol. MFA/TOTP y sus endpoints de enrolamiento no existen en el runtime. Proteja el RFC administrador con alta controlada, dispositivo administrado, TLS, auditoría y revocación inmediata; nunca compense la ausencia de MFA relajando la validación SAT o compartiendo la llave privada de e.firma.
 
 ## Configuración obligatoria
 
@@ -105,7 +105,7 @@ El servicio falla al arrancar en producción si no existe una llave persistente 
 
 La lista aceptada ya no vive en el ejecutable. Adminístrela en **Dashboard → Políticas de archivos**. Todo cambio requiere motivo y crea una versión. Deshabilitar “verificación profunda” reduce garantías: el sistema lo advierte al administrador y al usuario, y lo registra en carga y recibo. Use esa excepción solo con análisis de riesgo documentado y un plan de reversión.
 
-`Storage__ResumeRetentionHours` controla cuánto se conserva un parcial (1–168 horas). La limpieza marca la carga como `Expired` y elimina únicamente el archivo parcial identificado; no toca cargas completadas.
+`Storage__ResumeRetentionHours` controla cuánto se conserva un parcial (1–168 horas; valor recomendado y predeterminado: 72). La limpieza marca la carga como `Expired` y elimina únicamente el archivo parcial identificado; no toca cargas completadas.
 
 ## Validaciones productivas obligatorias
 
@@ -115,7 +115,7 @@ La lista aceptada ya no vive en el ejecutable. Adminístrela en **Dashboard → 
 - TLS con nombre correcto, cadena completa y rotación de pin con solapamiento.
 - Prueba PDF autocontenida con `dotnet run --project FileXfer.Pdf.SmokeTests/FileXfer.Pdf.SmokeTests.csproj -c Release -- tools/qpdf/win-x64/bin/qpdf.exe`.
 - Reintento de una carga después de cortar la respuesta: debe existir una sola fila `ID_Upload`.
-- Descarga de `GET /receipts/{id}`: `signatureValid=true`, hash del archivo correcto y `ReceiptId` visible en el Dashboard; un `admin/ops` sin MFA no puede consultar un recibo ajeno.
+- Descarga de `GET /receipts/{id}`: `signatureValid=true`, hash del archivo correcto y `ReceiptId` visible en el Dashboard; solo el propietario o un `admin/ops` autenticado con e.firma puede consultar el recibo.
 - Cambio concurrente de una política: la segunda escritura debe recibir conflicto y obligar a recargar, nunca sobrescribir silenciosamente.
 - Revocación de dispositivo y cambio de roles: access y refresh anteriores deben responder 401.
 - Restauración de backup y lectura de archivos bajo la cuenta de servicio.

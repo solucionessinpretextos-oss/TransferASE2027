@@ -15,7 +15,7 @@ namespace FileXfer.Server.Controllers;
 
 [ApiController]
 [Route("audit")]
-[Authorize(Policy = "PrivilegedMfa")]
+[Authorize(Policy = "PrivilegedEfirma")]
 public sealed class AuditController: ControllerBase
 {
   private readonly IDbContextFactory<FileXferDbContext> _dbf;

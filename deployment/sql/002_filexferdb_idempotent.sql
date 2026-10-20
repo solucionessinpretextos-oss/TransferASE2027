@@ -8,6 +8,9 @@ BEGIN
 END;
 GO
 
+SET XACT_ABORT ON;
+GO
+
 BEGIN TRANSACTION;
 GO
 
@@ -315,7 +318,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    DROP INDEX [IX_Uploads_Rfc_OriginalSourcePath] ON [Uploads];
+    IF EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[Uploads]')
+          AND name = N'IX_Uploads_Rfc_OriginalSourcePath')
+        DROP INDEX [IX_Uploads_Rfc_OriginalSourcePath] ON [Uploads];
 END;
 GO
 
@@ -369,7 +376,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    DROP INDEX [IX_Uploads_Rfc_OriginalFileName] ON [Uploads];
+    IF EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[Uploads]')
+          AND name = N'IX_Uploads_Rfc_OriginalFileName')
+        DROP INDEX [IX_Uploads_Rfc_OriginalFileName] ON [Uploads];
     DECLARE @var3 sysname;
     SELECT @var3 = [d].[name]
     FROM [sys].[default_constraints] [d]
@@ -386,7 +397,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    DROP INDEX [IX_Uploads_Rfc_OriginalFileName] ON [Uploads];
+    IF EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[Uploads]')
+          AND name = N'IX_Uploads_Rfc_OriginalFileName')
+        DROP INDEX [IX_Uploads_Rfc_OriginalFileName] ON [Uploads];
     DECLARE @var4 sysname;
     SELECT @var4 = [d].[name]
     FROM [sys].[default_constraints] [d]
@@ -418,7 +433,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    DROP INDEX [IX_Uploads_FileUuid] ON [Uploads];
+    IF EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[Uploads]')
+          AND name = N'IX_Uploads_FileUuid')
+        DROP INDEX [IX_Uploads_FileUuid] ON [Uploads];
     DECLARE @var6 sysname;
     SELECT @var6 = [d].[name]
     FROM [sys].[default_constraints] [d]
@@ -450,7 +469,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    ALTER TABLE [Uploads] ADD [IdActo] int NULL;
+    IF COL_LENGTH(N'[Uploads]', N'IdActo') IS NULL
+        ALTER TABLE [Uploads] ADD [IdActo] int NULL;
 END;
 GO
 
@@ -459,7 +479,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    ALTER TABLE [Uploads] ADD [IdAuditoria] int NULL;
+    IF COL_LENGTH(N'[Uploads]', N'IdAuditoria') IS NULL
+        ALTER TABLE [Uploads] ADD [IdAuditoria] int NULL;
 END;
 GO
 
@@ -468,7 +489,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    ALTER TABLE [Uploads] ADD [IdEnte] int NULL;
+    IF COL_LENGTH(N'[Uploads]', N'IdEnte') IS NULL
+        ALTER TABLE [Uploads] ADD [IdEnte] int NULL;
 END;
 GO
 
@@ -477,7 +499,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    ALTER TABLE [Uploads] ADD [IdOficio] int NULL;
+    IF COL_LENGTH(N'[Uploads]', N'IdOficio') IS NULL
+        ALTER TABLE [Uploads] ADD [IdOficio] int NULL;
 END;
 GO
 
@@ -486,7 +509,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    ALTER TABLE [Uploads] ADD [IdRequerimiento] int NULL;
+    IF COL_LENGTH(N'[Uploads]', N'IdRequerimiento') IS NULL
+        ALTER TABLE [Uploads] ADD [IdRequerimiento] int NULL;
 END;
 GO
 
@@ -495,7 +519,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    ALTER TABLE [Uploads] ADD [IdResultado] int NULL;
+    IF COL_LENGTH(N'[Uploads]', N'IdResultado') IS NULL
+        ALTER TABLE [Uploads] ADD [IdResultado] int NULL;
 END;
 GO
 
@@ -504,7 +529,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    ALTER TABLE [Uploads] ADD [Periodo] int NULL;
+    IF COL_LENGTH(N'[Uploads]', N'Periodo') IS NULL
+        ALTER TABLE [Uploads] ADD [Periodo] int NULL;
 END;
 GO
 
@@ -513,6 +539,7 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
+    IF OBJECT_ID(N'[RefreshTokens]', N'U') IS NULL
     CREATE TABLE [RefreshTokens] (
         [Id] uniqueidentifier NOT NULL,
         [Rfc] nvarchar(13) NOT NULL,
@@ -532,7 +559,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    CREATE INDEX [IX_Nonces_ExpiresUtc] ON [Nonces] ([ExpiresUtc]);
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[Nonces]')
+          AND name = N'IX_Nonces_ExpiresUtc')
+        CREATE INDEX [IX_Nonces_ExpiresUtc] ON [Nonces] ([ExpiresUtc]);
 END;
 GO
 
@@ -541,7 +572,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    CREATE UNIQUE INDEX [IX_Devices_Rfc_DeviceId] ON [Devices] ([Rfc], [DeviceId]);
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[Devices]')
+          AND name = N'IX_Devices_Rfc_DeviceId')
+        CREATE UNIQUE INDEX [IX_Devices_Rfc_DeviceId] ON [Devices] ([Rfc], [DeviceId]);
 END;
 GO
 
@@ -550,7 +585,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261008224342_SecurityHardening2027'
 )
 BEGIN
-    CREATE UNIQUE INDEX [IX_RefreshTokens_TokenHash] ON [RefreshTokens] ([TokenHash]);
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[RefreshTokens]')
+          AND name = N'IX_RefreshTokens_TokenHash')
+        CREATE UNIQUE INDEX [IX_RefreshTokens_TokenHash] ON [RefreshTokens] ([TokenHash]);
 END;
 GO
 
@@ -575,7 +614,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261009203637_SessionSecurity2027'
 )
 BEGIN
-    ALTER TABLE [Users] ADD [SecurityVersion] int NOT NULL DEFAULT 1;
+    IF COL_LENGTH(N'[Users]', N'SecurityVersion') IS NULL
+        ALTER TABLE [Users] ADD [SecurityVersion] int NOT NULL DEFAULT 1;
 END;
 GO
 
@@ -584,7 +624,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261009203637_SessionSecurity2027'
 )
 BEGIN
-    ALTER TABLE [RefreshTokens] ADD [AbsoluteExpiresUtc] datetimeoffset NOT NULL DEFAULT '0001-01-01T00:00:00.0000000+00:00';
+    IF COL_LENGTH(N'[RefreshTokens]', N'AbsoluteExpiresUtc') IS NULL
+        ALTER TABLE [RefreshTokens] ADD [AbsoluteExpiresUtc] datetimeoffset NOT NULL DEFAULT '0001-01-01T00:00:00.0000000+00:00';
 END;
 GO
 
@@ -593,7 +634,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261009203637_SessionSecurity2027'
 )
 BEGIN
-    ALTER TABLE [RefreshTokens] ADD [FamilyId] uniqueidentifier NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000';
+    IF COL_LENGTH(N'[RefreshTokens]', N'FamilyId') IS NULL
+        ALTER TABLE [RefreshTokens] ADD [FamilyId] uniqueidentifier NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000';
 END;
 GO
 
@@ -602,7 +644,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261009203637_SessionSecurity2027'
 )
 BEGIN
-    ALTER TABLE [RefreshTokens] ADD [MfaVerified] bit NOT NULL DEFAULT CAST(0 AS bit);
+    IF COL_LENGTH(N'[RefreshTokens]', N'MfaVerified') IS NULL
+        ALTER TABLE [RefreshTokens] ADD [MfaVerified] bit NOT NULL DEFAULT CAST(0 AS bit);
 END;
 GO
 
@@ -611,7 +654,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261009203637_SessionSecurity2027'
 )
 BEGIN
-    ALTER TABLE [RefreshTokens] ADD [ParentTokenId] uniqueidentifier NULL;
+    IF COL_LENGTH(N'[RefreshTokens]', N'ParentTokenId') IS NULL
+        ALTER TABLE [RefreshTokens] ADD [ParentTokenId] uniqueidentifier NULL;
 END;
 GO
 
@@ -620,7 +664,8 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261009203637_SessionSecurity2027'
 )
 BEGIN
-    ALTER TABLE [RefreshTokens] ADD [SecurityVersion] int NOT NULL DEFAULT 0;
+    IF COL_LENGTH(N'[RefreshTokens]', N'SecurityVersion') IS NULL
+        ALTER TABLE [RefreshTokens] ADD [SecurityVersion] int NOT NULL DEFAULT 0;
 END;
 GO
 
@@ -629,7 +674,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261009203637_SessionSecurity2027'
 )
 BEGIN
-    CREATE INDEX [IX_RefreshTokens_FamilyId_IsRevoked] ON [RefreshTokens] ([FamilyId], [IsRevoked]);
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[RefreshTokens]')
+          AND name = N'IX_RefreshTokens_FamilyId_IsRevoked')
+        CREATE INDEX [IX_RefreshTokens_FamilyId_IsRevoked] ON [RefreshTokens] ([FamilyId], [IsRevoked]);
 END;
 GO
 

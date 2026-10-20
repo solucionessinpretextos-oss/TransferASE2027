@@ -16,6 +16,6 @@ public static class RfcResourceAuthorization
         }
 
         var hasPrivilegedRole = principal.IsInRole("admin") || principal.IsInRole("ops");
-        return hasPrivilegedRole && principal.HasClaim("amr", "efirma+mfa");
+        return hasPrivilegedRole && principal.HasClaim("amr", "efirma");
     }
 }

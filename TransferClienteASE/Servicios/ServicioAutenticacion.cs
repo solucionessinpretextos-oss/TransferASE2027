@@ -61,7 +61,6 @@ namespace TransferClienteASE.Servicios
             string rutaCer,
             string rutaKey,
             string contrasena,
-            string? codigoMfa,
             CancellationToken ct)
         {
             if (!File.Exists(rutaCer))
@@ -151,7 +150,6 @@ namespace TransferClienteASE.Servicios
                 nonce = nonce,
                 signatureVersion = "1",
                 signatureBase64 = signatureBase64,
-                mfaCode = string.IsNullOrWhiteSpace(codigoMfa) ? null : codigoMfa.Trim(),
                 deviceId = deviceId
             };
 
@@ -279,7 +277,6 @@ namespace TransferClienteASE.Servicios
             public string nonce { get; set; } = string.Empty;
             public string signatureVersion { get; set; } = "1";
             public string signatureBase64 { get; set; } = string.Empty;
-            public string? mfaCode { get; set; }
             public string deviceId { get; set; } = string.Empty;
         }
 
@@ -340,7 +337,7 @@ namespace TransferClienteASE.Servicios
             if (!string.IsNullOrWhiteSpace(SesionAplicacion.DeviceId))
                 return SesionAplicacion.DeviceId;
 
-            return "TRANSFER-ASE-" + Guid.NewGuid().ToString("N");
+            return ServicioIdentidadDispositivo.ObtenerOCrear();
         }
 
         private static string? ExtraerRfcDesdeCertificado(byte[] cerBytes)

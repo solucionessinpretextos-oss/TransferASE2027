@@ -48,9 +48,7 @@ namespace TransferClienteASE.Vistas
         private void ModeloVista_InicioSesionExitoso(object? sender, string rfc)
         {
             CajaContrasena.Clear();
-            CajaMfa.Clear();
             _modeloVista.Contrasena = string.Empty;
-            _modeloVista.CodigoMfa = string.Empty;
 
             var ventanaSelector = new VentanaSelectorRequerimiento(rfc)
             {
@@ -61,15 +59,6 @@ namespace TransferClienteASE.Vistas
 
             var resultado = ventanaSelector.ShowDialog();
             this.Close();
-        }
-
-        private void MfaPasswordBox_OnPasswordChanged(object sender, RoutedEventArgs e)
-        {
-            if (DataContext is ModeloVistaInicioSesion vm &&
-                sender is System.Windows.Controls.PasswordBox pb)
-            {
-                vm.CodigoMfa = pb.Password;
-            }
         }
 
         private void PasswordBox_OnPasswordChanged(object sender, RoutedEventArgs e)

@@ -15,7 +15,8 @@ namespace TransferClienteASE.Servicios
 {
     public sealed class ServicioConfiguracionCliente
     {
-        private const string UrlProduccionPredeterminada = "https://187.141.128.194:51236";
+        private const string UrlProduccionPredeterminada = "https://127.0.0.1:51136";
+        //private const string UrlProduccionPredeterminada = "https://187.141.128.194:51236";
         private readonly IReadOnlyList<byte[]> _huellasCertificadoSha256;
 
         public ServicioConfiguracionCliente()

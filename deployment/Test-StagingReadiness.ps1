@@ -297,7 +297,9 @@ function Get-MissingSqlRequirements {
         $query = @'
 SELECT RequirementName
 FROM (VALUES
-    (N'Migración DurableAlertOutbox2027', CASE WHEN OBJECT_ID(N'dbo.__EFMigrationsHistory', N'U') IS NOT NULL AND EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'20261015202505_DurableAlertOutbox2027') THEN 1 ELSE 0 END),
+    (N'Migración DisableMfa2027', CASE WHEN OBJECT_ID(N'dbo.__EFMigrationsHistory', N'U') IS NOT NULL AND EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'20261019090000_DisableMfa2027') THEN 1 ELSE 0 END),
+    (N'MFA deshabilitado en usuarios', CASE WHEN NOT EXISTS (SELECT 1 FROM dbo.Users WHERE MfaRequired = 1) THEN 1 ELSE 0 END),
+    (N'Enrolamientos MFA inactivos', CASE WHEN NOT EXISTS (SELECT 1 FROM dbo.MfaSecrets WHERE Active = 1) THEN 1 ELSE 0 END),
     (N'Tabla Uploads', CASE WHEN OBJECT_ID(N'dbo.Uploads', N'U') IS NOT NULL THEN 1 ELSE 0 END),
     (N'Tabla FileTypePolicies', CASE WHEN OBJECT_ID(N'dbo.FileTypePolicies', N'U') IS NOT NULL THEN 1 ELSE 0 END),
     (N'Tabla FileTypePolicyRevisions', CASE WHEN OBJECT_ID(N'dbo.FileTypePolicyRevisions', N'U') IS NOT NULL THEN 1 ELSE 0 END),

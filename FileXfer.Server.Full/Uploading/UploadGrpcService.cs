@@ -190,7 +190,11 @@ namespace FileXfer.Server.Uploading
 
             var storageKey = BuildStorageKey(entry);
             var storedName = Path.GetFileName(entry.StoredRelativePath);
-            var persistedLength = _assembler.GetPersistedLength(storageKey, entry.FileUuid, storedName);
+            var persistedLength = _assembler.ReconcileToCommittedLength(
+                storageKey,
+                entry.FileUuid,
+                storedName,
+                Math.Max(0, entry.BytesReceived));
             if (persistedLength < 0 || persistedLength > request.TotalLength)
                 throw new RpcException(new Status(StatusCode.DataLoss, "La carga parcial tiene un tamaño inconsistente y no puede reanudarse."));
 
@@ -293,6 +297,7 @@ namespace FileXfer.Server.Uploading
             long lastOffset = 0;
             long totalBytes = 0;
             long resumedBytes = 0;
+            long lastCommittedOffset = 0;
             bool sessionStarted = false;
             bool contextAuthorized = false;
 
@@ -673,10 +678,11 @@ namespace FileXfer.Server.Uploading
                             var relPath = _assembler.GetStoredRelativePath(absPath);
 
                             entry.StoredRelativePath = relPath;
-                            var persistedLength = _assembler.GetPersistedLength(
+                            var persistedLength = _assembler.ReconcileToCommittedLength(
                                 storageKey,
                                 fileUuid,
-                                storedFileNameForDisk);
+                                storedFileNameForDisk,
+                                Math.Max(0, entry.BytesReceived));
                             if (persistedLength < 0 || persistedLength > expectedLength.Value)
                             {
                                 throw new RpcException(new Status(
@@ -702,6 +708,7 @@ namespace FileXfer.Server.Uploading
                             lastOffset = persistedLength;
                             totalBytes = persistedLength;
                             resumedBytes = persistedLength;
+                            lastCommittedOffset = persistedLength;
                             entry.ResumedBytes = checked(entry.ResumedBytes + persistedLength);
                             fileOwnedByAttempt = true;
 
@@ -800,7 +807,17 @@ namespace FileXfer.Server.Uploading
 
                         if (needDbFlush)
                         {
+                            var durableLength = await _assembler.FlushToDiskAsync(
+                                fileUuid!, uploadCancellationToken);
+                            if (durableLength != totalBytes)
+                            {
+                                throw new RpcException(new Status(
+                                    StatusCode.DataLoss,
+                                    "El almacenamiento no confirmó la longitud esperada del archivo parcial."));
+                            }
+                            entry.BytesReceived = durableLength;
                             await db.SaveChangesAsync(uploadCancellationToken);
+                            lastCommittedOffset = durableLength;
                             lastDbFlushUtc = now;
                             bytesSinceDbFlush = 0;
                         }
@@ -828,12 +845,21 @@ namespace FileXfer.Server.Uploading
 
                 if (entry != null && bytesSinceDbFlush > 0)
                 {
+                    var durableLength = await _assembler.FlushToDiskAsync(
+                        fileUuid, uploadCancellationToken);
+                    if (durableLength != totalBytes)
+                    {
+                        throw new RpcException(new Status(
+                            StatusCode.DataLoss,
+                            "El almacenamiento no confirmó todos los bytes recibidos."));
+                    }
                     await using var db2 = await _dbf.CreateDbContextAsync(uploadCancellationToken);
                     var e2 = await db2.Uploads.SingleOrDefaultAsync(x => x.FileUuid == fileUuid, uploadCancellationToken);
                     if (e2 != null)
                     {
-                        e2.BytesReceived = totalBytes;
+                        e2.BytesReceived = durableLength;
                         await db2.SaveChangesAsync(uploadCancellationToken);
+                        lastCommittedOffset = durableLength;
                     }
                 }
 
@@ -1171,6 +1197,29 @@ namespace FileXfer.Server.Uploading
                 // los cupos después de cancelar o expirar cargas. Dispose es idempotente.
                 uploadAdmission.Dispose();
 
+                var pausedOffset = lastCommittedOffset;
+                if (fileOwnedByAttempt && !finalFileValidated && preserveForResume &&
+                    totalBytes > lastCommittedOffset && !string.IsNullOrWhiteSpace(fileUuid))
+                {
+                    try
+                    {
+                        using var durableFlushTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        var durableLength = await _assembler.FlushToDiskAsync(
+                            fileUuid,
+                            durableFlushTimeout.Token);
+                        if (durableLength == totalBytes)
+                            pausedOffset = durableLength;
+                    }
+                    catch (Exception flushException)
+                    {
+                        _log.LogWarning(
+                            flushException,
+                            "No se confirmó el último segmento; se reanudará desde el checkpoint anterior. Uuid={Uuid}, Offset={Offset}",
+                            fileUuid,
+                            lastCommittedOffset);
+                    }
+                }
+
                 if (sessionStarted && fileUuid != null)
                 {
                     _sessionStore.End(fileUuid);
@@ -1197,7 +1246,7 @@ namespace FileXfer.Server.Uploading
                     {
                         await MarkPendingUploadPausedAsync(
                             fileUuid,
-                            totalBytes,
+                            pausedOffset,
                             attemptFailure ?? "La conexión se interrumpió; la carga puede reanudarse.");
                     }
                     catch (Exception statusException)

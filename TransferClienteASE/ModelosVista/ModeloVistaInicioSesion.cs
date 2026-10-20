@@ -29,7 +29,6 @@ namespace TransferClienteASE.ModelosVista
         private string _rutaCertificadoCer = string.Empty;
         private string _rutaLlaveKey = string.Empty;
         private string _contrasena = string.Empty;
-        private string _codigoMfa = string.Empty;
         private string _rfc = string.Empty;
         private string _mensajeEstado = string.Empty;
         private bool _estaProcesando;
@@ -75,12 +74,6 @@ namespace TransferClienteASE.ModelosVista
                     ComandoIngresar.ElevarCanExecuteChanged();
                 }
             }
-        }
-
-        public string CodigoMfa
-        {
-            get => _codigoMfa;
-            set => EstablecerValor(ref _codigoMfa, value);
         }
 
         public string Rfc
@@ -326,7 +319,6 @@ namespace TransferClienteASE.ModelosVista
                     RutaCertificadoCer,
                     RutaLlaveKey,
                     Contrasena,
-                    CodigoMfa,
                     cts.Token);
 
                 if (!resultado.EsCorrecto)

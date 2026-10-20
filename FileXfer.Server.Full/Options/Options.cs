@@ -20,9 +20,6 @@ namespace FileXfer.Server.Options
     {
         public int PermitLimit { get; set; } = 10;
         public int WindowSeconds { get; set; } = 60;
-        public int QueueLimit { get; set; } = 0;
-        public int LockoutThreshold { get; set; } = 5;
-        public int LockoutMinutes { get; set; } = 30;
     }
 
     public sealed class DevicePolicyOptions
@@ -37,6 +34,8 @@ namespace FileXfer.Server.Options
         public bool AllowDevelopmentBypass { get; set; } = false;
 
         public string? DevBypassToken { get; set; }
+
+        public bool AllowDevelopmentUntrustedChain { get; set; } = false;
 
         public bool RequireOcsp { get; set; } = true;
 
@@ -57,6 +56,8 @@ namespace FileXfer.Server.Options
 
     public sealed class DebugFeaturesOptions
     {
+        public bool EnableDeveloperDiagnostics { get; set; } = false;
+        public bool EnableAdminDashboardCors { get; set; } = false;
         public bool EnableDebugUploadEndpoints { get; set; } = false;
         public string[] AllowedEnvironments { get; set; } = new[] { "Development", "Staging" };
         public string[] AllowedRoles { get; set; } = new[] { "admin", "ops" };

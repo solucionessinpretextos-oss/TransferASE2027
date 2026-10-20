@@ -62,13 +62,16 @@ namespace TransferClienteASE.Servicios
         private const int MaximoReintentos = 4;
         private readonly ServicioConfiguracionCliente _configuracion;
         private readonly IFileSafetyService _fileSafety;
+        private readonly ServicioDiarioTransferencias _diario;
 
         public ServicioCargaArchivos(
             ServicioConfiguracionCliente configuracion,
-            IFileSafetyService? fileSafety = null)
+            IFileSafetyService? fileSafety = null,
+            ServicioDiarioTransferencias? diario = null)
         {
             _configuracion = configuracion ?? throw new ArgumentNullException(nameof(configuracion));
             _fileSafety = fileSafety ?? new DefaultFileSafetyService();
+            _diario = diario ?? new ServicioDiarioTransferencias();
         }
 
         public async Task<IReadOnlyList<PoliticaArchivoEfectiva>> ObtenerPoliticasEfectivasAsync(
@@ -189,10 +192,26 @@ namespace TransferClienteASE.Servicios
                 }
 
                 Reportar(0, "Preparación", $"Preparando {nombreArchivo}...");
-                if (!File.Exists(ruta))
+                var entradaDiario = await _diario.ObtenerAsync(contexto, ruta, ct);
+                if (entradaDiario is null && File.Exists(ruta))
                 {
-                    Reportar(0, "Error", $"No se encontró {nombreArchivo}; la carga se detuvo.");
-                    throw new FileNotFoundException("No se encontró uno de los archivos seleccionados.", ruta);
+                    await _diario.RegistrarEnColaAsync(contexto, ruta, ct);
+                    entradaDiario = await _diario.ObtenerAsync(contexto, ruta, ct);
+                }
+
+                var existeCopiaRecuperable =
+                    !string.IsNullOrWhiteSpace(entradaDiario?.PreparedPath) &&
+                    File.Exists(entradaDiario.PreparedPath);
+                if (!File.Exists(ruta) && !existeCopiaRecuperable)
+                {
+                    var mensajeFaltante =
+                        $"No se encontró {nombreArchivo} ni su copia segura de recuperación. " +
+                        "Seleccione nuevamente el archivo para continuar.";
+                    Reportar(0, "Esperando archivo", mensajeFaltante);
+                    await _diario.MarcarProgresoAsync(
+                        contexto, ruta, entradaDiario?.ConfirmedBytes ?? 0,
+                        "WaitingForSource", mensajeFaltante, ct);
+                    throw new FileNotFoundException(mensajeFaltante, ruta);
                 }
 
                 var extension = NormalizarExtension(Path.GetExtension(nombreArchivo));
@@ -203,57 +222,128 @@ namespace TransferClienteASE.Servicios
                         $"La extensión {extension} no está habilitada actualmente por el servidor.");
                 }
 
-                var originalLength = new FileInfo(ruta).Length;
+                var originalLength = File.Exists(ruta)
+                    ? new FileInfo(ruta).Length
+                    : entradaDiario?.OriginalLength ?? 0;
                 ValidarLimitePolitica(policy, originalLength, nombreArchivo);
                 PreparedSafeFile? archivoPreparado = null;
+                var offsetConfirmadoDiario = entradaDiario?.ConfirmedBytes ?? 0;
 
                 try
                 {
-                    var progresoInspeccion = new DelegatingProgress<FileSafetyProgress>(p =>
-                        Reportar(p.Percentage * 0.25, TraducirEtapa(p.Stage), p.UserMessage));
+                    string rutaEnvio = string.Empty;
+                    string sha256Hex = string.Empty;
+                    string fileUuid = string.Empty;
+                    long totalLength = 0;
+                    var fueReparado = false;
+                    var reutilizoCopia = false;
 
-                    if (policy.RequiresVerification)
+                    if (existeCopiaRecuperable &&
+                        !string.IsNullOrWhiteSpace(entradaDiario?.Sha256) &&
+                        !string.IsNullOrWhiteSpace(entradaDiario.FileUuid) &&
+                        entradaDiario.VerificationRequired == policy.RequiresVerification)
                     {
-                        archivoPreparado = await _fileSafety.PrepareForUploadAsync(
-                            ruta, stagingArchivos, progresoInspeccion, ct);
-                        archivosVerificados++;
-                        if (archivoPreparado.WasRepaired)
-                            archivosReparados++;
-                        if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+                        rutaEnvio = entradaDiario.PreparedPath!;
+                        totalLength = new FileInfo(rutaEnvio).Length;
+                        Reportar(
+                            5,
+                            "Recuperación",
+                            $"Se encontró la copia segura de {nombreArchivo}; verificando que no cambió...");
+                        var hashRecuperado = await CalcularSha256Async(
+                            rutaEnvio,
+                            porcentaje => Reportar(
+                                5 + porcentaje * 0.25,
+                                "Recuperación",
+                                $"Verificando copia recuperable de {nombreArchivo}: {porcentaje:N0}%..."),
+                            ct);
+                        if (string.Equals(hashRecuperado, entradaDiario.Sha256, StringComparison.OrdinalIgnoreCase) &&
+                            totalLength == entradaDiario.PreparedLength)
                         {
-                            pdfVerificados++;
-                            if (archivoPreparado.WasRepaired)
-                                pdfReparados++;
+                            sha256Hex = hashRecuperado;
+                            fileUuid = entradaDiario.FileUuid!;
+                            fueReparado = entradaDiario.WasRepaired;
+                            reutilizoCopia = true;
+                            Reportar(
+                                32,
+                                "Recuperación",
+                                $"Copia segura íntegra; recuperando el último byte confirmado de {nombreArchivo}...");
                         }
                     }
-                    else
+
+                    if (!reutilizoCopia)
                     {
-                        Reportar(4, "Política", $"El servidor permite {extension} sin verificación profunda; creando copia inmutable para el envío...");
-                        archivoPreparado = await _fileSafety.PrepareSnapshotForUploadAsync(
-                            ruta, stagingArchivos, progresoInspeccion, ct);
-                        verificacionesOmitidas++;
+                        if (!File.Exists(ruta))
+                            throw new FileNotFoundException(
+                                $"La copia recuperable de {nombreArchivo} no superó la verificación y el original no está disponible.",
+                                ruta);
+
+                        var progresoInspeccion = new DelegatingProgress<FileSafetyProgress>(p =>
+                            Reportar(p.Percentage * 0.25, TraducirEtapa(p.Stage), p.UserMessage));
+
+                        if (policy.RequiresVerification)
+                        {
+                            archivoPreparado = await _fileSafety.PrepareForUploadAsync(
+                                ruta, stagingArchivos, progresoInspeccion, ct);
+                        }
+                        else
+                        {
+                            Reportar(4, "Política", $"El servidor permite {extension} sin verificación profunda; creando copia inmutable para el envío...");
+                            archivoPreparado = await _fileSafety.PrepareSnapshotForUploadAsync(
+                                ruta, stagingArchivos, progresoInspeccion, ct);
+                        }
+
+                        fueReparado = archivoPreparado.WasRepaired;
+                        var rutaTemporal = archivoPreparado.UploadPath;
+                        totalLength = new FileInfo(rutaTemporal).Length;
+                        if (totalLength <= 0)
+                            throw new FileValidationException(
+                                FileInspectionOutcome.Invalid,
+                                $"{nombreArchivo} está vacío y no puede enviarse.");
+                        ValidarLimitePolitica(policy, totalLength, nombreArchivo);
+
+                        Reportar(25, "Integridad", $"Calculando huella SHA-256 de {nombreArchivo}: 0%...");
+                        sha256Hex = await CalcularSha256Async(
+                            rutaTemporal,
+                            porcentaje => Reportar(
+                                25 + porcentaje * 0.10,
+                                "Integridad",
+                                $"Calculando huella SHA-256 de {nombreArchivo}: {porcentaje:N0}%..."),
+                            ct);
+
+                        fileUuid = CrearUuidDeterminista(
+                            rfc, deviceId, contexto.Periodo, idEnte, idAuditoria, idActo,
+                            idOficio, idRequerimiento, idResultado, nombreArchivo, sha256Hex);
+                        Reportar(34, "Punto de recuperación", $"Conservando una copia segura de {nombreArchivo} para resistir reinicios...");
+                        rutaEnvio = await _diario.ConservarCopiaPreparadaAsync(
+                            fileUuid, nombreArchivo, rutaTemporal, ct);
+                        await _diario.MarcarPreparadoAsync(
+                            contexto, ruta, rutaEnvio, fileUuid, sha256Hex, totalLength,
+                            fueReparado, policy.RequiresVerification, policy.Version, ct);
                     }
 
-                    var rutaEnvio = archivoPreparado.UploadPath;
-                    var totalLength = new FileInfo(rutaEnvio).Length;
                     if (totalLength <= 0)
                         throw new FileValidationException(
                             FileInspectionOutcome.Invalid,
                             $"{nombreArchivo} está vacío y no puede enviarse.");
                     ValidarLimitePolitica(policy, totalLength, nombreArchivo);
 
-                    Reportar(25, "Integridad", $"Calculando huella SHA-256 de {nombreArchivo}: 0%...");
-                    var sha256Hex = await CalcularSha256Async(
-                        rutaEnvio,
-                        porcentaje => Reportar(
-                            25 + porcentaje * 0.10,
-                            "Integridad",
-                            $"Calculando huella SHA-256 de {nombreArchivo}: {porcentaje:N0}%..."),
-                        ct);
+                    if (policy.RequiresVerification)
+                    {
+                        archivosVerificados++;
+                        if (fueReparado)
+                            archivosReparados++;
+                        if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+                        {
+                            pdfVerificados++;
+                            if (fueReparado)
+                                pdfReparados++;
+                        }
+                    }
+                    else
+                    {
+                        verificacionesOmitidas++;
+                    }
 
-                    var fileUuid = CrearUuidDeterminista(
-                        rfc, deviceId, contexto.Periodo, idEnte, idAuditoria, idActo,
-                        idOficio, idRequerimiento, idResultado, nombreArchivo, sha256Hex);
                     var correlationId = Guid.NewGuid().ToString("D");
 
                     UploadAck? ackFinal = null;
@@ -316,6 +406,14 @@ namespace TransferClienteASE.Servicios
                             var offsetInicial = status.NextOffset;
                             if (offsetInicial < 0 || offsetInicial > totalLength)
                                 throw new InvalidOperationException("El servidor devolvió un punto de reanudación inconsistente.");
+                            await _diario.MarcarProgresoAsync(
+                                contexto, ruta, offsetInicial,
+                                offsetInicial > 0 ? "Resuming" : "Uploading",
+                                offsetInicial > 0
+                                    ? $"Servidor confirmó {offsetInicial:N0} bytes; reanudando la carga."
+                                    : "Servidor confirmó una carga nueva desde el byte cero.",
+                                ct);
+                            offsetConfirmadoDiario = offsetInicial;
                             archivoFueReanudado |= offsetInicial > 0;
                             if (offsetInicial > 0)
                             {
@@ -375,7 +473,10 @@ namespace TransferClienteASE.Servicios
                     if (!string.IsNullOrWhiteSpace(ackFinal.ReceiptId))
                         recibos.Add(ackFinal.ReceiptId);
 
-                    var mensajeFinal = archivoPreparado.WasRepaired
+                    await _diario.CompletarAsync(
+                        contexto, ruta, totalLength, ackFinal.ReceiptId, ackFinal.TraceId, ct);
+
+                    var mensajeFinal = fueReparado
                         ? $"{nombreArchivo} fue reparado, revalidado y enviado. Recibo digital: {MostrarId(ackFinal.ReceiptId)}."
                         : policy.RequiresVerification
                             ? $"{nombreArchivo} enviado y verificado. Recibo digital: {MostrarId(ackFinal.ReceiptId)}."
@@ -385,6 +486,24 @@ namespace TransferClienteASE.Servicios
                 catch (FileValidationException exception)
                 {
                     Reportar(25, "Rechazado", exception.Message);
+                    await _diario.MarcarProgresoAsync(
+                        contexto, ruta, offsetConfirmadoDiario,
+                        "Failed", exception.Message, CancellationToken.None);
+                    throw;
+                }
+                catch (OperationCanceledException)
+                {
+                    await _diario.MarcarProgresoAsync(
+                        contexto, ruta, offsetConfirmadoDiario,
+                        "Paused", "Carga pausada; el avance confirmado se recuperará al continuar.",
+                        CancellationToken.None);
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    await _diario.MarcarProgresoAsync(
+                        contexto, ruta, offsetConfirmadoDiario,
+                        "Paused", exception.Message, CancellationToken.None);
                     throw;
                 }
                 finally

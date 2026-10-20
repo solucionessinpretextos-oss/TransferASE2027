@@ -31,14 +31,14 @@ Ejemplo productivo:
 
 ```powershell
 pwsh -NoProfile -File build/Build-Release.ps1 `
-  -Version 2.1.1.0 `
+  -Version 2.2.0.0 `
   -MinSupportedVersion 2.1.0.0 `
-  -DownloadUrl "https://descargas.ase-sinaloa.gob.mx/transfer/TransferClienteASE-2.1.1.0-win-x64.zip" `
+  -DownloadUrl "https://descargas.ase-sinaloa.gob.mx/transfer/TransferClienteASE-2.2.0.0-win-x64.zip" `
   -SigningKeyPath "D:\Secretos\transfer-update-private.pem" `
   -TrustedPublicKeyPath "D:\Configuracion\transfer-update-public.pem" `
   -CodeSigningCertificateThumbprint "HUELLA_CERTIFICADO" `
   -TimestampServer "URL_RFC3161_AUTORIZADA" `
-  -ReleaseNotes "Correcciones de seguridad y estabilidad."
+  -ReleaseNotes "Reanudación durable después de reiniciar cliente o servidor."
 ```
 
 Si la llave privada PEM está cifrada, la contraseña se lee de `TRANSFER_RELEASE_SIGNING_KEY_PASSWORD`. Nunca se acepta por argumento ni se copia al artefacto.
@@ -66,7 +66,7 @@ La llave privada nunca se copia a la salida. El pipeline inspecciona también el
 
 ```powershell
 pwsh -NoProfile -File build/Verify-Release.ps1 `
-  -ReleaseDirectory "D:\Releases\2.1.1.0" `
+  -ReleaseDirectory "D:\Releases\2.2.0.0" `
   -TrustedPublicKeyPath "D:\Configuracion\transfer-update-public.pem"
 ```
 

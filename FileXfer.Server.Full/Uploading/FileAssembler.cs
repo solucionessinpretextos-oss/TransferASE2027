@@ -297,6 +297,63 @@ namespace FileXfer.Server.Uploading
             return File.Exists(path) ? new FileInfo(path).Length : 0;
         }
 
+        /// <summary>
+        /// Fuerza a almacenamiento estable todos los bytes del escritor activo. El valor
+        /// devuelto es el único offset que el servidor puede publicar como confirmado.
+        /// </summary>
+        public async Task<long> FlushToDiskAsync(string fileUuid, CancellationToken ct)
+        {
+            if (!_sessions.TryGetWriteState(fileUuid, out var state))
+                throw new InvalidOperationException("No existe un escritor activo para confirmar la carga.");
+
+            await state.WriteGate.WaitAsync(ct);
+            try
+            {
+                await state.Stream.FlushAsync(ct);
+                state.Stream.Flush(flushToDisk: true);
+                state.MarkFlushed();
+                return state.Stream.Length;
+            }
+            finally
+            {
+                state.WriteGate.Release();
+            }
+        }
+
+        /// <summary>
+        /// Reconcilia el archivo físico con el offset confirmado en SQL. Una cola que pudo
+        /// quedar en caché pero no alcanzó su checkpoint se elimina antes de reanudar.
+        /// </summary>
+        public long ReconcileToCommittedLength(
+            string rfcOrLogicalPath,
+            string fileUuid,
+            string? fileName,
+            long committedLength)
+        {
+            if (committedLength < 0)
+                throw new ArgumentOutOfRangeException(nameof(committedLength));
+
+            _sessions.RemoveWriteState(fileUuid);
+            var path = ResolveAbsolutePath(rfcOrLogicalPath, fileUuid, fileName);
+            if (!File.Exists(path))
+                return 0;
+
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.Read,
+                bufferSize: StreamBufferSize,
+                options: FileOptions.SequentialScan);
+            var safeLength = Math.Min(stream.Length, committedLength);
+            if (stream.Length != safeLength)
+            {
+                stream.SetLength(safeLength);
+                stream.Flush(flushToDisk: true);
+            }
+            return safeLength;
+        }
+
         public void DeleteIfExists(
             string rfcOrLogicalPath,
             string fileUuid,

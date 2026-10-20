@@ -1,16 +1,13 @@
 // DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
 // Archivo: FileXfer.Server.Full/Services/RateLockService.cs
 // Capa: Backend FileXfer.Server.Full (.NET 8)
-// Propósito: Servicio anti-fuerza-bruta/lockout.
-// Interacción: Controla intentos fallidos de autenticación para evitar abuso.
+// Propósito: Servicio antiabuso con ventanas de tasa en memoria.
+// Interacción: Limita solicitudes de autenticación por IP y RFC.
 // Regla de mantenimiento: Cualquier cambio aquí puede afectar varios flujos del cliente. Validar acto normal, acto 16 y acto 21 antes de publicar.
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
 using System.Collections.Concurrent;
-using System.Data;
-using FileXfer.Server.Data;
 using FileXfer.Server.Options;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace FileXfer.Server.Services;
@@ -18,22 +15,14 @@ namespace FileXfer.Server.Services;
 public sealed class RateLockService
 {
     private const int MaxInMemoryCounters = 10_000;
-    private readonly IDbContextFactory<FileXferDbContext> _dbf;
     private readonly RateLimitOptions _opt;
-    private readonly ILogger<RateLockService> _log;
-    private readonly SemaphoreSlim _lockoutWriteGate = new(1, 1);
 
     private readonly ConcurrentDictionary<string, WindowCounter> _counters = new(StringComparer.OrdinalIgnoreCase);
     private long _rateCalls;
 
-    public RateLockService(
-        IDbContextFactory<FileXferDbContext> dbf,
-        IOptions<RateLimitOptions> opt,
-        ILogger<RateLockService> log)
+    public RateLockService(IOptions<RateLimitOptions> opt)
     {
-        _dbf = dbf;
         _opt = opt.Value;
-        _log = log;
     }
 
     private sealed class WindowCounter
@@ -78,101 +67,6 @@ public sealed class RateLockService
 
             ctr.Count++;
             return true;
-        }
-    }
-
-    public async Task<bool> IsLockedAsync(string rfc)
-    {
-        await using var db = await _dbf.CreateDbContextAsync();
-        var lo = await db.Lockouts.AsNoTracking().SingleOrDefaultAsync(x => x.Rfc == rfc);
-        if (lo == null) return false;
-
-        var now = DateTimeOffset.UtcNow;
-        if (lo.LockedUntilUtc.HasValue && lo.LockedUntilUtc.Value > now)
-            return true;
-
-        return false;
-    }
-
-    public async Task RegisterFailureAsync(string rfc)
-    {
-        await _lockoutWriteGate.WaitAsync();
-        try
-        {
-            await using var db = await _dbf.CreateDbContextAsync();
-            await using var transaction = db.Database.IsRelational()
-                ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable)
-                : null;
-            var lo = await db.Lockouts.SingleOrDefaultAsync(x => x.Rfc == rfc);
-            var now = DateTimeOffset.UtcNow;
-
-            if (lo == null)
-            {
-                lo = new Lockout
-                {
-                    Id = Guid.NewGuid(),
-                    Rfc = rfc,
-                    FailCount = 1,
-                    LockedUntilUtc = null,
-                    UpdatedUtc = now
-                };
-                db.Lockouts.Add(lo);
-            }
-            else
-            {
-                var failureWindow = TimeSpan.FromMinutes(Math.Max(1, _opt.LockoutMinutes));
-                if ((lo.LockedUntilUtc.HasValue && lo.LockedUntilUtc.Value <= now) ||
-                    now - lo.UpdatedUtc > failureWindow)
-                {
-                    lo.FailCount = 1;
-                    lo.LockedUntilUtc = null;
-                }
-                else
-                {
-                    lo.FailCount += 1;
-                }
-                lo.UpdatedUtc = now;
-            }
-
-            if (lo.FailCount >= Math.Max(1, _opt.LockoutThreshold))
-            {
-                lo.LockedUntilUtc = now.AddMinutes(Math.Max(1, _opt.LockoutMinutes));
-                _log.LogWarning("RFC {Rfc} bloqueado hasta {Until} por {Fails} fallos.", rfc, lo.LockedUntilUtc, lo.FailCount);
-            }
-
-            await db.SaveChangesAsync();
-            if (transaction is not null)
-                await transaction.CommitAsync();
-        }
-        finally
-        {
-            _lockoutWriteGate.Release();
-        }
-    }
-
-    public async Task RegisterSuccessAsync(string rfc)
-    {
-        await _lockoutWriteGate.WaitAsync();
-        try
-        {
-            await using var db = await _dbf.CreateDbContextAsync();
-            await using var transaction = db.Database.IsRelational()
-                ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable)
-                : null;
-            var lo = await db.Lockouts.SingleOrDefaultAsync(x => x.Rfc == rfc);
-            if (lo == null)
-                return;
-
-            lo.FailCount = 0;
-            lo.LockedUntilUtc = null;
-            lo.UpdatedUtc = DateTimeOffset.UtcNow;
-            await db.SaveChangesAsync();
-            if (transaction is not null)
-                await transaction.CommitAsync();
-        }
-        finally
-        {
-            _lockoutWriteGate.Release();
         }
     }
 

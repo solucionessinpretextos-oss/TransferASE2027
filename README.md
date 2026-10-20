@@ -15,14 +15,16 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 
 ## Garantías relevantes
 
-- Login e.firma con nonce de un solo uso, prueba de posesión RSA, raíces SAT explícitas, URLs OCSP/CRL permitidas y MFA obligatorio para toda API `admin`/`ops`.
+- Login exclusivamente con e.firma para todos los roles, con nonce de un solo uso, prueba de posesión RSA, raíces SAT explícitas y URLs OCSP/CRL permitidas. El ecosistema no solicita ni admite MFA en Development o Production.
+- Las APIs administrativas mantienen autorización por roles `admin`/`ops`, revocación de dispositivo, versión de seguridad y auditoría; no dependen de secretos TOTP.
+- El perfil local `Development` puede omitir cadena y revocación SAT únicamente para pruebas de integración, pero conserva vigencia, RFC, correspondencia CER/KEY y prueba criptográfica de posesión. Producción rechaza esta opción al arrancar.
 - JWT de corta duración, `SecurityVersion`, revocación inmediata de dispositivos y familias de refresh token con detección de reutilización.
 - Autorización del contexto de carga derivada del JWT y validada contra BuDi; no se aceptan rutas físicas del cliente.
 - Hash final calculado sobre bytes releídos del almacenamiento después de `Flush(true)`.
-- Cargas reanudables por `FileUuid + longitud + SHA-256 + contexto + dispositivo`: ante una caída, el cliente consulta el offset físico confirmado y continúa desde ese byte. Los parciales vencen y se eliminan de forma controlada.
+- Cargas reanudables por `FileUuid + longitud + SHA-256 + contexto + dispositivo`: el cliente conserva una identidad estable, una copia segura y un diario SQLite local sin credenciales. Tras reiniciar cliente, servidor o ambos, reconstruye la cola, consulta el checkpoint durable y continúa desde el último byte confirmado. Los parciales vencen y se eliminan de forma controlada.
 - Políticas de archivo versionadas en base de datos: desde el Dashboard se habilita/bloquea cada extensión, se define límite de tamaño y se decide si requiere verificación profunda. Cada cambio exige motivo, control de concurrencia e historial con rollback.
 - El cliente muestra acción actual, archivo `n/N`, porcentaje por archivo y porcentaje total durante inspección, reparación, transferencia y confirmación del servidor.
-- La descarga servidor→cliente exige propietario o `admin/ops` con e.firma+MFA, revalida tamaño y SHA-256 sobre el mismo stream bloqueado que se entrega, admite HTTP Range y conserva parciales para reanudación. El cliente muestra progreso por archivo y total y vuelve a verificar SHA-256 antes de publicar el archivo descargado.
+- La descarga servidor→cliente exige propietario o `admin/ops` autenticado con e.firma, revalida tamaño y SHA-256 sobre el mismo stream bloqueado que se entrega, admite HTTP Range y conserva parciales para reanudación. El cliente muestra progreso por archivo y total y vuelve a verificar SHA-256 antes de publicar el archivo descargado.
 - Las cargas nuevas se correlacionan entre BuDi y FileXfer mediante `ID_Upload`; los registros históricos sin identificador conservan una ruta de lectura compatible y siempre verifican hash/tamaño antes de descargarse.
 - Readiness valida conectividad, columnas e índices obligatorios de BuDi para no declarar listo un servidor incapaz de catalogar cargas idempotentes.
 - El cliente inspecciona una copia temporal; el servidor vuelve a validar los bytes persistidos antes de catalogarlos.
@@ -53,8 +55,8 @@ El dashboard se construye desde `FileXfer.AdminDashboard` con `npm ci` y `npm ru
 ## Operación de políticas y recibos
 
 - `GET /file-policies/effective`: política mínima que consume el cliente autenticado; no expone autor, motivo ni marcas de auditoría administrativas.
-- `/admin/file-policies`: consulta para `admin/ops` con MFA; las modificaciones y rollback exigen `admin` con MFA.
-- `GET /receipts/{receiptId}`: entrega payload canónico, firma, llave pública, hashes de cadena y resultado de verificación al propietario; el acceso cruzado de `admin/ops` exige `amr=efirma+mfa`.
+- `/admin/file-policies`: consulta para `admin/ops` autenticados con e.firma; las modificaciones y rollback exigen rol `admin`.
+- `GET /receipts/{receiptId}`: entrega payload canónico, firma, llave pública, hashes de cadena y resultado de verificación al propietario; el acceso cruzado exige rol `admin/ops` y `amr=efirma`.
 - `GET /archivos-locales/{id}/download`: descarga autenticada, auditable y reanudable; los archivos históricos que no puedan correlacionarse con hash y longitud internos se bloquean de forma segura.
 - La verificación del recibo compara su llave pública y `KeyId` contra la llave confiable configurada; sustituir toda la firma y su llave dentro de SQL no produce `signatureValid=true`.
 - Los spans usan `ActivitySource` `FileXfer.Server.Transfer` y las métricas el `Meter` `FileXfer.Server`, listos para el colector OpenTelemetry corporativo.

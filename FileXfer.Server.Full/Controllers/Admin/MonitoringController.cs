@@ -23,7 +23,7 @@ namespace FileXfer.Server.Controllers.Admin
 {
     [ApiController]
     [Route("admin/monitoring")]
-    [Authorize(Policy = "PrivilegedMfa")]
+    [Authorize(Policy = "PrivilegedEfirma")]
     public sealed class MonitoringController : ControllerBase
     {
         private readonly IDbContextFactory<FileXferDbContext> _dbFactory;

@@ -54,15 +54,18 @@ public sealed class SatCertificateValidator : ISatCertificateValidator
         StringComparer.Ordinal);
     private readonly SatOptions _opt;
     private readonly ILogger<SatCertificateValidator> _log;
+    private readonly IHostEnvironment _environment;
     private readonly X509Certificate2Collection _trustedRoots = new();
     private readonly X509Certificate2Collection _intermediates = new();
 
     public SatCertificateValidator(
         IOptions<SatOptions> opt,
-        ILogger<SatCertificateValidator> log)
+        ILogger<SatCertificateValidator> log,
+        IHostEnvironment environment)
     {
         _opt = opt.Value;
         _log = log;
+        _environment = environment;
         LoadCertificates(_opt.TrustedRootCertificatePaths, _trustedRoots);
         LoadCertificates(_opt.IntermediateCertificatePaths, _intermediates);
     }
@@ -128,6 +131,17 @@ public sealed class SatCertificateValidator : ISatCertificateValidator
                     RSASignaturePadding.Pkcs1))
             {
                 return new(false, null, "La firma del nonce no es válida", false);
+            }
+
+            if (_environment.IsDevelopment() && _opt.AllowDevelopmentUntrustedChain)
+            {
+                _log.LogWarning(
+                    "Validación de cadena/revocación SAT omitida exclusivamente en Development. Thumbprint={Thumbprint}",
+                    cert.Thumbprint);
+                return new(true, certificateRfc, null, true)
+                {
+                    InfoCert = info
+                };
             }
 
             if (!ValidateNetworkLocations(cert, out var networkError))

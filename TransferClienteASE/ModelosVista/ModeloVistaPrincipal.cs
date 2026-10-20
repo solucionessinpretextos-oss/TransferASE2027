@@ -37,6 +37,7 @@ namespace TransferClienteASE.ModelosVista
     {
         private readonly ServicioCargaArchivos _servicioCarga;
         private readonly ContextoRequerimiento _contexto;
+        private readonly ServicioDiarioTransferencias _diario;
 
         private bool _subidaEnProgreso;
         private string _mensajeEstado = string.Empty;
@@ -171,10 +172,14 @@ namespace TransferClienteASE.ModelosVista
         public ComandoRelay ComandoOrdenarPorNombre { get; }
         public ComandoRelay ComandoOrdenarPorTamanio { get; }
 
-        public ModeloVistaPrincipal(ServicioCargaArchivos servicioCarga, ContextoRequerimiento contexto)
+        public ModeloVistaPrincipal(
+            ServicioCargaArchivos servicioCarga,
+            ContextoRequerimiento contexto,
+            ServicioDiarioTransferencias? diario = null)
         {
             _servicioCarga = servicioCarga ?? throw new ArgumentNullException(nameof(servicioCarga));
             _contexto = contexto ?? throw new ArgumentNullException(nameof(contexto));
+            _diario = diario ?? new ServicioDiarioTransferencias();
 
             NombreUsuario = ObtenerStringDeSesion("NombreUsuario", "Nombre", "Usuario", "NombreCompleto", "NombrePersona");
             RfcUsuario = ObtenerStringDeSesion("RfcUsuario", "Rfc", "RFC");
@@ -200,6 +205,64 @@ namespace TransferClienteASE.ModelosVista
             };
 
             _ = CargarPoliticasEfectivasAsync();
+            _ = RestaurarColaPendienteAsync();
+        }
+
+        private async Task RestaurarColaPendienteAsync()
+        {
+            try
+            {
+                var pendientes = await _diario.ObtenerPendientesAsync(_contexto);
+                foreach (var pendiente in pendientes)
+                {
+                    if (Archivos.Any(item => string.Equals(
+                            item.RutaCompleta,
+                            pendiente.OriginalPath,
+                            StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    var model = new ModeloVistaArchivoTransferencia(pendiente.OriginalPath)
+                    {
+                        Estado = EstadoTransferenciaArchivo.Pendiente,
+                        Progreso = pendiente.PreparedLength > 0
+                            ? Math.Clamp((double)pendiente.ConfirmedBytes / pendiente.PreparedLength * 100d, 0, 100)
+                            : 0,
+                        AccionActual = File.Exists(pendiente.OriginalPath) ||
+                                       (!string.IsNullOrWhiteSpace(pendiente.PreparedPath) && File.Exists(pendiente.PreparedPath))
+                            ? "Carga recuperada; lista para reconciliar con el servidor"
+                            : "Esperando que se vuelva a seleccionar el archivo original",
+                        ReciboId = pendiente.ReceiptId,
+                        TraceId = pendiente.TraceId
+                    };
+                    Archivos.Add(model);
+                }
+
+                if (pendientes.Count > 0)
+                {
+                    var totalBytes = pendientes.Sum(item =>
+                        item.PreparedLength > 0 ? item.PreparedLength : item.OriginalLength);
+                    var confirmedBytes = pendientes.Sum(item => Math.Min(
+                        item.ConfirmedBytes,
+                        item.PreparedLength > 0 ? item.PreparedLength : item.OriginalLength));
+                    ProgresoTotal = totalBytes > 0
+                        ? (double)confirmedBytes / totalBytes * 100d
+                        : 0;
+                    EtapaActual = "Recuperación";
+                    ArchivoActual = $"{pendientes.Count} archivo(s) pendiente(s)";
+                    MensajeEstado = pendientes.Count == 1
+                        ? "Se recuperó 1 carga pendiente. Pulse confirmar para continuar desde el último byte guardado."
+                        : $"Se recuperaron {pendientes.Count} cargas pendientes. Pulse confirmar para continuar desde el último byte guardado.";
+                }
+            }
+            catch (Exception exception)
+            {
+                MensajeEstado =
+                    "No fue posible recuperar la cola anterior. Puede agregar archivos manualmente; " +
+                    "el servidor seguirá protegiendo las cargas parciales.";
+                System.Diagnostics.Debug.WriteLine(exception);
+            }
         }
 
         private async Task CargarPoliticasEfectivasAsync()
@@ -307,7 +370,21 @@ namespace TransferClienteASE.ModelosVista
                         string.Equals(a.RutaCompleta, ruta, StringComparison.OrdinalIgnoreCase)))
                 {
                     Archivos.Add(new ModeloVistaArchivoTransferencia(ruta));
+                    _ = PersistirArchivoEnColaAsync(ruta);
                 }
+            }
+        }
+
+        private async Task PersistirArchivoEnColaAsync(string ruta)
+        {
+            try
+            {
+                await _diario.RegistrarEnColaAsync(_contexto, ruta);
+            }
+            catch (Exception exception)
+            {
+                MensajeEstado =
+                    $"{Path.GetFileName(ruta)} fue agregado, pero no se pudo guardar su punto de recuperación local: {exception.Message}";
             }
         }
 
@@ -317,6 +394,19 @@ namespace TransferClienteASE.ModelosVista
                 return;
 
             Archivos.Remove(archivo);
+            _ = CancelarEntradaDiarioAsync(archivo.RutaCompleta);
+        }
+
+        private async Task CancelarEntradaDiarioAsync(string ruta)
+        {
+            try
+            {
+                await _diario.CancelarAsync(_contexto, ruta);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(exception);
+            }
         }
 
         /// <summary>

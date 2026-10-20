@@ -33,9 +33,10 @@ namespace TransferClienteASE.Vistas
             InitializeComponent();
 
             var configuracion = new ServicioConfiguracionCliente();
-            var servicioCarga = new ServicioCargaArchivos(configuracion);
+            var diario = new ServicioDiarioTransferencias();
+            var servicioCarga = new ServicioCargaArchivos(configuracion, diario: diario);
 
-            var modeloVista = new ModeloVistaPrincipal(servicioCarga, contexto);
+            var modeloVista = new ModeloVistaPrincipal(servicioCarga, contexto, diario);
             DataContext = modeloVista;
         }
 
@@ -44,7 +45,7 @@ namespace TransferClienteASE.Vistas
             var dialogo = new DialogoImportanteWindow(
                 "Confirmar salida",
                 "Se cerrará esta ventana y regresará a la selección de requerimientos.\n\n" +
-                "Si tiene archivos pendientes de subir, estos no serán enviados.",
+                "Las cargas pendientes quedarán guardadas y podrán continuar desde el último byte confirmado cuando vuelva a abrir este apartado.",
                 TipoDialogo.Advertencia)
             {
                 Owner = this
@@ -52,6 +53,11 @@ namespace TransferClienteASE.Vistas
 
             if (dialogo.ShowDialog() == true)
             {
+                if (DataContext is ModeloVistaPrincipal vm &&
+                    vm.ComandoPausarCola.CanExecute(null))
+                {
+                    vm.ComandoPausarCola.Execute(null);
+                }
                 SeSolicitoSalir = true;
                 Close();
             }

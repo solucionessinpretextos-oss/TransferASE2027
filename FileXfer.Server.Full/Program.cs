@@ -56,6 +56,11 @@ var receiptSigning = builder.Configuration.GetSection("Security:Receipts").Get<R
 builder.Services.AddSingleton(receiptSigning);
 
 var configuredSat = builder.Configuration.GetSection("Security:SAT").Get<SatOptions>() ?? new SatOptions();
+if (!builder.Environment.IsDevelopment() && configuredSat.AllowDevelopmentUntrustedChain)
+{
+    throw new InvalidOperationException(
+        "Security:SAT:AllowDevelopmentUntrustedChain solo puede habilitarse en Development.");
+}
 if (!builder.Environment.IsDevelopment() && configuredSat.TrustedRootCertificatePaths.Length == 0)
 {
     throw new InvalidOperationException(
@@ -175,7 +180,6 @@ if (!builder.Environment.IsDevelopment() &&
 }
 
 builder.Services.AddSingleton<IPathProtector, AesGcmPathProtector>();
-builder.Services.AddSingleton<IMfaSecretProtector, AesGcmMfaSecretProtector>();
 builder.Services.AddSingleton<IBudiDevRepository, BudiDevRepository>();
 builder.Services.AddSingleton<ISecureFileDownloadService, SecureFileDownloadService>();
 builder.Services
@@ -269,17 +273,17 @@ builder.Services
 
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("PrivilegedMfa", policy =>
+    options.AddPolicy("PrivilegedEfirma", policy =>
     {
         policy.RequireAuthenticatedUser();
         policy.RequireRole("admin", "ops");
-        policy.RequireClaim("amr", "efirma+mfa");
+        policy.RequireClaim("amr", "efirma");
     });
-    options.AddPolicy("AdminMfa", policy =>
+    options.AddPolicy("AdminEfirma", policy =>
     {
         policy.RequireAuthenticatedUser();
         policy.RequireRole("admin");
-        policy.RequireClaim("amr", "efirma+mfa");
+        policy.RequireClaim("amr", "efirma");
     });
 });
 
@@ -308,7 +312,6 @@ builder.Services.AddSingleton<IPdfSafetyService, QpdfPdfSafetyService>();
 builder.Services.AddSingleton<IFileSafetyService, DefaultFileSafetyService>();
 builder.Services.AddSingleton<IFilePolicyService, FilePolicyService>();
 builder.Services.AddSingleton<IUploadReceiptService, UploadReceiptService>();
-builder.Services.AddSingleton<TotpService>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<ISatCertificateValidator, SatCertificateValidator>();
 builder.Services.AddSingleton<RateLockService>();
@@ -402,7 +405,13 @@ using (var scope = app.Services.CreateScope())
     _ = scope.ServiceProvider.GetRequiredService<IUploadReceiptService>();
 }
 
-if (app.Environment.IsDevelopment())
+var debugOptions = app.Services
+    .GetRequiredService<IOptions<DebugFeaturesOptions>>()
+    .Value;
+var developerDiagnosticsEnabled =
+    app.Environment.IsDevelopment() && debugOptions.EnableDeveloperDiagnostics;
+
+if (developerDiagnosticsEnabled)
 {
     app.UseDeveloperExceptionPage();
     app.UseSwagger();
@@ -441,7 +450,7 @@ app.Use(async (context, next) =>
     context.Response.Headers.TryAdd("Referrer-Policy", "no-referrer");
     context.Response.Headers.TryAdd("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     context.Response.Headers.TryAdd("X-Permitted-Cross-Domain-Policies", "none");
-    if (!app.Environment.IsDevelopment() || !context.Request.Path.StartsWithSegments("/swagger"))
+    if (!developerDiagnosticsEnabled || !context.Request.Path.StartsWithSegments("/swagger"))
     {
         context.Response.Headers.TryAdd(
             "Content-Security-Policy",
@@ -457,7 +466,7 @@ app.UseStaticFiles();
 
 app.UseHttpsRedirection();
 
-if (app.Environment.IsDevelopment())
+if (app.Environment.IsDevelopment() && debugOptions.EnableAdminDashboardCors)
     app.UseCors(AdminDashboardCorsPolicy);
 
 app.UseAuthentication();
@@ -468,18 +477,13 @@ app.MapControllers();
 app.MapFallbackToFile("/admin/{*path:nonfile}", "admin/index.html");
 
 {
-    var debugOpts = app.Services
-        .GetRequiredService<
-            Microsoft.Extensions.Options.IOptions<DebugFeaturesOptions>>()
-        .Value;
-
     if (app.Environment.IsDevelopment() &&
-        debugOpts.EnableDebugUploadEndpoints &&
-        debugOpts.AllowedEnvironments.Contains(
+        debugOptions.EnableDebugUploadEndpoints &&
+        debugOptions.AllowedEnvironments.Contains(
             app.Environment.EnvironmentName,
             StringComparer.OrdinalIgnoreCase))
     {
-        app.MapDebugUpload(debugOpts.AllowedRoles);
+        app.MapDebugUpload(debugOptions.AllowedRoles);
     }
 }
 

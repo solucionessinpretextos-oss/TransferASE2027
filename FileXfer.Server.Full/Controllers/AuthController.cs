@@ -2,7 +2,7 @@
 // Archivo: FileXfer.Server.Full/Controllers/AuthController.cs
 // Capa: Backend FileXfer.Server.Full (.NET 8)
 // Propósito: Controlador de autenticación con e.firma/JWT/refresh token.
-// Interacción: Orquesta nonce, validación de firma, lockout, MFA y emisión de tokens para cliente WPF.
+// Interacción: Orquesta nonce, validación de firma y emisión de tokens para cliente WPF.
 // Regla de mantenimiento: No colocar SQL directo aquí si la consulta pertenece a BuDi; mantenerlo delgado para que la lógica se pruebe y mantenga en servicios.
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
@@ -11,7 +11,6 @@ using FileXfer.Server.Data;
 using FileXfer.Server.Options;
 using FileXfer.Server.Security;
 using FileXfer.Server.Services;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -25,7 +24,6 @@ public sealed class AuthController : ControllerBase
 {
     private readonly IDbContextFactory<FileXferDbContext> _dbf;
     private readonly JwtService _jwt;
-    private readonly TotpService _totp;
     private readonly ISatCertificateValidator _sat;
     private readonly RateLockService _rate;
     private readonly IAlertSink _alerts;
@@ -33,24 +31,20 @@ public sealed class AuthController : ControllerBase
     private readonly IWebHostEnvironment _env;
     private readonly SatOptions _satOptions;
     private readonly IBudiDevRepository _budi;
-    private readonly IMfaSecretProtector _mfaSecretProtector;
 
     public AuthController(
         IDbContextFactory<FileXferDbContext> dbf,
         JwtService jwt,
-        TotpService totp,
         ISatCertificateValidator sat,
         RateLockService rate,
         IAlertSink alerts,
         ILogger<AuthController> log,
         IWebHostEnvironment env,
         IOptions<SatOptions> satOptions,
-        IBudiDevRepository budi,
-        IMfaSecretProtector mfaSecretProtector)
+        IBudiDevRepository budi)
     {
         _dbf = dbf;
         _jwt = jwt;
-        _totp = totp;
         _sat = sat;
         _rate = rate;
         _alerts = alerts;
@@ -58,7 +52,6 @@ public sealed class AuthController : ControllerBase
         _env = env;
         _satOptions = satOptions.Value;
         _budi = budi;
-        _mfaSecretProtector = mfaSecretProtector;
     }
 
     [HttpPost("nonce")]
@@ -118,15 +111,12 @@ public sealed class AuthController : ControllerBase
         string nonce,
         string signatureVersion,
         string signatureBase64,
-        string? mfaCode,
         string deviceId);
 
     public sealed record LoginResp(
         string? token,
         string? rfc,
         string[]? roles,
-        bool? mfaRequired,
-        bool? enrolled,
         string? deviceId,
         string? message,
         string? refreshToken,
@@ -153,9 +143,6 @@ public sealed class AuthController : ControllerBase
                 return StatusCode(
                     StatusCodes.Status429TooManyRequests,
                     new { message = "Demasiados intentos de inicio de sesión. Intente más tarde." });
-
-            if (await _rate.IsLockedAsync(rfc))
-                return Problem(title: "Bloqueado por intentos MFA fallidos", statusCode: 423);
 
             if (!Guid.TryParseExact(req.nonceId, "N", out var nonceGuid))
             {
@@ -306,55 +293,11 @@ public sealed class AuthController : ControllerBase
             if (revokedDevice)
                 return Problem(title: "El dispositivo fue revocado", statusCode: 403);
 
-            var enrolled = await db.MfaSecrets.AnyAsync(x => x.Rfc == rfc && x.Active);
-            var privilegedRole = (user.Roles ?? Array.Empty<string>()).Any(role =>
-                role.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
-                role.Equals("ops", StringComparison.OrdinalIgnoreCase));
-            // Compatibilidad segura: un privilegiado legado que ya tiene factor activo debe
-            // usarlo aunque su bandera MfaRequired aún no haya sido normalizada.
-            var requiresMfa = user.MfaRequired || (privilegedRole && enrolled);
-            var mfaVerified = false;
-            if (requiresMfa)
-            {
-                if (!enrolled)
-                {
-                    return Problem(title: "MFA requerido pero no enrolado", statusCode: 403);
-                }
-
-                if (string.IsNullOrWhiteSpace(req.mfaCode))
-                {
-                    return Problem(title: "MFA code requerido", statusCode: 403);
-                }
-
-                var mfaSecret = await db.MfaSecrets
-                    .Where(x => x.Rfc == rfc && x.Active)
-                    .OrderByDescending(x => x.CreatedUtc)
-                    .FirstOrDefaultAsync();
-
-                if (mfaSecret == null ||
-                    !_totp.Verify(_mfaSecretProtector.Unprotect(mfaSecret.SecretBase32), req.mfaCode))
-                {
-                    await _rate.RegisterFailureAsync(rfc);
-                    return Problem(title: "MFA inválido", statusCode: 403);
-                }
-
-                if (!_mfaSecretProtector.IsProtected(mfaSecret.SecretBase32))
-                {
-                    mfaSecret.SecretBase32 = _mfaSecretProtector.Protect(mfaSecret.SecretBase32);
-                    await db.SaveChangesAsync(HttpContext.RequestAborted);
-                }
-
-                // Solo se marca tras verificar satisfactoriamente el TOTP en esta solicitud.
-                mfaVerified = true;
-            }
-
-            await _rate.RegisterSuccessAsync(rfc);
-
             var token = _jwt.Issue(
                 rfc,
                 user.Roles ?? Array.Empty<string>(),
                 user.SecurityVersion,
-                mfaVerified ? "efirma+mfa" : "efirma",
+                "efirma",
                 req.deviceId);
 
             var excessRefreshTokens = await db.RefreshTokens
@@ -369,8 +312,7 @@ public sealed class AuthController : ControllerBase
                 rfc,
                 req.deviceId,
                 ip,
-                user.SecurityVersion,
-                mfaVerified);
+                user.SecurityVersion);
             db.RefreshTokens.Add(refreshEntity);
 
             db.AuditLogs.Add(new AuditLog
@@ -380,7 +322,7 @@ public sealed class AuthController : ControllerBase
                 ActorRfc = rfc,
                 Action = "login_ok",
                 Ip = ip,
-                Details = $"deviceId={req.deviceId}"
+                Details = $"deviceId={req.deviceId}; satDevelopmentBypass={sat.BypassUsed}"
             });
 
             await db.SaveChangesAsync();
@@ -390,8 +332,6 @@ public sealed class AuthController : ControllerBase
                 token = token,
                 rfc = rfc,
                 roles = user.Roles,
-                mfaRequired = requiresMfa,
-                enrolled = enrolled,
                 deviceId = req.deviceId,
                 message = "ok",
                 refreshToken = refreshPlain,
@@ -501,8 +441,7 @@ public sealed class AuthController : ControllerBase
                 return Problem(title: "Usuario no autorizado", statusCode: 401);
             }
 
-            if (rt.SecurityVersion != user.SecurityVersion ||
-                (user.MfaRequired && !rt.MfaVerified))
+            if (rt.SecurityVersion != user.SecurityVersion)
             {
                 return Problem(title: "La sesión requiere autenticación completa", statusCode: 401);
             }
@@ -522,7 +461,6 @@ public sealed class AuthController : ControllerBase
                 rt.DeviceId,
                 ip,
                 user.SecurityVersion,
-                rt.MfaVerified,
                 rt.FamilyId,
                 rt.Id,
                 rt.AbsoluteExpiresUtc);
@@ -532,7 +470,7 @@ public sealed class AuthController : ControllerBase
                 user.Rfc,
                 user.Roles ?? Array.Empty<string>(),
                 user.SecurityVersion,
-                "refresh",
+                "efirma",
                 rt.DeviceId);
 
             db.AuditLogs.Add(new AuditLog
@@ -551,8 +489,6 @@ public sealed class AuthController : ControllerBase
                 token,
                 user.Rfc,
                 user.Roles,
-                user.MfaRequired,
-                enrolled: true,
                 deviceId: rt.DeviceId,
                 message: "ok",
                 refreshToken: newRefreshPlain,
@@ -563,153 +499,6 @@ public sealed class AuthController : ControllerBase
             _log.LogError(ex, "Error inesperado en /auth/refresh desde {Ip}", ip);
             return Problem(title: "Error interno", statusCode: 500);
         }
-    }
-
-    [Authorize]
-    [HttpPost("mfa/enroll")]
-    public async Task<IActionResult> Enroll()
-    {
-        if (!HasRecentFullAuthentication())
-            return Problem(title: "Se requiere autenticación reciente con e.firma", statusCode: 403);
-
-        var rfc = User.FindFirst("rfc")?.Value;
-        if (string.IsNullOrWhiteSpace(rfc))
-            return Unauthorized(new { message = "RFC no disponible en el token" });
-
-        rfc = rfc.Trim().ToUpperInvariant();
-
-        await using var db = await _dbf.CreateDbContextAsync();
-        if (await db.MfaSecrets.AnyAsync(x => x.Rfc == rfc && x.Active, HttpContext.RequestAborted))
-        {
-            return Conflict(new
-            {
-                message = "MFA ya está activo. La rotación requiere recuperación administrativa o validación del factor vigente."
-            });
-        }
-
-        var previousPending = await db.MfaSecrets
-            .Where(x => x.Rfc == rfc && !x.Active)
-            .ToListAsync(HttpContext.RequestAborted);
-        db.MfaSecrets.RemoveRange(previousPending);
-
-        var sec = _totp.GenerateSecretBase32();
-        db.MfaSecrets.Add(new MfaSecret
-        {
-            Id = Guid.NewGuid(),
-            Rfc = rfc,
-            SecretBase32 = _mfaSecretProtector.Protect(sec),
-            Active = false
-        });
-        await db.SaveChangesAsync();
-
-        var issuer = "FileXfer";
-        var label = $"{issuer}:{rfc}";
-        var otpauth = $"otpauth://totp/{Uri.EscapeDataString(label)}?secret={sec}&issuer={issuer}&algorithm=SHA1&digits=6&period=30";
-
-        using var qrGen = new QRCoder.QRCodeGenerator();
-        using var qrData = qrGen.CreateQrCode(otpauth, QRCoder.QRCodeGenerator.ECCLevel.Q);
-        using var qr = new QRCoder.PngByteQRCode(qrData);
-        var png = qr.GetGraphic(5);
-
-        return Ok(new
-        {
-            rfc,
-            secretBase32 = sec,
-            otpauthUri = otpauth,
-            qrBase64 = Convert.ToBase64String(png)
-        });
-    }
-
-    public sealed record MfaVerifyReq(string code);
-
-    [Authorize]
-    [HttpPost("mfa/verify")]
-    [RequestSizeLimit(8 * 1024)]
-    public async Task<IActionResult> Verify([FromBody] MfaVerifyReq req)
-    {
-        var code = req.code;
-        if (string.IsNullOrWhiteSpace(code))
-            return Problem(title: "Código MFA requerido", statusCode: 400);
-
-        var rfc = User.FindFirst("rfc")?.Value;
-        if (string.IsNullOrWhiteSpace(rfc))
-            return Unauthorized(new { message = "RFC no disponible en el token" });
-
-        rfc = rfc.Trim().ToUpperInvariant();
-
-        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        if (!_rate.TryRate("mfa-verify:ip:" + ip) || !_rate.TryRate("mfa-verify:rfc:" + rfc))
-            return StatusCode(
-                StatusCodes.Status429TooManyRequests,
-                new { message = "Demasiados intentos de verificación MFA. Intente más tarde." });
-
-        await using var db = await _dbf.CreateDbContextAsync();
-        var mfaSecret = await db.MfaSecrets
-            .Where(x => x.Rfc == rfc && !x.Active && x.CreatedUtc >= DateTimeOffset.UtcNow.AddMinutes(-10))
-            .OrderByDescending(x => x.CreatedUtc)
-            .FirstOrDefaultAsync();
-
-        if (mfaSecret == null)
-            return Problem(title: "No hay un enrolamiento MFA pendiente vigente", statusCode: 400);
-
-        var secret = _mfaSecretProtector.Unprotect(mfaSecret.SecretBase32);
-        var ok = _totp.Verify(secret, code);
-        if (ok)
-        {
-            if (!_mfaSecretProtector.IsProtected(mfaSecret.SecretBase32))
-                mfaSecret.SecretBase32 = _mfaSecretProtector.Protect(mfaSecret.SecretBase32);
-
-            var activeSecrets = await db.MfaSecrets
-                .Where(x => x.Rfc == rfc && x.Active)
-                .ToListAsync(HttpContext.RequestAborted);
-            foreach (var activeSecret in activeSecrets)
-                activeSecret.Active = false;
-            mfaSecret.Active = true;
-
-            var user = await db.Users.SingleAsync(x => x.Rfc == rfc, HttpContext.RequestAborted);
-            if ((user.Roles ?? Array.Empty<string>()).Any(role =>
-                    role.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
-                    role.Equals("ops", StringComparison.OrdinalIgnoreCase)))
-            {
-                // Tras activar el primer factor del bootstrap, las siguientes sesiones
-                // privilegiadas deben verificar TOTP durante el inicio de sesión.
-                user.MfaRequired = true;
-            }
-            user.SecurityVersion++;
-            var refreshTokens = await db.RefreshTokens
-                .Where(x => x.Rfc == rfc && !x.IsRevoked)
-                .ToListAsync(HttpContext.RequestAborted);
-            foreach (var refreshToken in refreshTokens)
-                refreshToken.IsRevoked = true;
-
-            db.AuditLogs.Add(new AuditLog
-            {
-                Id = Guid.NewGuid(),
-                TimestampUtc = DateTimeOffset.UtcNow,
-                ActorRfc = rfc,
-                Action = "mfa_enrollment_activated",
-                Ip = ip,
-                Details = "Sesiones revocadas por cambio de factor MFA."
-            });
-            await db.SaveChangesAsync(HttpContext.RequestAborted);
-        }
-        return Ok(new { ok });
-    }
-
-    private bool HasRecentFullAuthentication()
-    {
-        var amr = User.FindFirst("amr")?.Value;
-        var authTimeRaw = User.FindFirst("auth_time")?.Value;
-        if (string.IsNullOrWhiteSpace(amr) ||
-            !amr.StartsWith("efirma", StringComparison.Ordinal) ||
-            !long.TryParse(authTimeRaw, out var authTimeSeconds))
-        {
-            return false;
-        }
-
-        var authTime = DateTimeOffset.FromUnixTimeSeconds(authTimeSeconds);
-        var age = DateTimeOffset.UtcNow - authTime;
-        return age >= TimeSpan.Zero && age <= TimeSpan.FromMinutes(5);
     }
 
     private static string ComputeSha256(string raw)
@@ -725,7 +514,6 @@ public sealed class AuthController : ControllerBase
         string? deviceId,
         string? ip,
         int securityVersion,
-        bool mfaVerified,
         Guid? familyId = null,
         Guid? parentTokenId = null,
         DateTimeOffset? absoluteExpiresUtc = null,
@@ -751,7 +539,9 @@ public sealed class AuthController : ControllerBase
             FamilyId = familyId ?? Guid.NewGuid(),
             ParentTokenId = parentTokenId,
             SecurityVersion = securityVersion,
-            MfaVerified = mfaVerified,
+            // Columna histórica conservada para una migración no destructiva. El runtime
+            // 2027 autentica exclusivamente con e.firma y nunca interpreta este valor.
+            MfaVerified = false,
             IsRevoked = false,
             DeviceId = deviceId,
             CreatedFromIp = ip

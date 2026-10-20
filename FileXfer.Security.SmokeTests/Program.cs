@@ -31,16 +31,16 @@ var updaterPath = Path.GetFullPath(args[0]);
 Require(File.Exists(updaterPath), "No se encontró el updater compilado.");
 
 TestPathProtection();
-TestMfaSecretProtection();
 TestSqlTransportPolicy();
 TestAlertConfigurationPolicy();
 await TestAlertDeliveryQueueAsync();
 TestBudiSchemaRequirements();
 TestClientUpdateManifestEndpoint();
+TestMfaRemovedFromAuthenticationContract();
 TestRfcResourceAuthorization();
 TestUploadFileNamePolicy();
 TestUploadAdmission();
-await TestConcurrentMfaLockoutAsync();
+TestAuthenticationRateLimit();
 await TestFilePoliciesAsync();
 await TestSignedReceiptsAsync();
 await TestReceiptAuthorizationAsync();
@@ -49,18 +49,18 @@ await TestSecureDownloadAsync();
 await TestUpdaterAsync(updaterPath);
 
 Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
-Console.WriteLine("PASS mfa-secret-protection=roundtrip randomized tamper-rejected legacy-readable");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
 Console.WriteLine("PASS alert-configuration=https tls complete-channels bounded-timeouts");
 Console.WriteLine("PASS alert-delivery=sql-durable restart-recovered lease-recovered deduplicated retried observable");
 Console.WriteLine("PASS budi-schema=required-columns-and-indexes-enforced");
 Console.WriteLine("PASS client-update-manifest=https-zip-and-cryptographic-fields-required");
-Console.WriteLine("PASS rfc-resource-authorization=owner privileged-mfa cross-rfc-blocked");
+Console.WriteLine("PASS authentication-contract=efirma-only no-mfa-routes");
+Console.WriteLine("PASS rfc-resource-authorization=owner privileged-efirma cross-rfc-blocked");
 Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
 Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
-Console.WriteLine("PASS mfa-lockout=concurrent-failures-serialized");
+Console.WriteLine("PASS authentication-rate-limit=bounded-window");
 Console.WriteLine("PASS file-policies=seed version conflict bypass limit rollback");
-Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent mfa-authorized");
+Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent efirma-authorized");
 Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved reparse-points-rejected");
 Console.WriteLine("PASS secure-download=hash-verified tamper-and-traversal-blocked");
 Console.WriteLine("PASS updater=signed-package-applied complete-package-required verify-only temp-relaunch rollback invalid-signature-and-zip-slip-rejected");
@@ -359,13 +359,33 @@ static void TestRfcResourceAuthorization()
     Require(!RfcResourceAuthorization.CanAccess(owner, "RFCOTHER0101"),
         "Un RFC obtuvo acceso al recurso de otro RFC.");
 
-    var adminWithoutMfa = Principal("RFCADMIN0101", new[] { "admin" }, "efirma");
-    Require(!RfcResourceAuthorization.CanAccess(adminWithoutMfa, "RFCOTHER0101"),
-        "Un administrador sin MFA obtuvo acceso cruzado.");
+    var adminWithEfirma = Principal("RFCADMIN0101", new[] { "admin" }, "efirma");
+    Require(RfcResourceAuthorization.CanAccess(adminWithEfirma, "RFCOTHER0101"),
+        "Un administrador autenticado con e.firma no pudo ejercer acceso privilegiado.");
 
-    var adminWithMfa = Principal("RFCADMIN0101", new[] { "admin" }, "efirma+mfa");
-    Require(RfcResourceAuthorization.CanAccess(adminWithMfa, "RFCOTHER0101"),
-        "Un administrador con MFA no pudo ejercer acceso privilegiado.");
+    var adminWithoutEfirma = Principal("RFCADMIN0101", new[] { "admin" }, "unknown");
+    Require(!RfcResourceAuthorization.CanAccess(adminWithoutEfirma, "RFCOTHER0101"),
+        "Un administrador sin e.firma obtuvo acceso cruzado.");
+}
+
+static void TestMfaRemovedFromAuthenticationContract()
+{
+    var loginProperties = typeof(AuthController.LoginReq)
+        .GetProperties()
+        .Select(property => property.Name)
+        .ToArray();
+    Require(!loginProperties.Any(name => name.Contains("mfa", StringComparison.OrdinalIgnoreCase)),
+        "El contrato de login volvió a exponer un dato MFA.");
+
+    var mfaRoutes = typeof(AuthController)
+        .GetMethods()
+        .SelectMany(method => method.GetCustomAttributes(inherit: true))
+        .OfType<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>()
+        .Select(attribute => attribute.Template ?? string.Empty)
+        .Where(template => template.Contains("mfa", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+    Require(mfaRoutes.Length == 0,
+        $"El servidor volvió a publicar rutas MFA: {string.Join(", ", mfaRoutes)}");
 }
 
 static void TestPathProtection()
@@ -391,32 +411,6 @@ static void TestPathProtection()
     var tampered = "v2:" + Convert.ToBase64String(payload);
     Expect<CryptographicException>(() => protector.Unprotect(tampered),
         "Una ruta AES-GCM alterada fue aceptada.");
-}
-
-static void TestMfaSecretProtection()
-{
-    var key = RandomNumberGenerator.GetBytes(32);
-    var configuration = new ConfigurationBuilder()
-        .AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Security:PathEncryptionKey"] = Convert.ToBase64String(key)
-        })
-        .Build();
-    var protector = new AesGcmMfaSecretProtector(configuration);
-    const string original = "JBSWY3DPEHPK3PXP";
-
-    var encrypted1 = protector.Protect(original);
-    var encrypted2 = protector.Protect(original);
-    Require(protector.IsProtected(encrypted1), "El secreto MFA no usa el formato protegido v2.");
-    Require(encrypted1 != encrypted2, "El cifrado MFA reutilizó nonce/ciphertext.");
-    Require(protector.Unprotect(encrypted1) == original, "El secreto MFA no completó roundtrip AES-GCM.");
-    Require(protector.Unprotect(original) == original, "La migración compatible no aceptó un secreto Base32 legado.");
-
-    var payload = Convert.FromBase64String(encrypted1[3..]);
-    payload[^1] ^= 0x20;
-    var tampered = "v2:" + Convert.ToBase64String(payload);
-    Expect<CryptographicException>(() => protector.Unprotect(tampered),
-        "Un secreto MFA AES-GCM alterado fue aceptado.");
 }
 
 static void TestUploadFileNamePolicy()
@@ -456,30 +450,20 @@ static void TestUploadAdmission()
     Require(store.ActiveAdmissionCount == 0, "Quedaron leases de carga activos después de Dispose.");
 }
 
-static async Task TestConcurrentMfaLockoutAsync()
+static void TestAuthenticationRateLimit()
 {
-    var databaseName = "lockout-smoke-" + Guid.NewGuid().ToString("N");
-    var dbOptions = new DbContextOptionsBuilder<FileXferDbContext>()
-        .UseInMemoryDatabase(databaseName)
-        .Options;
-    var factory = new SmokeDbContextFactory(dbOptions);
-    var service = new RateLockService(
-        factory,
-        Options.Create(new RateLimitOptions
-        {
-            LockoutThreshold = 1_000,
-            LockoutMinutes = 30
-        }),
-        NullLogger<RateLockService>.Instance);
+    var service = new RateLockService(Options.Create(new RateLimitOptions
+    {
+        PermitLimit = 2,
+        WindowSeconds = 60
+    }));
 
-    const string rfc = "LOCK010101AA1";
-    const int failures = 50;
-    await Task.WhenAll(Enumerable.Range(0, failures).Select(_ => service.RegisterFailureAsync(rfc)));
-
-    await using var db = await factory.CreateDbContextAsync();
-    var stored = await db.Lockouts.SingleAsync(item => item.Rfc == rfc);
-    Require(stored.FailCount == failures,
-        $"Se perdieron fallos MFA concurrentes. Esperado={failures}, real={stored.FailCount}.");
+    Require(service.TryRate("login:rfc:SMOKE010101AA1"),
+        "El limitador rechazó el primer intento legítimo.");
+    Require(service.TryRate("login:rfc:SMOKE010101AA1"),
+        "El limitador rechazó un intento dentro del cupo.");
+    Require(!service.TryRate("login:rfc:SMOKE010101AA1"),
+        "El limitador permitió exceder el cupo configurado.");
 }
 
 static async Task TestFilePoliciesAsync()
@@ -684,13 +668,13 @@ static async Task TestReceiptAuthorizationAsync()
         return await controller.Get(receiptId, CancellationToken.None);
     }
 
-    var adminWithoutMfa = await GetAs("ADMIN010101AA1", "admin", "efirma");
-    Require(adminWithoutMfa.Result is ForbidResult,
-        "Un administrador sin MFA pudo leer el recibo de otro RFC.");
+    var adminWithEfirma = await GetAs("ADMIN010101AA1", "admin", "efirma");
+    Require(adminWithEfirma.Result is OkObjectResult,
+        "Un administrador con e.firma no pudo ejercer el acceso privilegiado legítimo.");
 
-    var adminWithMfa = await GetAs("ADMIN010101AA1", "admin", "efirma+mfa");
-    Require(adminWithMfa.Result is OkObjectResult,
-        "Un administrador con MFA no pudo ejercer el acceso privilegiado legítimo.");
+    var adminWithoutEfirma = await GetAs("ADMIN010101AA1", "admin", "unknown");
+    Require(adminWithoutEfirma.Result is ForbidResult,
+        "Un administrador sin e.firma pudo leer el recibo de otro RFC.");
 
     var owner = await GetAs("OWNER010101AA1", "user", "efirma");
     Require(owner.Result is OkObjectResult,

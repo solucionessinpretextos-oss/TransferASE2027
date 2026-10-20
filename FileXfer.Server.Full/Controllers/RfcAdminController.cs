@@ -16,7 +16,7 @@ namespace FileXfer.Server.Controllers;
 
 [ApiController]
 [Route("admin/rfcs")]
-[Authorize(Policy = "PrivilegedMfa")]
+[Authorize(Policy = "PrivilegedEfirma")]
 public sealed class RfcAdminController : ControllerBase
 {
     private readonly IDbContextFactory<FileXferDbContext> _dbf;
@@ -30,7 +30,6 @@ public sealed class RfcAdminController : ControllerBase
         string rfc,
         string? displayName,
         string[] roles,
-        bool mfaRequired,
         bool isActive,
         string? notes);
 
@@ -56,7 +55,6 @@ public sealed class RfcAdminController : ControllerBase
                 x.Rfc,
                 x.DisplayName,
                 x.Roles,
-                x.MfaRequired,
                 x.IsActive,
                 x.Notes))
             .ToListAsync();
@@ -74,7 +72,7 @@ public sealed class RfcAdminController : ControllerBase
         var u = await db.Users.SingleOrDefaultAsync(x => x.Rfc == r);
         if (u == null) return NotFound();
 
-        return Ok(new RfcUserDto(u.Rfc, u.DisplayName, u.Roles, u.MfaRequired, u.IsActive, u.Notes));
+        return Ok(new RfcUserDto(u.Rfc, u.DisplayName, u.Roles, u.IsActive, u.Notes));
     }
 
     [HttpPost]
@@ -87,16 +85,6 @@ public sealed class RfcAdminController : ControllerBase
             return BadRequest(new { message = "Debe indicar al menos un rol válido: user, ops o admin." });
         if (dto.displayName?.Length > 256 || dto.notes?.Length > 1024)
             return BadRequest(new { message = "El nombre o las notas exceden el tamaño permitido." });
-        if (dto.mfaRequired)
-            return BadRequest(new { message = "Primero cree al usuario y permita que enrole MFA; después podrá exigirlo." });
-        if (HasRole(roles, "admin") || HasRole(roles, "ops"))
-        {
-            return BadRequest(new
-            {
-                message = "Cree la cuenta con rol user, complete MFA y después promuévala a un rol privilegiado."
-            });
-        }
-
         await using var db = await _dbf.CreateDbContextAsync();
         if (await db.Users.AnyAsync(x => x.Rfc == r))
             return Conflict(new { message = "RFC ya existe" });
@@ -110,7 +98,7 @@ public sealed class RfcAdminController : ControllerBase
             Rfc = r,
             DisplayName = dto.displayName,
             Roles = roles,
-            MfaRequired = dto.mfaRequired,
+            MfaRequired = false,
             IsActive = dto.isActive,
             Notes = dto.notes,
             CreatedUtc = now,
@@ -126,7 +114,7 @@ public sealed class RfcAdminController : ControllerBase
             ActorRfc = actor,
             Action = "rfc_provision_create",
             Ip = HttpContext.Connection.RemoteIpAddress?.ToString(),
-            Details = $"RFC={r}; Roles={string.Join(",", entity.Roles)}; MfaRequired={entity.MfaRequired}; IsActive={entity.IsActive}"
+            Details = $"RFC={r}; Roles={string.Join(",", entity.Roles)}; IsActive={entity.IsActive}"
         });
 
         await db.SaveChangesAsync();
@@ -134,7 +122,7 @@ public sealed class RfcAdminController : ControllerBase
         return CreatedAtAction(
             nameof(Get),
             new { rfc = r },
-            new RfcUserDto(r, entity.DisplayName, entity.Roles, entity.MfaRequired, entity.IsActive, entity.Notes));
+            new RfcUserDto(r, entity.DisplayName, entity.Roles, entity.IsActive, entity.Notes));
     }
 
     [HttpPut("{rfc}")]
@@ -153,7 +141,6 @@ public sealed class RfcAdminController : ControllerBase
             return BadRequest(new { message = "Debe indicar al menos un rol válido: user, ops o admin." });
         if (dto.displayName?.Length > 256 || dto.notes?.Length > 1024)
             return BadRequest(new { message = "El nombre o las notas exceden el tamaño permitido." });
-
         await using var db = await _dbf.CreateDbContextAsync();
         var u = await db.Users.SingleOrDefaultAsync(x => x.Rfc == r);
         if (u == null) return NotFound();
@@ -174,29 +161,17 @@ public sealed class RfcAdminController : ControllerBase
             return BadRequest(new { message = "No se puede retirar el último administrador activo." });
         }
 
-        if (dto.mfaRequired && !u.MfaRequired &&
-            !await db.MfaSecrets.AnyAsync(x => x.Rfc == r && x.Active))
-        {
-            return BadRequest(new { message = "El usuario debe enrolar MFA antes de hacerlo obligatorio." });
-        }
-        if ((HasRole(roles, "admin") || HasRole(roles, "ops")) &&
-            (!dto.mfaRequired || !await db.MfaSecrets.AnyAsync(x => x.Rfc == r && x.Active)))
-        {
-            return BadRequest(new
-            {
-                message = "Los roles admin y ops requieren MFA activo y obligatorio."
-            });
-        }
-
         var securityStateChanged =
             u.IsActive != dto.isActive ||
-            u.MfaRequired != dto.mfaRequired ||
+            u.MfaRequired ||
             !u.Roles.OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
                 .SequenceEqual(roles.OrderBy(role => role, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
 
         u.DisplayName = dto.displayName;
         u.Roles = roles;
-        u.MfaRequired = dto.mfaRequired;
+        // Compatibilidad de esquema: se conserva la columna, pero el runtime no permite
+        // volver a activar MFA ni siquiera mediante un cliente administrativo antiguo.
+        u.MfaRequired = false;
         u.IsActive = dto.isActive;
         u.Notes = dto.notes;
         u.LastModifiedUtc = now;
@@ -218,12 +193,12 @@ public sealed class RfcAdminController : ControllerBase
             ActorRfc = actor,
             Action = "rfc_provision_update",
             Ip = HttpContext.Connection.RemoteIpAddress?.ToString(),
-            Details = $"RFC={r}; Roles={string.Join(",", u.Roles)}; MfaRequired={u.MfaRequired}; IsActive={u.IsActive}"
+            Details = $"RFC={r}; Roles={string.Join(",", u.Roles)}; IsActive={u.IsActive}"
         });
 
         await db.SaveChangesAsync();
 
-        return Ok(new RfcUserDto(r, u.DisplayName, u.Roles, u.MfaRequired, u.IsActive, u.Notes));
+        return Ok(new RfcUserDto(r, u.DisplayName, u.Roles, u.IsActive, u.Notes));
     }
 
     [HttpPost("{rfc}/deactivate")]

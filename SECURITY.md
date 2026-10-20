@@ -6,9 +6,9 @@
 2. Un PDF no puede enviarse si está cifrado, no abre, no supera la reparación/revalidación o contiene acciones activas (`JavaScript`, `OpenAction`, `Launch`, adjuntos, formularios remotos u otras acciones bloqueadas).
 3. Una actualización no se ejecuta sin firma RSA-PSS válida, hash SHA-256 y extracción confinada al staging.
 4. Las rutas físicas, secretos, llaves privadas y cadenas de conexión no se devuelven por API ni se versionan.
-5. Una desactivación, cambio de roles/MFA o revocación de dispositivo invalida las sesiones aplicables inmediatamente.
+5. Una desactivación, cambio de roles o revocación de dispositivo invalida las sesiones aplicables inmediatamente.
 6. Producción nunca usa EF InMemory ni rutas de almacenamiento implícitas.
-7. Un rol `admin` u `ops` no accede a APIs privilegiadas sin un JWT emitido tras verificar e.firma y TOTP en la misma autenticación.
+7. Un rol `admin` u `ops` no accede a APIs privilegiadas sin un JWT derivado de una autenticación e.firma válida; MFA/TOTP está deshabilitado en todos los ambientes.
 8. Ninguna descarga entrega bytes si el registro BuDi no pertenece al RFC autorizado, la ruta sale del storage, atraviesa un reparse point o tamaño/SHA-256 difieren del registro interno de carga.
 9. Toda carga nueva debe correlacionarse entre FileXferDb y BuDi mediante un `ID_Upload` único. La compatibilidad por ruta aplica únicamente a históricos con `ID_Upload` nulo y nunca sustituye la verificación criptográfica.
 
