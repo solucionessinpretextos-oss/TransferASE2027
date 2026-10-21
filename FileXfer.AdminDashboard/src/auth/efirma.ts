@@ -1,11 +1,12 @@
 // Procesamiento local de e.firma para el Dashboard administrativo.
 // La llave privada y su contrasena nunca se envian al servidor.
 
-import { hextopem, KEYUTIL, KJUR, X509 } from "jsrsasign";
+import type { X509 as X509Certificate } from "jsrsasign";
 
 const RFC_PATTERN = /^[A-Z&Ñ]{3,4}[0-9]{6}[A-Z0-9]{3}$/;
 const MAX_CERTIFICATE_BYTES = 48 * 1024;
 const MAX_PRIVATE_KEY_BYTES = 64 * 1024;
+let cryptoModulePromise: Promise<typeof import("jsrsasign")> | null = null;
 
 export interface EfirmaCredentials {
   rfc: string;
@@ -71,7 +72,12 @@ function createCanonicalPayload(
   ].join("\n");
 }
 
-function findCertificateRfc(certificate: X509): string | null {
+function loadCryptoModule(): Promise<typeof import("jsrsasign")> {
+  cryptoModulePromise ??= import("jsrsasign");
+  return cryptoModulePromise;
+}
+
+function findCertificateRfc(certificate: X509Certificate): string | null {
   const attributes = certificate.getSubject().array.flat();
   const preferredTypes = new Set([
     "2.5.4.45",
@@ -95,10 +101,13 @@ function findCertificateRfc(certificate: X509): string | null {
   return fallback?.[0] ?? null;
 }
 
-function parseCertificate(certificateHex: string): { certificate: X509; pem: string } {
+function parseCertificate(
+  certificateHex: string,
+  cryptoModule: typeof import("jsrsasign")
+): { certificate: X509Certificate; pem: string } {
   try {
-    const pem = hextopem(certificateHex, "CERTIFICATE");
-    const certificate = new X509();
+    const pem = cryptoModule.hextopem(certificateHex, "CERTIFICATE");
+    const certificate = new cryptoModule.X509();
     certificate.readCertPEM(pem);
     certificate.getPublicKey();
     return { certificate, pem };
@@ -111,7 +120,8 @@ export async function extractRfcFromCertificate(file: File): Promise<string | nu
   requireFile(file, ".cer", MAX_CERTIFICATE_BYTES, "El certificado CER");
   const bytes = new Uint8Array(await file.arrayBuffer());
   try {
-    return findCertificateRfc(parseCertificate(bytesToHex(bytes)).certificate);
+    const cryptoModule = await loadCryptoModule();
+    return findCertificateRfc(parseCertificate(bytesToHex(bytes), cryptoModule).certificate);
   } finally {
     bytes.fill(0);
   }
@@ -132,20 +142,23 @@ export async function createSignedLoginRequest(
   const privateKeyBytes = new Uint8Array(await credentials.privateKey.arrayBuffer());
 
   try {
+    const cryptoModule = await loadCryptoModule();
+    const { hextopem, KEYUTIL, KJUR } = cryptoModule;
     const certificateHex = bytesToHex(certificateBytes);
-    const { certificate, pem: certificatePem } = parseCertificate(certificateHex);
+    const { certificate, pem: certificatePem } = parseCertificate(certificateHex, cryptoModule);
     const certificateRfc = findCertificateRfc(certificate);
     if (!certificateRfc || certificateRfc !== rfc) {
       throw new Error("El RFC capturado no coincide con el certificado CER.");
     }
 
-    let privateKey: ReturnType<typeof KEYUTIL.getKey>;
-    try {
-      const encryptedKeyPem = hextopem(bytesToHex(privateKeyBytes), "ENCRYPTED PRIVATE KEY");
-      privateKey = KEYUTIL.getKey(encryptedKeyPem, credentials.password);
-    } catch {
-      throw new Error("La contraseña es incorrecta o el archivo KEY no es válido.");
-    }
+    const privateKey = (() => {
+      try {
+        const encryptedKeyPem = hextopem(bytesToHex(privateKeyBytes), "ENCRYPTED PRIVATE KEY");
+        return KEYUTIL.getKey(encryptedKeyPem, credentials.password);
+      } catch {
+        throw new Error("La contraseña es incorrecta o el archivo KEY no es válido.");
+      }
+    })();
 
     const payload = createCanonicalPayload(
       challenge.nonceId,
