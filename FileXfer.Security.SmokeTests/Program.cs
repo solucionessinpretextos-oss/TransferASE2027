@@ -822,7 +822,9 @@ static async Task TestSecureDownloadAsync()
                 Rfc = "RFCOWNER0101",
                 FileUuid = Guid.NewGuid().ToString("N"),
                 OriginalFileName = "verified.bin",
-                StoredRelativePath = relativePath,
+                // FileAssembler usa separadores canónicos '/', mientras el descriptor de BuDi
+                // se reconstruye normalmente con '\\' en Windows.
+                StoredRelativePath = relativePath.Replace('\\', '/'),
                 BytesReceived = content.LongLength,
                 ExpectedLength = content.LongLength,
                 Sha256Server = hash,
@@ -866,6 +868,19 @@ static async Task TestSecureDownloadAsync()
                 "La descarga verificada no devolvió los bytes originales.");
             Require(prepared.Sha256 == hash && prepared.Length == content.LongLength,
                 "La descarga preparada no conservó hash o longitud.");
+        }
+
+        try
+        {
+            _ = await service.PrepareAsync(
+                descriptor with { StoredRelativePath = Path.Combine("RFCOWNER0101", "otra", "verified.bin") },
+                CancellationToken.None);
+            throw new InvalidOperationException("La descarga aceptó una ruta distinta con un ID_Upload válido.");
+        }
+        catch (FileDownloadPreparationException ex)
+        {
+            Require(ex.Code == "storage_reference_mismatch",
+                "La referencia cruzada alterada no produjo storage_reference_mismatch.");
         }
 
         content[0] ^= 0xFF;

@@ -1198,7 +1198,10 @@ namespace FileXfer.Server.Services
 
             var decryptedPath = _pathProtector.Unprotect(row.RutaEncriptada);
             var fullPath = ConstruirRutaAbsoluta(decryptedPath);
-            var relativePath = Path.GetRelativePath(_storageBasePath, fullPath);
+            // FileAssembler persiste rutas relativas con "/". Path.GetRelativePath usa "\"
+            // en Windows; normalizar aquí evita que la misma ruta falle por representación.
+            var relativePath = Path.GetRelativePath(_storageBasePath, fullPath)
+                .Replace('\\', '/');
 
             return new ArchivoLocalDownloadDescriptor(
                 row.IdArchivoLocal,

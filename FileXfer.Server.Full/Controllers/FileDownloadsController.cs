@@ -78,7 +78,7 @@ public sealed class FileDownloadsController : ControllerBase
                 ex.Code,
                 HttpContext.TraceIdentifier);
 
-            if (ex.Code is "hash_mismatch" or "length_mismatch" or "unsafe_storage_link")
+            if (ex.Code is "hash_mismatch" or "length_mismatch" or "unsafe_storage_link" or "storage_reference_mismatch")
             {
                 await _alerts.NotifySecurityEventAsync(
                     "Descarga bloqueada por integridad",

@@ -51,21 +51,46 @@ public sealed class SecureFileDownloadService : ISecureFileDownloadService
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
+        var descriptorPath = CanonicalizeRelativePath(descriptor.StoredRelativePath);
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var candidates = db.Uploads.AsNoTracking()
             .Where(candidate =>
                 candidate.Rfc == descriptor.Rfc &&
-                candidate.StoredRelativePath == descriptor.StoredRelativePath &&
                 candidate.Status == "Completed" &&
                 candidate.Sha256Server != null);
 
-        var upload = descriptor.UploadId.HasValue
-            ? await candidates.SingleOrDefaultAsync(
+        UploadEntry? upload;
+        if (descriptor.UploadId.HasValue)
+        {
+            // ID_Upload es el enlace fuerte entre BuDi y FileXfer. La ruta también se valida,
+            // pero después de normalizar separadores para no confundir "\" con "/" en Windows.
+            upload = await candidates.SingleOrDefaultAsync(
                 candidate => candidate.Id == descriptor.UploadId.Value,
-                cancellationToken)
-            : await candidates
+                cancellationToken);
+
+            if (upload is not null &&
+                !string.Equals(
+                    CanonicalizeRelativePath(upload.StoredRelativePath),
+                    descriptorPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new FileDownloadPreparationException(
+                    "storage_reference_mismatch",
+                    "La referencia del archivo no coincide con la evidencia interna de su recepción.");
+            }
+        }
+        else
+        {
+            // Compatibilidad controlada para registros anteriores a ID_Upload. Se aceptan las
+            // dos representaciones de separador, pero no rutas distintas ni búsquedas amplias.
+            var windowsPath = descriptorPath.Replace('/', '\\');
+            upload = await candidates
+                .Where(candidate =>
+                    candidate.StoredRelativePath == descriptorPath ||
+                    candidate.StoredRelativePath == windowsPath)
                 .OrderByDescending(candidate => candidate.CompletedUtc)
                 .FirstOrDefaultAsync(cancellationToken);
+        }
 
         if (upload is null || string.IsNullOrWhiteSpace(upload.Sha256Server))
         {
@@ -74,7 +99,10 @@ public sealed class SecureFileDownloadService : ISecureFileDownloadService
                 "El archivo no tiene evidencia interna suficiente para una descarga segura.");
         }
 
-        var fullPath = ResolveWithinStorage(descriptor.StoredRelativePath);
+        // Después de enlazar BuDi con Uploads, la ubicación técnica registrada por FileXfer es
+        // la fuente de verdad para abrir el archivo. Nunca se abre directamente una ruta del cliente.
+        var trustedRelativePath = CanonicalizeRelativePath(upload.StoredRelativePath);
+        var fullPath = ResolveWithinStorage(trustedRelativePath);
         RejectReparsePoints(fullPath);
 
         FileStream stream;
@@ -165,6 +193,28 @@ public sealed class SecureFileDownloadService : ISecureFileDownloadService
         }
 
         return fullPath;
+    }
+
+    private static string CanonicalizeRelativePath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath))
+        {
+            throw new FileDownloadPreparationException(
+                "invalid_storage_path",
+                "La referencia de almacenamiento del archivo no es válida.");
+        }
+
+        var segments = relativePath.Split(
+            new[] { '\\', '/' },
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
+        {
+            throw new FileDownloadPreparationException(
+                "invalid_storage_path",
+                "La referencia de almacenamiento del archivo no es válida.");
+        }
+
+        return string.Join('/', segments);
     }
 
     private void RejectReparsePoints(string fullPath)

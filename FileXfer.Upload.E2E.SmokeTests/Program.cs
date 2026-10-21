@@ -30,6 +30,7 @@ var qpdf = Path.Combine(repoRoot, "tools", "qpdf", "win-x64", "bin", "qpdf.exe")
 Require(File.Exists(qpdf), $"No se encontró qpdf en {qpdf}.");
 
 var recoveryOnly = args.Length >= 3 && args[1].Equals("--recover", StringComparison.OrdinalIgnoreCase);
+var downloadOnly = args.Length >= 3 && args[1].Equals("--download", StringComparison.OrdinalIgnoreCase);
 var runId = recoveryOnly
     ? args[2]
     : DateTime.UtcNow.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N")[..8];
@@ -82,6 +83,16 @@ try
     SesionAplicacion.DeviceId = deviceId;
     SesionAplicacion.TokenJwt = token;
 
+    var configuration = new ServicioConfiguracionCliente();
+    if (downloadOnly)
+    {
+        Require(int.TryParse(args[2], out var archivoLocalId) && archivoLocalId > 0,
+            "El modo --download requiere un Id de archivo local válido.");
+        await VerifyExistingDownloadAsync(
+            configuration, token, archivoLocalId, fileXfer, budi);
+        return 0;
+    }
+
     var context = new ContextoRequerimiento
     {
         Periodo = Periodo,
@@ -96,7 +107,6 @@ try
         DescripcionRequerimiento = "Control Interno"
     };
 
-    var configuration = new ServicioConfiguracionCliente();
     var journal = new ServicioDiarioTransferencias(journalRoot);
     var uploader = new ServicioCargaArchivos(configuration, diario: journal);
 
@@ -535,6 +545,89 @@ static async Task<long> CountBusinessRowsAsync(SqlConnection connection, string 
     command.Parameters.AddWithValue("@rfc", Rfc);
     command.Parameters.AddWithValue("@pattern", pattern);
     return Convert.ToInt64(await command.ExecuteScalarAsync());
+}
+
+static async Task VerifyExistingDownloadAsync(
+    ServicioConfiguracionCliente configuration,
+    string token,
+    int archivoLocalId,
+    SqlConnection fileXfer,
+    SqlConnection budi)
+{
+    Guid uploadId;
+    string fileName;
+    await using (var business = budi.CreateCommand())
+    {
+        business.CommandText = """
+            SELECT TOP (1) [ID_Upload], [Nombre_Archivo]
+            FROM [dbo].[Transfer_ArchivosLocales]
+            WHERE [Id] = @id AND [RFC_Origen] = @rfc AND [Estatus] = 'A';
+            """;
+        business.Parameters.AddWithValue("@id", archivoLocalId);
+        business.Parameters.AddWithValue("@rfc", Rfc);
+        await using var reader = await business.ExecuteReaderAsync();
+        Require(await reader.ReadAsync() && !reader.IsDBNull(0),
+            $"El archivo local {archivoLocalId} no tiene ID_Upload activo para Juan.");
+        uploadId = reader.GetGuid(0);
+        fileName = reader.GetString(1);
+    }
+
+    string expectedHash;
+    long expectedLength;
+    await using (var technical = fileXfer.CreateCommand())
+    {
+        technical.CommandText = """
+            SELECT TOP (1) [Sha256Server], COALESCE([ExpectedLength], [BytesReceived])
+            FROM [dbo].[Uploads]
+            WHERE [Id] = @id AND [Rfc] = @rfc AND [Status] = 'Completed';
+            """;
+        technical.Parameters.AddWithValue("@id", uploadId);
+        technical.Parameters.AddWithValue("@rfc", Rfc);
+        await using var reader = await technical.ExecuteReaderAsync();
+        Require(await reader.ReadAsync() && !reader.IsDBNull(0),
+            $"Uploads no contiene evidencia completa para {uploadId:D}.");
+        expectedHash = reader.GetString(0);
+        expectedLength = reader.GetInt64(1);
+    }
+
+    using var handler = configuration.CrearManejadorHttpSeguro();
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(configuration.UrlBaseServidor.TrimEnd('/') + "/"),
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+    http.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+    using var response = await http.GetAsync(
+        $"archivos-locales/{archivoLocalId}/download",
+        HttpCompletionOption.ResponseHeadersRead);
+    var body = response.IsSuccessStatusCode
+        ? string.Empty
+        : await response.Content.ReadAsStringAsync();
+    Require(response.IsSuccessStatusCode,
+        $"La descarga real devolvió {(int)response.StatusCode}: {body}");
+    Require(response.Headers.TryGetValues("X-Content-SHA256", out var values),
+        "La descarga no incluyó X-Content-SHA256.");
+    var responseHash = values?.SingleOrDefault()?.Trim().ToLowerInvariant() ?? string.Empty;
+    Require(responseHash == expectedHash,
+        "La huella anunciada por la descarga no coincide con Uploads.");
+
+    await using var source = await response.Content.ReadAsStreamAsync();
+    using var incremental = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+    var buffer = new byte[128 * 1024];
+    long length = 0;
+    while (true)
+    {
+        var read = await source.ReadAsync(buffer);
+        if (read == 0) break;
+        incremental.AppendData(buffer, 0, read);
+        length += read;
+    }
+    var actualHash = Convert.ToHexString(incremental.GetHashAndReset()).ToLowerInvariant();
+    Require(length == expectedLength && actualHash == expectedHash,
+        "Los bytes descargados no coinciden con la longitud y SHA-256 registrados.");
+    Console.WriteLine(
+        $"PASS actual-download id={archivoLocalId} upload={uploadId:D} file={fileName} bytes={length} sha256=verified");
 }
 
 static void AssertProgress(IReadOnlyList<ProgresoCargaArchivo> items, bool expectRepairNotice)
