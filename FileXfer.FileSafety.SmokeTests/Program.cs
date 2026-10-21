@@ -61,6 +61,15 @@ try
 
     var text = Path.Combine(root, "informe.txt");
     await File.WriteAllTextAsync(text, "Informe de auditoría\r\nLínea 2", new UTF8Encoding(false, true));
+    var limitedService = new DefaultFileSafetyService(
+        new FileXfer.Pdf.QpdfPdfSafetyService(),
+        new FileSafetyOptions { MaxFileBytes = 1 });
+    Require(
+        (await limitedService.InspectAsync(text, Path.GetFileName(text))).Outcome == FileInspectionOutcome.TooLarge,
+        "El límite operativo explícito no fue aplicado.");
+    Require(
+        (await service.InspectAsync(text, Path.GetFileName(text))).IsAccepted,
+        "La configuración predeterminada sin límite rechazó un archivo por tamaño.");
     var originalHash = SHA256.HashData(await File.ReadAllBytesAsync(text));
     var progressItems = new List<FileSafetyProgress>();
     var prepared = await service.PrepareForUploadAsync(text, staging, new InlineProgress<FileSafetyProgress>(progressItems.Add));
@@ -82,6 +91,7 @@ try
     Console.WriteLine("PASS package=valid encrypted=blocked macro=blocked external=blocked");
     Console.WriteLine("PASS structured=json-valid json-damaged svg-active-blocked image-crc-validated");
     Console.WriteLine("PASS preflight=isolated progress-monotonic cleanup-complete original-unchanged");
+    Console.WriteLine("PASS file-size=unlimited-by-default explicit-limit-supported");
     Console.WriteLine("PASS unsupported=fail-closed");
     return 0;
 }

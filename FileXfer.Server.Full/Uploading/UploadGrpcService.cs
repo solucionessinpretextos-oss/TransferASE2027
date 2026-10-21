@@ -98,7 +98,7 @@ namespace FileXfer.Server.Uploading
             if (!Guid.TryParseExact(request.FileUuid, "N", out _))
                 throw new RpcException(new Status(StatusCode.InvalidArgument, "FileUuid no tiene el formato esperado."));
             ValidateFileName(request.OriginalFileName);
-            if (request.TotalLength <= 0 || request.TotalLength > _storage.MaxUploadBytes)
+            if (request.TotalLength <= 0 || _storage.ExceedsUploadSizeLimit(request.TotalLength))
                 throw new RpcException(new Status(StatusCode.InvalidArgument, "El tamaño total no es válido."));
             if (!IsSha256(request.Sha256Hex))
                 throw new RpcException(new Status(StatusCode.InvalidArgument, "SHA-256 requerido para reanudar."));
@@ -403,7 +403,7 @@ namespace FileXfer.Server.Uploading
                         clientSha256 ??= incomingHash;
                     }
 
-                    if (chunk.TotalLength < 0 || chunk.TotalLength > _storage.MaxUploadBytes)
+                    if (chunk.TotalLength < 0 || _storage.ExceedsUploadSizeLimit(chunk.TotalLength))
                         throw new RpcException(new Status(StatusCode.InvalidArgument, "TotalLength debe respetar el límite del servidor."));
                     if (chunk.TotalLength > 0)
                     {
@@ -770,7 +770,7 @@ namespace FileXfer.Server.Uploading
                     {
                         if (dataBytes.Length > _storage.MaxChunkBytes)
                             throw new RpcException(new Status(StatusCode.ResourceExhausted, "El bloque excede el tamaño permitido"));
-                        if (totalBytes > _storage.MaxUploadBytes - dataBytes.LongLength)
+                        if (_storage.WouldExceedUploadSizeLimit(totalBytes, dataBytes.LongLength))
                             throw new RpcException(new Status(StatusCode.ResourceExhausted, "El archivo excede el tamaño máximo permitido"));
                         if (expectedLength.HasValue && totalBytes > expectedLength.Value - dataBytes.LongLength)
                             throw new RpcException(new Status(StatusCode.InvalidArgument, "Se recibieron más bytes que TotalLength."));

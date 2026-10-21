@@ -40,6 +40,7 @@ TestMfaRemovedFromAuthenticationContract();
 TestRfcResourceAuthorization();
 TestUploadFileNamePolicy();
 TestUploadAdmission();
+TestUnlimitedUploadSizePolicy();
 TestAuthenticationRateLimit();
 await TestFilePoliciesAsync();
 await TestSignedReceiptsAsync();
@@ -58,6 +59,7 @@ Console.WriteLine("PASS authentication-contract=efirma-only no-mfa-routes");
 Console.WriteLine("PASS rfc-resource-authorization=owner privileged-efirma cross-rfc-blocked");
 Console.WriteLine("PASS upload-filename-policy=canonical dangerous-suffixes-rejected");
 Console.WriteLine("PASS upload-admission=pre-message quotas-and-release");
+Console.WriteLine("PASS upload-size=unlimited-by-default explicit-limit-supported");
 Console.WriteLine("PASS authentication-rate-limit=bounded-window");
 Console.WriteLine("PASS file-policies=seed version conflict bypass limit rollback");
 Console.WriteLine("PASS upload-receipts=rsa-pss trusted-key chained tamper-rejected idempotent efirma-authorized");
@@ -65,6 +67,21 @@ Console.WriteLine("PASS resumable-storage=physical-offset append hash-preserved 
 Console.WriteLine("PASS secure-download=hash-verified tamper-and-traversal-blocked");
 Console.WriteLine("PASS updater=signed-package-applied complete-package-required verify-only temp-relaunch rollback invalid-signature-and-zip-slip-rejected");
 return 0;
+
+static void TestUnlimitedUploadSizePolicy()
+{
+    var unlimited = new StorageOptions { MaxUploadBytes = 0 };
+    Require(!unlimited.ExceedsUploadSizeLimit(long.MaxValue),
+        "La configuración sin límite rechazó un tamaño declarado válido.");
+    Require(!unlimited.WouldExceedUploadSizeLimit(long.MaxValue - 1, 1),
+        "La configuración sin límite rechazó un bloque por tamaño acumulado.");
+
+    var limited = new StorageOptions { MaxUploadBytes = 1024 };
+    Require(limited.ExceedsUploadSizeLimit(1025),
+        "El límite operativo explícito no rechazó el tamaño declarado.");
+    Require(limited.WouldExceedUploadSizeLimit(1000, 25),
+        "El límite operativo explícito no rechazó el tamaño acumulado.");
+}
 
 static void TestSqlTransportPolicy()
 {

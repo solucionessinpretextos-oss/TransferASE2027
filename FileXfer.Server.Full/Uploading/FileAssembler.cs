@@ -379,7 +379,7 @@ namespace FileXfer.Server.Uploading
             if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
             if (data.Length > _storage.MaxChunkBytes)
                 throw new InvalidDataException("El bloque excede el tamaño máximo configurado.");
-            if (offset > _storage.MaxUploadBytes - data.LongLength)
+            if (_storage.WouldExceedUploadSizeLimit(offset, data.LongLength))
                 throw new InvalidDataException("El archivo excede el tamaño máximo configurado.");
 
             var path = ResolveAbsolutePath(rfcOrLogicalPath, fileUuid, fileName);

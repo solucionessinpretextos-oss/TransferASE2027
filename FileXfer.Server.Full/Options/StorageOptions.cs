@@ -12,7 +12,15 @@ namespace FileXfer.Server.Options
     {
         public string BasePath { get; set; } = string.Empty;
 
-        public long MaxUploadBytes { get; set; } = 1024L * 1024L * 1024L;
+        /// <summary>Cero significa sin límite funcional por archivo.</summary>
+        public long MaxUploadBytes { get; set; }
+
+        public bool ExceedsUploadSizeLimit(long bytes) =>
+            MaxUploadBytes > 0 && bytes > MaxUploadBytes;
+
+        public bool WouldExceedUploadSizeLimit(long currentBytes, long incomingBytes) =>
+            MaxUploadBytes > 0 &&
+            (currentBytes > MaxUploadBytes || incomingBytes > MaxUploadBytes - currentBytes);
 
         public int MaxChunkBytes { get; set; } = 2 * 1024 * 1024;
 

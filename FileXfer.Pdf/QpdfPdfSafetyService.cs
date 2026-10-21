@@ -11,7 +11,9 @@ namespace FileXfer.Pdf;
 
 public sealed class PdfSafetyOptions
 {
-    public long MaxPdfBytes { get; init; } = ReadPositiveLong("FILEXFER_PDF_MAX_BYTES", 1024L * 1024L * 1024L);
+    // Cero significa sin límite funcional por PDF. QPDF continúa validando cifrado,
+    // estructura y contenido activo sin cargar el documento completo en memoria.
+    public long MaxPdfBytes { get; init; } = ReadNonNegativeLong("FILEXFER_PDF_MAX_BYTES", 0);
 
     public TimeSpan ProcessTimeout { get; init; } = TimeSpan.FromSeconds(
         ReadPositiveLong("FILEXFER_PDF_TIMEOUT_SECONDS", 300));
@@ -27,6 +29,14 @@ public sealed class PdfSafetyOptions
     {
         var raw = Environment.GetEnvironmentVariable(name);
         return long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value > 0
+            ? value
+            : fallback;
+    }
+
+    private static long ReadNonNegativeLong(string name, long fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value >= 0
             ? value
             : fallback;
     }
@@ -63,8 +73,8 @@ public sealed class QpdfPdfSafetyService : IPdfSafetyService
     public QpdfPdfSafetyService(PdfSafetyOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        if (_options.MaxPdfBytes <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options), "MaxPdfBytes debe ser mayor que cero.");
+        if (_options.MaxPdfBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "MaxPdfBytes no puede ser negativo.");
         if (_options.ProcessTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(options), "ProcessTimeout debe ser mayor que cero.");
         if (_options.MaxConcurrentProcesses is < 1 or > 32)
@@ -94,7 +104,7 @@ public sealed class QpdfPdfSafetyService : IPdfSafetyService
                 "El archivo PDF está vacío y no se puede enviar.");
         }
 
-        if (file.Length > _options.MaxPdfBytes)
+        if (HasPdfSizeLimit && file.Length > _options.MaxPdfBytes)
         {
             return new PdfInspectionResult(
                 PdfInspectionOutcome.TooLarge,
@@ -219,7 +229,7 @@ public sealed class QpdfPdfSafetyService : IPdfSafetyService
                 throw new PdfValidationException(
                     PdfInspectionOutcome.Invalid,
                     "No se encontró el archivo PDF que se intentó validar.");
-            if (sourceInfo.Length > _options.MaxPdfBytes)
+            if (HasPdfSizeLimit && sourceInfo.Length > _options.MaxPdfBytes)
                 throw new PdfValidationException(
                     PdfInspectionOutcome.TooLarge,
                     $"El PDF excede el límite de validación configurado ({FormatBytes(_options.MaxPdfBytes)}).");
@@ -418,7 +428,7 @@ public sealed class QpdfPdfSafetyService : IPdfSafetyService
             var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
             if (read <= 0)
                 break;
-            if (total > maxBytes - read)
+            if (maxBytes > 0 && total > maxBytes - read)
                 throw new PdfValidationException(
                     PdfInspectionOutcome.TooLarge,
                     $"El PDF excede el límite de validación configurado ({FormatBytes(maxBytes)}).");
@@ -428,6 +438,8 @@ public sealed class QpdfPdfSafetyService : IPdfSafetyService
         }
         await destination.FlushAsync(cancellationToken);
     }
+
+    private bool HasPdfSizeLimit => _options.MaxPdfBytes > 0;
 
     private static async Task<BoundedReadResult> ReadBoundedAsync(
         StreamReader reader,

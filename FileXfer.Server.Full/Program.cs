@@ -35,8 +35,13 @@ builder.WebHost.ConfigureKestrel((context, options) =>
 {
     options.Configure(context.Configuration.GetSection("Kestrel"));
     var maxUploadBytesForKestrel = context.Configuration.GetValue<long?>("Storage:MaxUploadBytes")
-                                   ?? 1024L * 1024L * 1024L;
-    options.Limits.MaxRequestBodySize = maxUploadBytesForKestrel + (16L * 1024L * 1024L);
+                                   ?? 0;
+    const long requestEnvelopeBytes = 16L * 1024L * 1024L;
+    options.Limits.MaxRequestBodySize = maxUploadBytesForKestrel > 0
+        ? maxUploadBytesForKestrel > long.MaxValue - requestEnvelopeBytes
+            ? long.MaxValue
+            : maxUploadBytesForKestrel + requestEnvelopeBytes
+        : null;
     var maxStreamsPerConnection = context.Configuration.GetValue<int?>("Storage:MaxConcurrentUploadsTotal") ?? 200;
     options.Limits.Http2.MaxStreamsPerConnection = Math.Clamp(maxStreamsPerConnection, 1, 1_000);
 });
@@ -87,7 +92,7 @@ var storageBasePath = !string.IsNullOrWhiteSpace(configuredPath)
 
 Directory.CreateDirectory(storageBasePath);
 var maxUploadBytes = builder.Configuration.GetValue<long?>("Storage:MaxUploadBytes")
-                     ?? 1024L * 1024L * 1024L;
+                     ?? 0;
 var maxChunkBytes = builder.Configuration.GetValue<int?>("Storage:MaxChunkBytes")
                     ?? 2 * 1024 * 1024;
 var maxConcurrentUploadsTotal = builder.Configuration.GetValue<int?>("Storage:MaxConcurrentUploadsTotal")
@@ -99,8 +104,8 @@ var idleChunkTimeoutSeconds = builder.Configuration.GetValue<int?>("Storage:Idle
 var maxUploadDurationMinutes = builder.Configuration.GetValue<int?>("Storage:MaxUploadDurationMinutes") ?? 60;
 var resumeRetentionHours = builder.Configuration.GetValue<int?>("Storage:ResumeRetentionHours") ?? 24;
 
-if (maxUploadBytes <= 0)
-    throw new InvalidOperationException("Storage:MaxUploadBytes debe ser mayor que cero.");
+if (maxUploadBytes < 0)
+    throw new InvalidOperationException("Storage:MaxUploadBytes no puede ser negativo; use 0 para indicar sin límite.");
 if (maxChunkBytes is <= 0 or > 4 * 1024 * 1024)
     throw new InvalidOperationException("Storage:MaxChunkBytes debe estar entre 1 y 4194304 bytes.");
 if (maxConcurrentUploadsTotal is < 1 or > 10_000)

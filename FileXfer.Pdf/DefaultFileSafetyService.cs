@@ -17,9 +17,11 @@ namespace FileXfer.FileSafety;
 
 public sealed class FileSafetyOptions
 {
-    public long MaxFileBytes { get; init; } = ReadPositiveLong(
+    // Cero significa sin límite funcional por archivo. Se conserva la opción de
+    // imponer un límite operativo explícito mediante variable de entorno.
+    public long MaxFileBytes { get; init; } = ReadNonNegativeLong(
         "FILEXFER_FILE_MAX_BYTES",
-        1024L * 1024L * 1024L);
+        0);
 
     public int MaxPackageEntries { get; init; } = (int)Math.Clamp(
         ReadPositiveLong("FILEXFER_PACKAGE_MAX_ENTRIES", 10_000),
@@ -38,6 +40,12 @@ public sealed class FileSafetyOptions
     {
         var raw = Environment.GetEnvironmentVariable(name);
         return long.TryParse(raw, out var value) && value > 0 ? value : fallback;
+    }
+
+    private static long ReadNonNegativeLong(string name, long fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return long.TryParse(raw, out var value) && value >= 0 ? value : fallback;
     }
 }
 
@@ -96,10 +104,10 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
         _pdfSafety = pdfSafety ?? throw new ArgumentNullException(nameof(pdfSafety));
         _options = options ?? new FileSafetyOptions();
 
-        if (_options.MaxFileBytes <= 0 || _options.MaxStructuredTextBytes <= 0 ||
+        if (_options.MaxFileBytes < 0 || _options.MaxStructuredTextBytes <= 0 ||
             _options.MaxPackageExpandedBytes <= 0 || _options.MaxPackageEntries <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "Los límites de seguridad deben ser positivos.");
+            throw new ArgumentOutOfRangeException(nameof(options), "Los límites de seguridad no son válidos.");
         }
     }
 
@@ -118,7 +126,7 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
         var fileInfo = new FileInfo(path);
         if (fileInfo.Length <= 0)
             return Rejected(FileInspectionOutcome.Invalid, "desconocido", "El archivo está vacío y no se puede enviar.", progress);
-        if (fileInfo.Length > _options.MaxFileBytes)
+        if (HasFileSizeLimit && fileInfo.Length > _options.MaxFileBytes)
         {
             return Rejected(
                 FileInspectionOutcome.TooLarge,
@@ -172,7 +180,7 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
         if (extension is ".svg" or ".svgz")
             return InspectSvg(path, extension, progress, cancellationToken);
         if (TextExtensions.Contains(extension))
-            return InspectText(path, extension, progress, cancellationToken);
+            return await InspectTextAsync(path, extension, progress, cancellationToken).ConfigureAwait(false);
         if (extension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".tif" or ".tiff")
             return InspectImage(path, extension, progress, cancellationToken);
         if (extension == ".cer")
@@ -587,7 +595,7 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
         }
     }
 
-    private FileInspectionResult InspectText(
+    private async Task<FileInspectionResult> InspectTextAsync(
         string path,
         string extension,
         IProgress<FileSafetyProgress>? progress,
@@ -596,30 +604,41 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
         Report(progress, FileSafetyStage.CheckingStructure, 35, "Comprobando codificación y contenido de texto...");
         try
         {
-            EnsureStructuredTextSize(path);
             var encoding = DetectTextEncoding(path);
             using var stream = File.OpenRead(path);
             using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 16 * 1024, leaveOpen: false);
             var buffer = new char[16 * 1024];
-            long characters = 0;
             var sample = new StringBuilder(capacity: 16 * 1024);
+            var lastReportedPercentage = 35d;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var read = reader.Read(buffer, 0, buffer.Length);
+                var read = await reader
+                    .ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                    .ConfigureAwait(false);
                 if (read <= 0)
                     break;
-                characters += read;
                 if (sample.Length < 16 * 1024)
                     sample.Append(buffer, 0, Math.Min(read, 16 * 1024 - sample.Length));
-                if (characters > _options.MaxStructuredTextBytes)
-                    throw new InvalidDataException("El texto expandido excede el límite permitido.");
 
                 for (var index = 0; index < read; index++)
                 {
                     var value = buffer[index];
                     if (value == '\0' || (char.IsControl(value) && value is not '\r' and not '\n' and not '\t' and not '\f'))
                         throw new InvalidDataException("El archivo contiene caracteres binarios o controles no permitidos.");
+                }
+
+                var percentage = stream.Length > 0
+                    ? 35d + (60d * stream.Position / stream.Length)
+                    : 95d;
+                if (percentage >= lastReportedPercentage + 1d)
+                {
+                    lastReportedPercentage = percentage;
+                    Report(
+                        progress,
+                        FileSafetyStage.CheckingStructure,
+                        Math.Min(95d, percentage),
+                        $"Verificando texto: {Math.Min(100d, stream.Position * 100d / Math.Max(1L, stream.Length)):N0}%...");
                 }
             }
 
@@ -1192,7 +1211,7 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
             throw new FileValidationException(FileInspectionOutcome.Invalid, "No se encontró el archivo que se intentó validar.");
         if (sourceInfo.Length <= 0)
             throw new FileValidationException(FileInspectionOutcome.Invalid, "El archivo está vacío y no se puede enviar.");
-        if (sourceInfo.Length > _options.MaxFileBytes)
+        if (HasFileSizeLimit && sourceInfo.Length > _options.MaxFileBytes)
             throw new FileValidationException(FileInspectionOutcome.TooLarge, $"El archivo excede el límite permitido ({FormatBytes(_options.MaxFileBytes)}).");
 
         await using var source = new FileStream(
@@ -1218,7 +1237,7 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
             if (read <= 0)
                 break;
             copied = checked(copied + read);
-            if (copied > _options.MaxFileBytes)
+            if (HasFileSizeLimit && copied > _options.MaxFileBytes)
                 throw new FileValidationException(FileInspectionOutcome.TooLarge, "El archivo cambió durante la copia y excedió el límite permitido.");
             await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
             var percentage = source.Length > 0 ? 5 + (20d * copied / source.Length) : 25;
@@ -1229,6 +1248,8 @@ public sealed class DefaultFileSafetyService : IFileSafetyService
         if (copied != sourceInfo.Length || source.Length != sourceInfo.Length)
             throw new FileValidationException(FileInspectionOutcome.Invalid, "El archivo cambió mientras se preparaba. Vuelva a seleccionarlo e intente de nuevo.");
     }
+
+    private bool HasFileSizeLimit => _options.MaxFileBytes > 0;
 
     private static async Task<byte[]> ReadHeaderAsync(string path, int count, CancellationToken cancellationToken)
     {

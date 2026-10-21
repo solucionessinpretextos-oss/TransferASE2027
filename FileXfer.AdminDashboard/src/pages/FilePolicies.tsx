@@ -170,7 +170,7 @@ export function FilePolicies() {
         <div>
           <h2 className="text-2xl font-semibold">Políticas de archivos</h2>
           <p className="text-sm text-slate-400">
-            Controle extensiones, inspección profunda y tamaño máximo. Cada cambio crea una versión auditable.
+            Controle extensiones, inspección profunda y límites opcionales. Cada cambio crea una versión auditable.
           </p>
         </div>
         <button onClick={newPolicy} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold hover:bg-emerald-500">
@@ -193,7 +193,7 @@ export function FilePolicies() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-900 text-xs uppercase text-slate-400">
-                <tr><th className="px-4 py-3">Extensión</th><th>Estado</th><th>Verificación</th><th>Versión</th><th></th></tr>
+                <tr><th className="px-4 py-3">Extensión</th><th>Estado</th><th>Verificación</th><th>Límite por archivo</th><th>Versión</th><th></th></tr>
               </thead>
               <tbody>
                 {policies.map(policy => (
@@ -203,6 +203,7 @@ export function FilePolicies() {
                     <td className={policy.isAllowed && !policy.requiresVerification ? "font-semibold text-amber-300" : ""}>
                       {policy.requiresVerification ? "Profunda" : "Omitida"}
                     </td>
+                    <td>{policy.maxFileBytes ? `${bytesToMb(policy.maxFileBytes)} MB` : "Sin límite"}</td>
                     <td>v{policy.version}</td>
                     <td className="pr-4 text-right"><button onClick={() => void beginEdit(policy)} className="text-emerald-300 hover:text-emerald-200">Editar</button></td>
                   </tr>
@@ -226,7 +227,7 @@ export function FilePolicies() {
                 Advertencia crítica: se validarán tamaño, hash y bloqueo de ejecutables, pero no contraseña, estructura ni reparación específica del formato.
               </div>
             )}
-            <label className="block text-sm">Tamaño máximo (MB, vacío = límite global)
+            <label className="block text-sm">Tamaño máximo opcional (MB, vacío = sin límite)
               <input type="number" min="0.01" step="0.01" value={maxMb} onChange={e => setMaxMb(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2" />
             </label>
             <label className="block text-sm">Motivo del cambio
