@@ -460,6 +460,20 @@
                         <DataGridTextColumn Header="Acción actual"
                                             Binding="{Binding AccionActual}"
                                             Width="2*"/>
+                        <DataGridTemplateColumn Header="Retirar" Width="100">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Content="Quitar"
+                                            Command="{Binding DataContext.ComandoQuitarArchivo, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
+                                            CommandParameter="{Binding}"
+                                            ToolTip="Retirar de esta lista sin eliminar el archivo original"
+                                            Margin="4,2"
+                                            Padding="10,3"
+                                            Background="#FFEEEEEE"
+                                            Foreground="#FF8B1E1E"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                     </DataGrid.Columns>
                 </DataGrid>
 

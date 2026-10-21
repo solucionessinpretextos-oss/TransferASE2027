@@ -214,23 +214,24 @@ namespace TransferClienteASE.Servicios
                     throw new FileNotFoundException(mensajeFaltante, ruta);
                 }
 
-                var extension = NormalizarExtension(Path.GetExtension(nombreArchivo));
-                if (!policies.TryGetValue(extension, out var policy) || !policy.IsAllowed)
-                {
-                    throw new FileValidationException(
-                        FileInspectionOutcome.Unsupported,
-                        $"La extensión {extension} no está habilitada actualmente por el servidor.");
-                }
-
-                var originalLength = File.Exists(ruta)
-                    ? new FileInfo(ruta).Length
-                    : entradaDiario?.OriginalLength ?? 0;
-                ValidarLimitePolitica(policy, originalLength, nombreArchivo);
                 PreparedSafeFile? archivoPreparado = null;
                 var offsetConfirmadoDiario = entradaDiario?.ConfirmedBytes ?? 0;
 
                 try
                 {
+                    var extension = NormalizarExtension(Path.GetExtension(nombreArchivo));
+                    if (!policies.TryGetValue(extension, out var policy) || !policy.IsAllowed)
+                    {
+                        throw new FileValidationException(
+                            FileInspectionOutcome.Unsupported,
+                            $"La extensión {extension} no está habilitada actualmente por el servidor.");
+                    }
+
+                    var originalLength = File.Exists(ruta)
+                        ? new FileInfo(ruta).Length
+                        : entradaDiario?.OriginalLength ?? 0;
+                    ValidarLimitePolitica(policy, originalLength, nombreArchivo);
+
                     string rutaEnvio = string.Empty;
                     string sha256Hex = string.Empty;
                     string fileUuid = string.Empty;
@@ -486,9 +487,8 @@ namespace TransferClienteASE.Servicios
                 catch (FileValidationException exception)
                 {
                     Reportar(25, "Rechazado", exception.Message);
-                    await _diario.MarcarProgresoAsync(
-                        contexto, ruta, offsetConfirmadoDiario,
-                        "Failed", exception.Message, CancellationToken.None);
+                    await _diario.RechazarAsync(
+                        contexto, ruta, exception.Message, CancellationToken.None);
                     throw;
                 }
                 catch (OperationCanceledException)

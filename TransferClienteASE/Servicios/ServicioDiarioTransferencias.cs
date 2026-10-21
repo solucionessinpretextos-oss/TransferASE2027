@@ -163,7 +163,7 @@ namespace TransferClienteASE.Servicios
                   AND Periodo = $periodo AND IdEnte = $idEnte AND IdAuditoria = $idAuditoria
                   AND IdActo = $idActo AND IdOficio = $idOficio
                   AND IdRequerimiento = $idRequerimiento AND IdResultado = $idResultado
-                  AND Status NOT IN ('Completed', 'Canceled')
+                  AND Status NOT IN ('Completed', 'Canceled', 'Rejected')
                 ORDER BY CreatedUtc, OriginalFileName;
                 """;
             BindContext(command, key);
@@ -313,6 +313,25 @@ namespace TransferClienteASE.Servicios
                 context, originalPath,
                 "Status = 'Canceled', LastMessage = 'La carga fue retirada de la cola local.'",
                 null, ct);
+            DeleteRecoveryFile(entry?.PreparedPath);
+        }
+
+        public async Task RechazarAsync(
+            ContextoRequerimiento context,
+            string originalPath,
+            string message,
+            CancellationToken ct = default)
+        {
+            var entry = await ObtenerAsync(context, originalPath, ct);
+            await UpdateAsync(
+                context, originalPath,
+                "Status = 'Rejected', LastMessage = $message",
+                command => command.Parameters.AddWithValue(
+                    "$message",
+                    string.IsNullOrWhiteSpace(message)
+                        ? "El archivo no superó la validación y fue retirado de la cola pendiente."
+                        : message),
+                ct);
             DeleteRecoveryFile(entry?.PreparedPath);
         }
 

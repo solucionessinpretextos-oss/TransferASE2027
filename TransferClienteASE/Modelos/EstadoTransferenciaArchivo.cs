@@ -15,6 +15,7 @@ namespace TransferClienteASE.Modelos
         Subiendo = 2,
         Completado = 3,
         Fallido = 4,
-        Cancelado = 5
+        Cancelado = 5,
+        Rechazado = 6
     }
 }

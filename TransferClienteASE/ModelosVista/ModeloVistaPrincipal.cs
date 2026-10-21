@@ -186,10 +186,13 @@ namespace TransferClienteASE.ModelosVista
 
             ComandoAgregarArchivos = new ComandoRelay(_ => AgregarArchivos(), _ => !SubidaEnProgreso);
             ComandoAgregarCarpetas = new ComandoRelay(_ => AgregarCarpetas(), _ => !SubidaEnProgreso);
-            ComandoQuitarArchivo = new ComandoRelay(a => QuitarArchivo(a as ModeloVistaArchivoTransferencia),
-                _ => !SubidaEnProgreso && Archivos.Any());
+            ComandoQuitarArchivo = new ComandoRelay(
+                a => QuitarArchivo(a as ModeloVistaArchivoTransferencia),
+                a => !SubidaEnProgreso &&
+                     a is ModeloVistaArchivoTransferencia archivo &&
+                     Archivos.Contains(archivo));
             ComandoSubirArchivos = new ComandoRelay(async _ => await SubirArchivosAsync(),
-                _ => !SubidaEnProgreso && Archivos.Any());
+                _ => !SubidaEnProgreso && Archivos.Any(EsCandidatoParaCarga));
             ComandoVerDocumentos = new ComandoRelay(async _ => await VerDocumentosAsync(),
                 _ => !SubidaEnProgreso);
             ComandoPausarCola = new ComandoRelay(_ => PausarCola(), _ => SubidaEnProgreso);
@@ -388,13 +391,17 @@ namespace TransferClienteASE.ModelosVista
             }
         }
 
-        private void QuitarArchivo(ModeloVistaArchivoTransferencia? archivo)
+        private async void QuitarArchivo(ModeloVistaArchivoTransferencia? archivo)
         {
-            if (archivo == null)
+            if (archivo == null || SubidaEnProgreso || !Archivos.Contains(archivo))
                 return;
 
-            Archivos.Remove(archivo);
-            _ = CancelarEntradaDiarioAsync(archivo.RutaCompleta);
+            await CancelarEntradaDiarioAsync(archivo.RutaCompleta);
+            if (!Archivos.Remove(archivo))
+                return;
+
+            RecalcularProgresoCola();
+            MensajeEstado = $"{archivo.NombreArchivo} fue retirado de la lista. El archivo original no fue eliminado.";
         }
 
         private async Task CancelarEntradaDiarioAsync(string ruta)
@@ -429,11 +436,12 @@ namespace TransferClienteASE.ModelosVista
             ArchivoActual = "Organizando la cola de archivos";
             ProgresoArchivoActual = 0;
             ProgresoTotal = 0;
+            string? rutaRechazadaActual = null;
 
             try
             {
                 var rutas = Archivos
-                    .Where(a => a.Estado != EstadoTransferenciaArchivo.Completado)
+                    .Where(EsCandidatoParaCarga)
                     .Select(a => a.RutaCompleta)
                     .ToArray();
 
@@ -469,9 +477,16 @@ namespace TransferClienteASE.ModelosVista
                             modelo.ReciboId = p.ReciboId;
                         if (!string.IsNullOrWhiteSpace(p.TraceId))
                             modelo.TraceId = p.TraceId;
-                        modelo.Estado = string.Equals(p.Etapa, "Completado", StringComparison.OrdinalIgnoreCase)
-                            ? EstadoTransferenciaArchivo.Completado
-                            : EstadoTransferenciaArchivo.Subiendo;
+                        modelo.Estado = p.Etapa switch
+                        {
+                            var etapa when etapa.Equals("Completado", StringComparison.OrdinalIgnoreCase) =>
+                                EstadoTransferenciaArchivo.Completado,
+                            var etapa when etapa.Equals("Rechazado", StringComparison.OrdinalIgnoreCase) =>
+                                EstadoTransferenciaArchivo.Rechazado,
+                            _ => EstadoTransferenciaArchivo.Subiendo
+                        };
+                        if (modelo.Estado == EstadoTransferenciaArchivo.Rechazado)
+                            rutaRechazadaActual = modelo.RutaCompleta;
                     }
 
                     EtapaActual = p.Etapa;
@@ -516,15 +531,25 @@ namespace TransferClienteASE.ModelosVista
                 MensajeEstado = ex.Message;
                 EtapaActual = "Rechazado";
 
+                var archivoRechazado = string.IsNullOrWhiteSpace(rutaRechazadaActual)
+                    ? null
+                    : Archivos.FirstOrDefault(a => string.Equals(
+                        a.RutaCompleta,
+                        rutaRechazadaActual,
+                        StringComparison.OrdinalIgnoreCase));
+                archivoRechazado ??= Archivos.FirstOrDefault(a =>
+                    a.Estado == EstadoTransferenciaArchivo.Subiendo);
+                if (archivoRechazado is not null)
+                {
+                    archivoRechazado.Estado = EstadoTransferenciaArchivo.Rechazado;
+                    archivoRechazado.AccionActual = $"Rechazado definitivamente: {ex.Message}";
+                }
+
                 foreach (var a in Archivos.Where(a =>
-                             a.Estado == EstadoTransferenciaArchivo.Subiendo ||
                              a.Estado == EstadoTransferenciaArchivo.EnCola))
                 {
-                    var eraArchivoActivo = a.Estado == EstadoTransferenciaArchivo.Subiendo;
-                    a.Estado = EstadoTransferenciaArchivo.Fallido;
-                    a.AccionActual = eraArchivoActivo
-                        ? $"Rechazado: {ex.Message}"
-                        : "No se procesó porque la cola fue detenida por un archivo rechazado";
+                    a.Estado = EstadoTransferenciaArchivo.Pendiente;
+                    a.AccionActual = "Pendiente; no se procesó porque otro archivo fue rechazado";
                 }
 
                 MessageBox.Show(
@@ -544,12 +569,19 @@ namespace TransferClienteASE.ModelosVista
                 MensajeEstado = mensaje;
                 EtapaActual = "Error";
 
+                var archivoFallido = Archivos.FirstOrDefault(a =>
+                    a.Estado == EstadoTransferenciaArchivo.Subiendo);
+                if (archivoFallido is not null)
+                {
+                    archivoFallido.Estado = EstadoTransferenciaArchivo.Fallido;
+                    archivoFallido.AccionActual = $"Error: {mensaje}";
+                }
+
                 foreach (var a in Archivos.Where(a =>
-                             a.Estado == EstadoTransferenciaArchivo.Subiendo ||
                              a.Estado == EstadoTransferenciaArchivo.EnCola))
                 {
-                    a.Estado = EstadoTransferenciaArchivo.Fallido;
-                    a.AccionActual = $"Error: {mensaje}";
+                    a.Estado = EstadoTransferenciaArchivo.Pendiente;
+                    a.AccionActual = "Pendiente; no se procesó porque la cola fue interrumpida";
                 }
 
                 MessageBox.Show(
@@ -647,6 +679,26 @@ namespace TransferClienteASE.ModelosVista
             {
                 Archivos.Add(a);
             }
+        }
+
+        private static bool EsCandidatoParaCarga(ModeloVistaArchivoTransferencia archivo) =>
+            archivo.Estado is EstadoTransferenciaArchivo.Pendiente or
+                EstadoTransferenciaArchivo.Fallido or
+                EstadoTransferenciaArchivo.Cancelado;
+
+        private void RecalcularProgresoCola()
+        {
+            if (Archivos.Count == 0)
+            {
+                ProgresoTotal = 0;
+                ProgresoArchivoActual = 0;
+                EtapaActual = "En espera";
+                ArchivoActual = "Ningún archivo en proceso";
+                return;
+            }
+
+            ProgresoTotal = Archivos.Average(item => item.Progreso);
+            ArchivoActual = $"{Archivos.Count} archivo(s) en la lista";
         }
 
         private void ActualizarHabilitacionComandos()

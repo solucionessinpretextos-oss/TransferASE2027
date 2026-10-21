@@ -65,7 +65,30 @@ try
     Require(invalidated?.ConfirmedBytes == 0, "Se conservó un offset perteneciente a otro contenido.");
     Require(!File.Exists(changedPrepared), "No se limpió la copia obsoleta del archivo modificado.");
 
-    Console.WriteLine("PASS: journal survives reopen, restores offset, cleans completion and invalidates changed sources.");
+    await reopened.CancelarAsync(context, changedOriginal);
+    var rejectedOriginal = Path.Combine(root, "irreparable.pdf");
+    await File.WriteAllBytesAsync(rejectedOriginal, Enumerable.Repeat((byte)0x42, 2048).ToArray());
+    await reopened.RegistrarEnColaAsync(context, rejectedOriginal);
+    var rejectedUuid = Guid.NewGuid().ToString("N");
+    var rejectedPrepared = await reopened.ConservarCopiaPreparadaAsync(
+        rejectedUuid, "irreparable.pdf", rejectedOriginal, CancellationToken.None);
+    await reopened.MarcarPreparadoAsync(
+        context, rejectedOriginal, rejectedPrepared, rejectedUuid,
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(rejectedPrepared))).ToLowerInvariant(),
+        new FileInfo(rejectedPrepared).Length, false, true, 1);
+    await reopened.RechazarAsync(context, rejectedOriginal, "PDF inválido e irreparable.");
+    var rejectedEntry = await reopened.ObtenerAsync(context, rejectedOriginal);
+    Require(rejectedEntry?.Status == "Rejected", "El rechazo no quedó como estado terminal.");
+    Require(!(await reopened.ObtenerPendientesAsync(context)).Any(item =>
+        string.Equals(item.OriginalPath, rejectedOriginal, StringComparison.OrdinalIgnoreCase)),
+        "Un archivo rechazado reapareció como pendiente.");
+    Require(!File.Exists(rejectedPrepared), "La copia recuperable de un archivo rechazado no fue eliminada.");
+
+    await reopened.RegistrarEnColaAsync(context, rejectedOriginal);
+    Require((await reopened.ObtenerAsync(context, rejectedOriginal))?.Status == "Queued",
+        "Volver a seleccionar un archivo corregido no lo reincorporó a la cola.");
+
+    Console.WriteLine("PASS: journal restores resumable work, excludes rejected files and permits explicit reselection.");
 }
 finally
 {
