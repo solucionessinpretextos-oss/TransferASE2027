@@ -101,7 +101,7 @@ var maxConcurrentUploadsPerRfc = builder.Configuration.GetValue<int?>("Storage:M
                                  ?? 5;
 var firstChunkTimeoutSeconds = builder.Configuration.GetValue<int?>("Storage:FirstChunkTimeoutSeconds") ?? 30;
 var idleChunkTimeoutSeconds = builder.Configuration.GetValue<int?>("Storage:IdleChunkTimeoutSeconds") ?? 120;
-var maxUploadDurationMinutes = builder.Configuration.GetValue<int?>("Storage:MaxUploadDurationMinutes") ?? 60;
+var maxUploadDurationMinutes = builder.Configuration.GetValue<int?>("Storage:MaxUploadDurationMinutes") ?? 0;
 var resumeRetentionHours = builder.Configuration.GetValue<int?>("Storage:ResumeRetentionHours") ?? 24;
 
 if (maxUploadBytes < 0)
@@ -120,8 +120,8 @@ if (firstChunkTimeoutSeconds is < 5 or > 300)
     throw new InvalidOperationException("Storage:FirstChunkTimeoutSeconds debe estar entre 5 y 300.");
 if (idleChunkTimeoutSeconds is < 5 or > 900)
     throw new InvalidOperationException("Storage:IdleChunkTimeoutSeconds debe estar entre 5 y 900.");
-if (maxUploadDurationMinutes is < 1 or > 1_440)
-    throw new InvalidOperationException("Storage:MaxUploadDurationMinutes debe estar entre 1 y 1440.");
+if (maxUploadDurationMinutes is < 0 or > 1_440)
+    throw new InvalidOperationException("Storage:MaxUploadDurationMinutes debe estar entre 1 y 1440, o ser 0 para indicar sin límite.");
 if (resumeRetentionHours is < 1 or > 168)
     throw new InvalidOperationException("Storage:ResumeRetentionHours debe estar entre 1 y 168.");
 

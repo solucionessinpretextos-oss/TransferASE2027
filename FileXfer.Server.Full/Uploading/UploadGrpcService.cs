@@ -271,7 +271,8 @@ namespace FileXfer.Server.Uploading
             using var uploadAdmission = admissionLease!;
 
             using var uploadTimeout = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
-            uploadTimeout.CancelAfter(TimeSpan.FromMinutes(_storage.MaxUploadDurationMinutes));
+            if (_storage.MaxUploadDurationMinutes > 0)
+                uploadTimeout.CancelAfter(TimeSpan.FromMinutes(_storage.MaxUploadDurationMinutes));
             var uploadCancellationToken = uploadTimeout.Token;
 
             var deviceId =

@@ -32,7 +32,8 @@ namespace FileXfer.Server.Options
 
         public int IdleChunkTimeoutSeconds { get; set; } = 120;
 
-        public int MaxUploadDurationMinutes { get; set; } = 60;
+        /// <summary>Cero significa sin duración total máxima; el timeout de inactividad sigue vigente.</summary>
+        public int MaxUploadDurationMinutes { get; set; }
 
         public int ResumeRetentionHours { get; set; } = 24;
     }
