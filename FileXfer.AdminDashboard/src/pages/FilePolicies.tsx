@@ -33,6 +33,8 @@ export function FilePolicies() {
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({ key: "extension", direction: "asc" });
+  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(1);
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const headers = new Headers(init?.headers);
@@ -192,6 +194,22 @@ export function FilePolicies() {
       return sort.direction === "asc" ? result : -result;
     });
   }, [policies, search, sort]);
+  const totalPages = Math.max(1, Math.ceil(visiblePolicies.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = visiblePolicies.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const pageEnd = Math.min(currentPage * pageSize, visiblePolicies.length);
+  const pagedPolicies = useMemo(
+    () => visiblePolicies.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [visiblePolicies, currentPage, pageSize]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, sort.key, sort.direction, pageSize]);
+
+  useEffect(() => {
+    setPage(current => Math.min(current, totalPages));
+  }, [totalPages]);
 
   const toggleSort = (key: SortKey) => {
     setSort(current => current.key === key
@@ -227,7 +245,9 @@ export function FilePolicies() {
           <div className="flex flex-col gap-3 border-b border-slate-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-semibold">Políticas efectivas</p>
-              <p className="mt-1 text-xs text-slate-500">Mostrando {visiblePolicies.length} de {policies.length}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Mostrando {pageStart}–{pageEnd} de {visiblePolicies.length} coincidencias · {policies.length} configuradas
+              </p>
             </div>
             <label className="relative block w-full sm:max-w-xs">
               <span className="sr-only">Buscar por extensión</span>
@@ -256,7 +276,7 @@ export function FilePolicies() {
                 </tr>
               </thead>
               <tbody>
-                {visiblePolicies.map(policy => (
+                {pagedPolicies.map(policy => (
                   <tr key={policy.id} className="border-t border-slate-800">
                     <td className="px-4 py-3 font-mono">{policy.extension}</td>
                     <td>{policy.isAllowed ? "Habilitada" : "Bloqueada"}</td>
@@ -280,6 +300,58 @@ export function FilePolicies() {
               </div>
             )}
           </div>
+          {visiblePolicies.length > 0 && (
+            <div className="flex flex-col gap-4 border-t border-slate-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <label className="flex items-center gap-2 text-xs text-slate-400">
+                Registros por página
+                <select
+                  aria-label="Registros por página"
+                  value={pageSize}
+                  onChange={event => setPageSize(Number(event.target.value))}
+                  className="rounded-lg border border-white/10 bg-slate-950 px-2.5 py-2 text-sm font-semibold text-slate-200 outline-none focus:border-amber-400/60"
+                >
+                  {[10, 25, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </label>
+
+              <nav className="flex flex-wrap items-center gap-1" aria-label="Paginación de políticas">
+                <button
+                  type="button"
+                  onClick={() => setPage(current => Math.max(1, current - 1))}
+                  disabled={currentPage === 1}
+                  className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-amber-400/40 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Anterior
+                </button>
+                {paginationItems(currentPage, totalPages).map((item, index) => item === "ellipsis" ? (
+                  <span key={`ellipsis-${index}`} className="px-1 text-xs text-slate-600" aria-hidden="true">…</span>
+                ) : (
+                  <button
+                    key={item}
+                    type="button"
+                    aria-label={`Ir a la página ${item}`}
+                    aria-current={item === currentPage ? "page" : undefined}
+                    onClick={() => setPage(item)}
+                    className={`h-9 min-w-9 rounded-lg border px-2 text-xs font-semibold transition ${item === currentPage
+                      ? "border-amber-300/30 bg-amber-400/10 text-amber-200"
+                      : "border-white/10 text-slate-400 hover:border-amber-400/40 hover:text-amber-200"}`}
+                  >
+                    {item}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setPage(current => Math.min(totalPages, current + 1))}
+                  disabled={currentPage === totalPages}
+                  className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-amber-400/40 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Siguiente
+                </button>
+              </nav>
+
+              <p className="text-xs tabular-nums text-slate-500">Página {currentPage} de {totalPages}</p>
+            </div>
+          )}
           {busy && policies.length === 0 && <p className="p-4 text-sm text-slate-400">Cargando políticas...</p>}
         </section>
 
@@ -353,6 +425,19 @@ function SortableHeader({
       </button>
     </th>
   );
+}
+
+function paginationItems(currentPage: number, totalPages: number): Array<number | "ellipsis"> {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+
+  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
+  const ordered = [...pages].filter(value => value >= 1 && value <= totalPages).sort((left, right) => left - right);
+  const items: Array<number | "ellipsis"> = [];
+  ordered.forEach((value, index) => {
+    if (index > 0 && value - ordered[index - 1] > 1) items.push("ellipsis");
+    items.push(value);
+  });
+  return items;
 }
 
 function Metric({ label, value, danger = false }: { label: string; value: number; danger?: boolean }) {
