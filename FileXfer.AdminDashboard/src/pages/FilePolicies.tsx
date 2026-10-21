@@ -2,6 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { FilePolicyDto, FilePolicyRevisionDto } from "../types/admin";
 
+type SortKey = "extension" | "isAllowed" | "requiresVerification" | "maxFileBytes" | "version" | "updatedUtc" | "updatedBy";
+type SortDirection = "asc" | "desc";
+
+const POLICY_COLLATOR = new Intl.Collator("es-MX", { sensitivity: "base", numeric: true });
+
 function bytesToMb(value?: number | null): string {
   return value ? (value / 1024 / 1024).toString() : "";
 }
@@ -26,6 +31,8 @@ export function FilePolicies() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({ key: "extension", direction: "asc" });
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const headers = new Headers(init?.headers);
@@ -151,6 +158,46 @@ export function FilePolicies() {
     () => policies.filter(p => p.isAllowed && !p.requiresVerification).length,
     [policies]
   );
+  const visiblePolicies = useMemo(() => {
+    const term = search.trim().toLocaleLowerCase("es-MX");
+    const filtered = term
+      ? policies.filter(policy => policy.extension.toLocaleLowerCase("es-MX").includes(term))
+      : policies;
+
+    return [...filtered].sort((left, right) => {
+      let result = 0;
+      switch (sort.key) {
+        case "extension":
+          result = POLICY_COLLATOR.compare(left.extension, right.extension);
+          break;
+        case "isAllowed":
+          result = Number(left.isAllowed) - Number(right.isAllowed);
+          break;
+        case "requiresVerification":
+          result = Number(left.requiresVerification) - Number(right.requiresVerification);
+          break;
+        case "maxFileBytes":
+          result = (left.maxFileBytes ?? Number.MAX_SAFE_INTEGER) - (right.maxFileBytes ?? Number.MAX_SAFE_INTEGER);
+          break;
+        case "version":
+          result = left.version - right.version;
+          break;
+        case "updatedUtc":
+          result = new Date(left.updatedUtc).getTime() - new Date(right.updatedUtc).getTime();
+          break;
+        case "updatedBy":
+          result = POLICY_COLLATOR.compare(left.updatedBy, right.updatedBy);
+          break;
+      }
+      return sort.direction === "asc" ? result : -result;
+    });
+  }, [policies, search, sort]);
+
+  const toggleSort = (key: SortKey) => {
+    setSort(current => current.key === key
+      ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
+      : { key, direction: "asc" });
+  };
 
   return (
     <div className="space-y-6">
@@ -177,14 +224,39 @@ export function FilePolicies() {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.25fr_1fr]">
         <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
-          <div className="border-b border-slate-800 px-4 py-3 text-sm font-semibold">Políticas efectivas</div>
+          <div className="flex flex-col gap-3 border-b border-slate-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold">Políticas efectivas</p>
+              <p className="mt-1 text-xs text-slate-500">Mostrando {visiblePolicies.length} de {policies.length}</p>
+            </div>
+            <label className="relative block w-full sm:max-w-xs">
+              <span className="sr-only">Buscar por extensión</span>
+              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-500">⌕</span>
+              <input
+                type="search"
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                placeholder="Buscar extensión, por ejemplo .pdf"
+                className="w-full rounded-xl border border-white/10 bg-black/25 py-2.5 pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-600 focus:border-amber-400/60 focus:ring-4 focus:ring-amber-400/5"
+              />
+            </label>
+          </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+            <table className="w-full min-w-[1080px] text-left text-sm">
               <thead className="bg-slate-900 text-xs uppercase text-slate-400">
-                <tr><th className="px-4 py-3">Extensión</th><th>Estado</th><th>Verificación</th><th>Límite por archivo</th><th>Versión</th><th></th></tr>
+                <tr>
+                  <SortableHeader label="Extensión" sortKey="extension" current={sort} onSort={toggleSort} className="px-4 py-3" />
+                  <SortableHeader label="Estado" sortKey="isAllowed" current={sort} onSort={toggleSort} />
+                  <SortableHeader label="Verificación" sortKey="requiresVerification" current={sort} onSort={toggleSort} />
+                  <SortableHeader label="Límite por archivo" sortKey="maxFileBytes" current={sort} onSort={toggleSort} />
+                  <SortableHeader label="Versión" sortKey="version" current={sort} onSort={toggleSort} />
+                  <SortableHeader label="Actualizada" sortKey="updatedUtc" current={sort} onSort={toggleSort} />
+                  <SortableHeader label="Responsable" sortKey="updatedBy" current={sort} onSort={toggleSort} />
+                  <th className="pr-4"><span className="sr-only">Acciones</span></th>
+                </tr>
               </thead>
               <tbody>
-                {policies.map(policy => (
+                {visiblePolicies.map(policy => (
                   <tr key={policy.id} className="border-t border-slate-800">
                     <td className="px-4 py-3 font-mono">{policy.extension}</td>
                     <td>{policy.isAllowed ? "Habilitada" : "Bloqueada"}</td>
@@ -193,11 +265,20 @@ export function FilePolicies() {
                     </td>
                     <td>{policy.maxFileBytes ? `${bytesToMb(policy.maxFileBytes)} MB` : "Sin límite"}</td>
                     <td>v{policy.version}</td>
+                    <td className="text-xs text-slate-400">{new Date(policy.updatedUtc).toLocaleString()}</td>
+                    <td className="max-w-40 truncate text-xs text-slate-400" title={policy.updatedBy}>{policy.updatedBy}</td>
                     <td className="pr-4 text-right"><button onClick={() => void beginEdit(policy)} className="text-emerald-300 hover:text-emerald-200">Editar</button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {!busy && visiblePolicies.length === 0 && (
+              <div className="px-4 py-10 text-center">
+                <p className="text-sm font-semibold text-slate-300">No se encontraron extensiones</p>
+                <p className="mt-1 text-xs text-slate-500">Pruebe con otra búsqueda o limpie el filtro.</p>
+                {search && <button type="button" onClick={() => setSearch("")} className="mt-3 text-sm font-semibold text-amber-300 hover:text-amber-200">Limpiar búsqueda</button>}
+              </div>
+            )}
           </div>
           {busy && policies.length === 0 && <p className="p-4 text-sm text-slate-400">Cargando políticas...</p>}
         </section>
@@ -242,6 +323,35 @@ export function FilePolicies() {
         </div>
       </div>
     </div>
+  );
+}
+
+function SortableHeader({
+  label,
+  sortKey,
+  current,
+  onSort,
+  className = ""
+}: {
+  label: string;
+  sortKey: SortKey;
+  current: { key: SortKey; direction: SortDirection };
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = current.key === sortKey;
+  const ariaSort = active ? (current.direction === "asc" ? "ascending" : "descending") : "none";
+  return (
+    <th className={className} aria-sort={ariaSort}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex items-center gap-1.5 py-3 text-left font-semibold transition hover:text-amber-200 ${active ? "text-amber-300" : "text-slate-400"}`}
+      >
+        {label}
+        <span aria-hidden="true" className="text-[10px]">{active ? (current.direction === "asc" ? "▲" : "▼") : "↕"}</span>
+      </button>
+    </th>
   );
 }
 
