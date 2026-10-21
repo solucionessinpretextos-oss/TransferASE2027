@@ -6,11 +6,13 @@
 // Regla de mantenimiento: No colocar SQL directo aquí si la consulta pertenece a BuDi; mantenerlo delgado para que la lógica se pruebe y mantenga en servicios.
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
+using System.Security.Claims;
 using System.Security.Cryptography;
 using FileXfer.Server.Data;
 using FileXfer.Server.Options;
 using FileXfer.Server.Security;
 using FileXfer.Server.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -22,6 +24,7 @@ namespace FileXfer.Server.Controllers;
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class AuthController : ControllerBase
 {
+    private const string DashboardRefreshCookie = "__Host-FileXfer.Admin.Refresh";
     private readonly IDbContextFactory<FileXferDbContext> _dbf;
     private readonly JwtService _jwt;
     private readonly ISatCertificateValidator _sat;
@@ -123,7 +126,7 @@ public sealed class AuthController : ControllerBase
         DateTimeOffset? refreshExpiresUtc);
 
     public sealed record RefreshReq(
-        string refreshToken);
+        string? refreshToken);
 
     [HttpPost("login-signed")]
     [RequestSizeLimit(128 * 1024)]
@@ -326,6 +329,7 @@ public sealed class AuthController : ControllerBase
             });
 
             await db.SaveChangesAsync();
+            SetDashboardRefreshCookie(refreshPlain, refreshEntity.ExpiresUtc);
 
             return Ok(new
             {
@@ -356,9 +360,33 @@ public sealed class AuthController : ControllerBase
         }
     }
 
+    [HttpGet("session")]
+    [Authorize(Policy = "PrivilegedEfirma")]
+    public IActionResult Session()
+    {
+        var rfc = User.FindFirstValue("rfc");
+        var roles = User.Claims
+            .Where(claim =>
+                claim.Type == ClaimTypes.Role ||
+                claim.Type.Equals("role", StringComparison.OrdinalIgnoreCase) ||
+                claim.Type.Equals("roles", StringComparison.OrdinalIgnoreCase))
+            .Select(claim => claim.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return Ok(new
+        {
+            rfc,
+            roles,
+            deviceId = User.FindFirstValue("deviceId"),
+            authenticationMethod = User.FindFirstValue("amr")
+        });
+    }
+
     [HttpPost("refresh")]
     [RequestSizeLimit(8 * 1024)]
-    public async Task<IActionResult> Refresh([FromBody] RefreshReq req)
+    public async Task<IActionResult> Refresh([FromBody] RefreshReq? req)
     {
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
@@ -367,13 +395,14 @@ public sealed class AuthController : ControllerBase
                 StatusCodes.Status429TooManyRequests,
                 new { message = "Demasiadas solicitudes de renovación. Intente más tarde." });
 
-        if (string.IsNullOrWhiteSpace(req.refreshToken) || req.refreshToken.Length > 512)
+        var refreshToken = ResolveRefreshToken(req);
+        if (string.IsNullOrWhiteSpace(refreshToken) || refreshToken.Length > 512)
             return Problem(title: "Refresh token requerido", statusCode: 400);
 
         try
         {
             var now = DateTimeOffset.UtcNow;
-            var hash = ComputeSha256(req.refreshToken);
+            var hash = ComputeSha256(refreshToken);
 
             await using var db = await _dbf.CreateDbContextAsync();
 
@@ -484,6 +513,7 @@ public sealed class AuthController : ControllerBase
             });
 
             await db.SaveChangesAsync();
+            SetDashboardRefreshCookie(newRefreshPlain, newRefreshEntity.ExpiresUtc);
 
             return Ok(new LoginResp(
                 token,
@@ -499,6 +529,92 @@ public sealed class AuthController : ControllerBase
             _log.LogError(ex, "Error inesperado en /auth/refresh desde {Ip}", ip);
             return Problem(title: "Error interno", statusCode: 500);
         }
+    }
+
+    [HttpPost("logout")]
+    [RequestSizeLimit(8 * 1024)]
+    public async Task<IActionResult> Logout([FromBody] RefreshReq? req)
+    {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var refreshToken = ResolveRefreshToken(req);
+        DeleteDashboardRefreshCookie();
+
+        if (!_rate.TryRate("logout:ip:" + ip))
+            return NoContent();
+
+        if (string.IsNullOrWhiteSpace(refreshToken) || refreshToken.Length > 512)
+            return NoContent();
+
+        try
+        {
+            var hash = ComputeSha256(refreshToken);
+            await using var db = await _dbf.CreateDbContextAsync();
+            var token = await db.RefreshTokens.SingleOrDefaultAsync(
+                item => item.TokenHash == hash,
+                HttpContext.RequestAborted);
+
+            if (token is not null && !token.IsRevoked)
+            {
+                token.IsRevoked = true;
+                db.AuditLogs.Add(new AuditLog
+                {
+                    Id = Guid.NewGuid(),
+                    TimestampUtc = DateTimeOffset.UtcNow,
+                    ActorRfc = token.Rfc,
+                    Action = "logout_ok",
+                    Ip = ip,
+                    Details = $"deviceId={token.DeviceId}"
+                });
+                await db.SaveChangesAsync(HttpContext.RequestAborted);
+            }
+        }
+        catch (Exception ex)
+        {
+            // El cliente siempre elimina su sesión local. No se expone si el token existía.
+            _log.LogError(ex, "Error inesperado en /auth/logout desde {Ip}", ip);
+        }
+
+        return NoContent();
+    }
+
+    private string? ResolveRefreshToken(RefreshReq? request)
+    {
+        if (!string.IsNullOrWhiteSpace(request?.refreshToken))
+            return request.refreshToken;
+
+        return Request.Cookies.TryGetValue(DashboardRefreshCookie, out var cookie)
+            ? cookie
+            : null;
+    }
+
+    private void SetDashboardRefreshCookie(string token, DateTimeOffset expiresUtc)
+    {
+        Response.Cookies.Append(
+            DashboardRefreshCookie,
+            token,
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                IsEssential = true,
+                Path = "/",
+                Expires = expiresUtc
+            });
+    }
+
+    private void DeleteDashboardRefreshCookie()
+    {
+        Response.Cookies.Delete(
+            DashboardRefreshCookie,
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                IsEssential = true,
+                Path = "/"
+            });
     }
 
     private static string ComputeSha256(string raw)

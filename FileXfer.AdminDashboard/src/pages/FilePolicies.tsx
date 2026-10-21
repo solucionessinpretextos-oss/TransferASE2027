@@ -1,36 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import { FilePolicyDto, FilePolicyRevisionDto } from "../types/admin";
-
-const ACCESS_TOKEN_KEY = "filexfer.admin.access-token";
-
-function apiBase(): string {
-  const configured = import.meta.env.VITE_API_BASE_URL as string | undefined;
-  return configured ? configured.replace(/\/+$/, "") : window.location.origin;
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = window.sessionStorage.getItem(ACCESS_TOKEN_KEY);
-  if (!token) throw new Error("Inicie sesión en el Dashboard antes de administrar políticas.");
-  const response = await fetch(`${apiBase()}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    try {
-      const parsed = JSON.parse(body) as { message?: string; title?: string };
-      throw new Error(parsed.message ?? parsed.title ?? `HTTP ${response.status}`);
-    } catch (error) {
-      if (error instanceof SyntaxError) throw new Error(body || `HTTP ${response.status}`);
-      throw error;
-    }
-  }
-  return (await response.json()) as T;
-}
 
 function bytesToMb(value?: number | null): string {
   return value ? (value / 1024 / 1024).toString() : "";
@@ -44,6 +14,7 @@ function mbToBytes(value: string): number | null {
 }
 
 export function FilePolicies() {
+  const { authorizedFetch } = useAuth();
   const [policies, setPolicies] = useState<FilePolicyDto[]>([]);
   const [selected, setSelected] = useState<FilePolicyDto | null>(null);
   const [history, setHistory] = useState<FilePolicyRevisionDto[]>([]);
@@ -56,6 +27,23 @@ export function FilePolicies() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    const headers = new Headers(init?.headers);
+    if (init?.body) headers.set("Content-Type", "application/json");
+    const response = await authorizedFetch(path, { ...init, headers });
+    if (!response.ok) {
+      const body = await response.text();
+      try {
+        const parsed = JSON.parse(body) as { message?: string; title?: string };
+        throw new Error(parsed.message ?? parsed.title ?? `HTTP ${response.status}`);
+      } catch (parseError) {
+        if (parseError instanceof SyntaxError) throw new Error(body || `HTTP ${response.status}`);
+        throw parseError;
+      }
+    }
+    return (await response.json()) as T;
+  }, [authorizedFetch]);
+
   const load = useCallback(async () => {
     setBusy(true);
     try {
@@ -67,7 +55,7 @@ export function FilePolicies() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => { void load(); }, [load]);
 

@@ -9,10 +9,10 @@
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
 import { useEffect, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import { SummaryResponse } from "../types/admin";
 
 const REFRESH_INTERVAL_MS = 2_000;
-const ACCESS_TOKEN_KEY = "filexfer.admin.access-token";
 
 class ApiError extends Error {
   constructor(
@@ -23,24 +23,11 @@ class ApiError extends Error {
   }
 }
 
-function getApiBaseUrl(): string {
-  const base = import.meta.env.VITE_API_BASE_URL as string | undefined;
-  if (!base) {
-    return window.location.origin;
-  }
-  return base.replace(/\/+$/, "");
-}
-
 async function fetchSummary(
-  accessToken: string,
+  authorizedFetch: (path: string, init?: RequestInit) => Promise<Response>,
   signal?: AbortSignal
 ): Promise<SummaryResponse> {
-  const baseUrl = getApiBaseUrl();
-  const url = `${baseUrl}/admin/monitoring/summary`;
-  const resp = await fetch(url, {
-    signal,
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const resp = await authorizedFetch("/admin/monitoring/summary", { signal });
 
   if (!resp.ok) {
     const text = await resp.text();
@@ -63,20 +50,12 @@ async function fetchSummary(
 }
 
 export function Dashboard() {
-  const [accessToken, setAccessToken] = useState(() =>
-    window.sessionStorage.getItem(ACCESS_TOKEN_KEY) ?? ""
-  );
+  const { authorizedFetch } = useAuth();
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    if (!accessToken) {
-      setSummary(null);
-      setLoading(false);
-      return;
-    }
-
     let disposed = false;
     let controller: AbortController | null = null;
 
@@ -91,7 +70,7 @@ export function Dashboard() {
           setError(null);
         }
 
-        const data = await fetchSummary(accessToken, controller.signal);
+        const data = await fetchSummary(authorizedFetch, controller.signal);
         if (!disposed) {
           setSummary(data);
           setError(null);
@@ -104,8 +83,6 @@ export function Dashboard() {
         }
 
         if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-          window.sessionStorage.removeItem(ACCESS_TOKEN_KEY);
-          setAccessToken("");
           setSummary(null);
           setError(
             e.status === 403
@@ -139,27 +116,7 @@ export function Dashboard() {
       controller?.abort();
       window.clearInterval(id);
     };
-  }, [accessToken]);
-
-  const connect = (token: string) => {
-    const normalized = token.trim();
-    if (!normalized) return;
-    window.sessionStorage.setItem(ACCESS_TOKEN_KEY, normalized);
-    setError(null);
-    setLoading(true);
-    setAccessToken(normalized);
-  };
-
-  const disconnect = () => {
-    window.sessionStorage.removeItem(ACCESS_TOKEN_KEY);
-    setAccessToken("");
-    setSummary(null);
-    setError(null);
-  };
-
-  if (!accessToken) {
-    return <AccessGate onConnect={connect} message={error} />;
-  }
+  }, [authorizedFetch]);
 
   if (loading && !summary && !error) {
     return (
@@ -204,13 +161,6 @@ export function Dashboard() {
               Estado técnico, desempeño de transferencias y KPIs operativos.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={disconnect}
-            className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-rose-500 hover:text-rose-200"
-          >
-            Cerrar sesión
-          </button>
         </div>
       </header>
 
@@ -415,59 +365,6 @@ export function Dashboard() {
       <p className="text-xs text-slate-500 mt-4">
         Última actualización: {new Date(summary.timestampUtc).toLocaleString()}
       </p>
-    </div>
-  );
-}
-
-function AccessGate(props: {
-  onConnect: (token: string) => void;
-  message: string | null;
-}) {
-  const [token, setToken] = useState("");
-
-  return (
-    <div className="mx-auto mt-12 max-w-xl rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl">
-      <h2 className="text-2xl font-semibold">Acceso administrativo</h2>
-      <p className="mt-2 text-sm text-slate-400">
-        Ingrese un token de sesión emitido para un usuario con rol admin u ops.
-        Se conservará únicamente durante esta pestaña.
-      </p>
-      {props.message && (
-        <div className="mt-4 rounded-lg border border-rose-600/60 bg-rose-900/40 px-4 py-3 text-sm text-rose-100">
-          {props.message}
-        </div>
-      )}
-      <form
-        className="mt-5 space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          props.onConnect(token);
-        }}
-      >
-        <label className="block text-sm font-medium" htmlFor="access-token">
-          Token de acceso
-        </label>
-        <input
-          type="password"
-          id="access-token"
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-xs outline-none focus:border-emerald-500"
-          aria-describedby="token-help"
-        />
-        <p id="token-help" className="text-xs text-slate-500">
-          El servidor vuelve a validar firma, vigencia y rol en cada consulta.
-        </p>
-        <button
-          type="submit"
-          disabled={!token.trim()}
-          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Conectar
-        </button>
-      </form>
     </div>
   );
 }

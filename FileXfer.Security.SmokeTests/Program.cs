@@ -403,6 +403,22 @@ static void TestMfaRemovedFromAuthenticationContract()
         .ToArray();
     Require(mfaRoutes.Length == 0,
         $"El servidor volvió a publicar rutas MFA: {string.Join(", ", mfaRoutes)}");
+
+    var sessionMethod = typeof(AuthController).GetMethod(nameof(AuthController.Session));
+    var sessionAuthorization = sessionMethod?
+        .GetCustomAttributes(inherit: true)
+        .OfType<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+        .SingleOrDefault();
+    Require(sessionAuthorization?.Policy == "PrivilegedEfirma",
+        "La validación de sesión del Dashboard dejó de exigir e.firma privilegiada.");
+
+    var logoutMethod = typeof(AuthController).GetMethod(nameof(AuthController.Logout));
+    var logoutRoute = logoutMethod?
+        .GetCustomAttributes(inherit: true)
+        .OfType<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>()
+        .SingleOrDefault()?.Template;
+    Require(string.Equals(logoutRoute, "logout", StringComparison.Ordinal),
+        "El cierre de sesión con revocación ya no está publicado.");
 }
 
 static void TestPathProtection()

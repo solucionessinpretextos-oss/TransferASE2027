@@ -8,20 +8,24 @@
     "dev:plain": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
     "build:local": "set \"VITE_API_BASE_URL=https://localhost:51136\" && vite build",
+    "test": "vitest run",
     "preview": "vite preview --host 0.0.0.0 --port 4173"
   },
   "dependencies": {
+    "jsrsasign": "11.1.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "7.18.4"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/jsrsasign": "10.5.15",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
-    "@tailwindcss/vite": "4.3.3",
     "@vitejs/plugin-react-swc": "4.3.3",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
-    "vite": "8.3.4"
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
   }
 }
