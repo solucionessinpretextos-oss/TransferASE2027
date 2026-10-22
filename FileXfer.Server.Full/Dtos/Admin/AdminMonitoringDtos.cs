@@ -60,10 +60,18 @@ namespace FileXfer.Server.Dtos.Admin
         public double OperationalHealthScore { get; set; }
         public int TotalTransfersToday { get; set; }
         public double SuccessRateTodayPercent { get; set; }
+        public double FailureRateTodayPercent { get; set; }
         public double FailureRateLastHourPercent { get; set; }
         public double AverageUploadDurationTodaySeconds { get; set; }
+        public double MedianUploadDurationTodaySeconds { get; set; }
         public double P95UploadDurationTodaySeconds { get; set; }
         public double AverageFileSizeTodayBytes { get; set; }
+        public double P95FileSizeTodayBytes { get; set; }
+        public double ReceiptCoverageTodayPercent { get; set; }
+        public double VerificationCoverageTodayPercent { get; set; }
+        public double ResumeReuseTodayPercent { get; set; }
+        public int CatalogFailuresToday { get; set; }
+        public int CompletedWithoutReceiptToday { get; set; }
         public int StalePendingTransfers { get; set; }
         public int DistinctRfcsToday { get; set; }
         public DateTimeOffset? LastCompletedUtc { get; set; }
@@ -81,6 +89,8 @@ namespace FileXfer.Server.Dtos.Admin
 
     public sealed class RecentTransferDto
     {
+        public Guid UploadId { get; set; }
+        public string Rfc { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public string Status { get; set; } = string.Empty;
         public long BytesReceived { get; set; }
@@ -91,6 +101,8 @@ namespace FileXfer.Server.Dtos.Admin
         public int? PolicyVersion { get; set; }
         public bool VerificationRequired { get; set; }
         public bool VerificationPerformed { get; set; }
+        public string? VerificationOutcome { get; set; }
+        public string? LastError { get; set; }
         public string? TraceId { get; set; }
         public Guid? ReceiptId { get; set; }
     }

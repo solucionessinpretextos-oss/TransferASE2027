@@ -60,13 +60,38 @@ namespace FileXfer.Server.Controllers.Admin
                 u => u.Status == "Completed" && u.CompletedUtc >= oneHourAgo, ct);
 
             var failedLastHour = await uploads.CountAsync(
-                u => u.Status == "Failed" && u.CompletedUtc >= oneHourAgo, ct);
+                u => (u.Status == "Failed" ||
+                      u.Status == "CatalogFailed" ||
+                      u.Status == "Rejected" ||
+                      u.Status == "Cancelled" ||
+                      u.Status == "Expired") &&
+                     u.CompletedUtc >= oneHourAgo, ct);
 
-            var completedToday = await uploads.CountAsync(
-                u => u.Status == "Completed" && u.CompletedUtc >= todayStart, ct);
+            var completedTodayDetails = await uploads
+                .Where(u => u.Status == "Completed" && u.CompletedUtc != null && u.CompletedUtc >= todayStart)
+                .Select(u => new
+                {
+                    u.CreatedUtc,
+                    CompletedUtc = u.CompletedUtc!.Value,
+                    u.BytesReceived,
+                    u.ReceiptId,
+                    u.VerificationRequired,
+                    u.VerificationPerformed
+                })
+                .ToListAsync(ct);
+
+            var completedToday = completedTodayDetails.Count;
 
             var failedToday = await uploads.CountAsync(
-                u => u.Status == "Failed" && u.CompletedUtc >= todayStart, ct);
+                u => (u.Status == "Failed" ||
+                      u.Status == "CatalogFailed" ||
+                      u.Status == "Rejected" ||
+                      u.Status == "Cancelled" ||
+                      u.Status == "Expired") &&
+                     u.CompletedUtc >= todayStart, ct);
+
+            var catalogFailuresToday = await uploads.CountAsync(
+                u => u.Status == "CatalogFailed" && u.CompletedUtc >= todayStart, ct);
 
             var bytesLastHour = await uploads
                 .Where(u => u.Status == "Completed" && u.CompletedUtc >= oneHourAgo)
@@ -103,9 +128,30 @@ namespace FileXfer.Server.Controllers.Admin
             var receiptsIssuedToday = await db.UploadReceipts.AsNoTracking()
                 .CountAsync(receipt => receipt.IssuedUtc >= todayStart, ct);
 
-            var averageFileSizeTodayBytes = await uploads
-                .Where(u => u.Status == "Completed" && u.CompletedUtc >= todayStart)
-                .AverageAsync(u => (double?)u.BytesReceived, ct) ?? 0;
+            var orderedFileSizesToday = completedTodayDetails
+                .Select(u => (double)u.BytesReceived)
+                .OrderBy(value => value)
+                .ToList();
+
+            var averageFileSizeTodayBytes = orderedFileSizesToday.Count == 0
+                ? 0
+                : orderedFileSizesToday.Average();
+
+            var p95FileSizeTodayBytes = PercentileNearestRank(orderedFileSizesToday, 95);
+
+            var completedWithReceiptToday = completedTodayDetails.Count(u => u.ReceiptId != null);
+            var completedWithoutReceiptToday = completedToday - completedWithReceiptToday;
+            var verificationRequiredToday = completedTodayDetails.Count(u => u.VerificationRequired);
+            var verificationPerformedToday = completedTodayDetails.Count(u => u.VerificationRequired && u.VerificationPerformed);
+            var receiptCoverageTodayPercent = completedToday == 0
+                ? 100
+                : CalculateRate(completedWithReceiptToday, completedToday);
+            var verificationCoverageTodayPercent = verificationRequiredToday == 0
+                ? 100
+                : CalculateRate(verificationPerformedToday, verificationRequiredToday);
+            var resumeReuseTodayPercent = bytesToday <= 0
+                ? 0
+                : Math.Clamp(resumedBytesToday * 100.0 / bytesToday, 0, 100);
 
             var lastCompletedUtc = await uploads
                 .Where(u => u.Status == "Completed" && u.CompletedUtc != null)
@@ -114,17 +160,17 @@ namespace FileXfer.Server.Controllers.Admin
                 .FirstOrDefaultAsync(ct);
 
             var lastFailedUtc = await uploads
-                .Where(u => u.Status == "Failed" && u.CompletedUtc != null)
+                .Where(u => (u.Status == "Failed" ||
+                             u.Status == "CatalogFailed" ||
+                             u.Status == "Rejected" ||
+                             u.Status == "Cancelled" ||
+                             u.Status == "Expired") &&
+                            u.CompletedUtc != null)
                 .OrderByDescending(u => u.CompletedUtc)
                 .Select(u => u.CompletedUtc)
                 .FirstOrDefaultAsync(ct);
 
-            var completedDurationsToday = await uploads
-                .Where(u => u.Status == "Completed" && u.CompletedUtc != null && u.CompletedUtc >= todayStart)
-                .Select(u => new { u.CreatedUtc, CompletedUtc = u.CompletedUtc!.Value })
-                .ToListAsync(ct);
-
-            var durationSecondsToday = completedDurationsToday
+            var durationSecondsToday = completedTodayDetails
                 .Select(x => Math.Max(0, (x.CompletedUtc - x.CreatedUtc).TotalSeconds))
                 .OrderBy(x => x)
                 .ToList();
@@ -132,8 +178,10 @@ namespace FileXfer.Server.Controllers.Admin
             var totalTransfersToday = completedToday + failedToday;
             var transfersLastHour = completedLastHour + failedLastHour;
             var successRateTodayPercent = CalculateRate(completedToday, totalTransfersToday);
+            var failureRateTodayPercent = CalculateRate(failedToday, totalTransfersToday);
             var failureRateLastHourPercent = CalculateRate(failedLastHour, transfersLastHour);
             var averageUploadDurationTodaySeconds = durationSecondsToday.Count == 0 ? 0 : durationSecondsToday.Average();
+            var medianUploadDurationTodaySeconds = PercentileNearestRank(durationSecondsToday, 50);
             var p95UploadDurationTodaySeconds = PercentileNearestRank(durationSecondsToday, 95);
 
             double avgMbps = 0;
@@ -172,10 +220,18 @@ namespace FileXfer.Server.Controllers.Admin
                     totalPendingSessions),
                 TotalTransfersToday = totalTransfersToday,
                 SuccessRateTodayPercent = successRateTodayPercent,
+                FailureRateTodayPercent = failureRateTodayPercent,
                 FailureRateLastHourPercent = failureRateLastHourPercent,
                 AverageUploadDurationTodaySeconds = averageUploadDurationTodaySeconds,
+                MedianUploadDurationTodaySeconds = medianUploadDurationTodaySeconds,
                 P95UploadDurationTodaySeconds = p95UploadDurationTodaySeconds,
                 AverageFileSizeTodayBytes = averageFileSizeTodayBytes,
+                P95FileSizeTodayBytes = p95FileSizeTodayBytes,
+                ReceiptCoverageTodayPercent = receiptCoverageTodayPercent,
+                VerificationCoverageTodayPercent = verificationCoverageTodayPercent,
+                ResumeReuseTodayPercent = resumeReuseTodayPercent,
+                CatalogFailuresToday = catalogFailuresToday,
+                CompletedWithoutReceiptToday = completedWithoutReceiptToday,
                 StalePendingTransfers = stalePendingTransfers,
                 DistinctRfcsToday = distinctRfcsToday,
                 LastCompletedUtc = lastCompletedUtc,
@@ -192,6 +248,8 @@ namespace FileXfer.Server.Controllers.Admin
                     .Take(20)
                     .Select(u => new RecentTransferDto
                     {
+                        UploadId = u.Id,
+                        Rfc = u.Rfc,
                         FileName = u.OriginalFileName ?? string.Empty,
                         Status = u.Status,
                         BytesReceived = u.BytesReceived,
@@ -202,6 +260,8 @@ namespace FileXfer.Server.Controllers.Admin
                         PolicyVersion = u.PolicyVersion,
                         VerificationRequired = u.VerificationRequired,
                         VerificationPerformed = u.VerificationPerformed,
+                        VerificationOutcome = u.VerificationOutcome,
+                        LastError = u.LastError,
                         TraceId = u.TraceId,
                         ReceiptId = u.ReceiptId
                     })

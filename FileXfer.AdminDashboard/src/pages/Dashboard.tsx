@@ -1,5 +1,5 @@
 // DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
-// Consola operativa con tres representaciones del mismo resumen: pulso, barras y lectura ejecutiva.
+// Consola operativa con diez representaciones complementarias del mismo resumen.
 
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
@@ -21,6 +21,8 @@ type ViewMode =
   | "traffic";
 type Tone = "gold" | "green" | "red" | "blue" | "slate";
 type Severity = "good" | "warning" | "danger";
+type StatusKind = "completed" | "transmitting" | "pending" | "paused" | "catalogFailed" | "failed" | "cancelled" | "unknown";
+type KpiTone = "green" | "red" | "blue" | "gold" | "violet" | "slate";
 
 class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -115,7 +117,7 @@ export function Dashboard() {
             <LiveBadge healthy={summary.server.isHealthy} />
           </div>
           <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">Dashboard general</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Una sola fuente de verdad, tres maneras de leerla. Cambie la vista sin alterar los datos.</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Una sola fuente de verdad, diez maneras de leerla. Cambie la vista sin alterar los datos.</p>
         </div>
         <ViewSwitcher selected={view} onChange={chooseView} />
       </header>
@@ -125,6 +127,8 @@ export function Dashboard() {
           Los últimos datos válidos siguen visibles. La actualización reportó: {error}
         </div>
       )}
+
+      <KpiCommandDeck summary={summary} />
 
       {view === "pulse" && <PulseView summary={summary} />}
       {view === "bars" && <BarsView summary={summary} />}
@@ -189,8 +193,9 @@ function ViewSwitcher({ selected, onChange }: { selected: ViewMode; onChange: (m
 
 function PulseView({ summary }: { summary: SummaryResponse }) {
   const { server, transfers, kpis } = summary;
-  const recentCompleted = summary.recentTransfers.filter(item => statusKind(item.status) === "completed").length;
-  const recentFailed = summary.recentTransfers.filter(item => statusKind(item.status) === "failed").length;
+  const recentCounts = countRecentStatuses(summary.recentTransfers);
+  const recentFailed = recentCounts.failed + recentCounts.catalogFailed;
+  const recentIncomplete = recentCounts.transmitting + recentCounts.pending + recentCounts.paused;
 
   return (
     <div className="space-y-5">
@@ -246,17 +251,22 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
 
         <Panel>
           <PanelHeading eyebrow="Últimos 20 registros" title="Huella de actividad" />
-          <div className="mt-6 flex min-h-20 flex-wrap content-start gap-2" aria-label={`${recentCompleted} completados y ${recentFailed} fallidos en la actividad reciente`}>
+          <div className="mt-5">
+            <StatusLegend counts={recentCounts} />
+          </div>
+          <div className="mt-6 flex min-h-20 flex-wrap content-start gap-2" aria-label={`${recentCounts.completed} completados, ${recentIncomplete} incompletos y ${recentFailed} fallidos en la actividad reciente`}>
             {summary.recentTransfers.length === 0 && <p className="text-sm text-slate-500">Aún no hay transferencias recientes.</p>}
-            {summary.recentTransfers.map((transfer, index) => (
-              <span key={`${transfer.traceId ?? transfer.fileName}-${index}`} title={`${transfer.fileName}: ${transfer.status}`} className={`h-5 w-5 rounded-md border ${statusDotClass(transfer.status)}`} />
+            {summary.recentTransfers.map((transfer) => (
+              <ActivityStatusChip key={transfer.uploadId || `${transfer.traceId ?? transfer.fileName}-${transfer.createdUtc}`} transfer={transfer} />
             ))}
           </div>
-          <div className="mt-6 grid grid-cols-2 gap-3">
-            <MiniMetric label="OK recientes" value={String(recentCompleted)} />
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <MiniMetric label="Completados" value={String(recentCounts.completed)} />
+            <MiniMetric label="Transmitiendo" value={String(recentCounts.transmitting)} />
+            <MiniMetric label="Pendientes" value={String(recentCounts.pending + recentCounts.paused)} danger={recentIncomplete > 0} />
             <MiniMetric label="Con falla" value={String(recentFailed)} danger={recentFailed > 0} />
           </div>
-          <p className="mt-4 text-xs leading-5 text-slate-500">Cada bloque representa un archivo reciente. Pase el cursor para identificarlo.</p>
+          <p className="mt-4 text-xs leading-5 text-slate-500">Cada bloque representa una transferencia. Pase el cursor o use Tab para consultar archivo, RFC, tiempos, verificación y detalle del error.</p>
         </Panel>
       </div>
     </div>
@@ -332,12 +342,19 @@ function TextView({ summary }: { summary: SummaryResponse }) {
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
           <MetricCard label="Índice operativo" value={formatPercent(kpis.operationalHealthScore)} helper={server.isHealthy ? "Servidor saludable" : "Servidor con alertas"} accent />
           <MetricCard label="Éxito hoy" value={formatPercent(kpis.successRateTodayPercent)} helper={`${kpis.totalTransfersToday} transferencias cerradas`} />
+          <MetricCard label="Falla hoy" value={formatPercent(kpis.failureRateTodayPercent)} helper={`${transfers.failedToday} cierres no exitosos`} danger={kpis.failureRateTodayPercent > 5} />
           <MetricCard label="Falla última hora" value={formatPercent(kpis.failureRateLastHourPercent)} helper="Completadas contra fallidas" danger={kpis.failureRateLastHourPercent > 5} />
+          <MetricCard label="Fallas de catálogo" value={String(kpis.catalogFailuresToday)} helper="El archivo llegó, pero no pudo registrarse" danger={kpis.catalogFailuresToday > 0} />
           <MetricCard label="RFC activos" value={String(kpis.distinctRfcsToday)} helper="Con actividad durante el día" />
           <MetricCard label="Pendientes vencidos" value={String(kpis.stalePendingTransfers)} helper="Más de 30 minutos" danger={kpis.stalePendingTransfers > 0} />
           <MetricCard label="Duración promedio" value={formatSeconds(kpis.averageUploadDurationTodaySeconds)} helper="Cargas completadas hoy" />
+          <MetricCard label="Duración mediana" value={formatSeconds(kpis.medianUploadDurationTodaySeconds)} helper="La mitad terminó antes de este tiempo" />
           <MetricCard label="Duración P95" value={formatSeconds(kpis.p95UploadDurationTodaySeconds)} helper="95 % concluye antes de este tiempo" />
           <MetricCard label="Tamaño promedio" value={formatBytes(kpis.averageFileSizeTodayBytes)} helper="Archivos completados" />
+          <MetricCard label="Tamaño P95" value={formatBytes(kpis.p95FileSizeTodayBytes)} helper="95 % de los archivos no supera este tamaño" />
+          <MetricCard label="Cobertura de recibos" value={formatPercent(kpis.receiptCoverageTodayPercent)} helper={`${kpis.completedWithoutReceiptToday} completadas sin recibo asociado`} danger={kpis.completedWithoutReceiptToday > 0} />
+          <MetricCard label="Cobertura de verificación" value={formatPercent(kpis.verificationCoverageTodayPercent)} helper="Sobre cargas que sí requieren verificación" danger={kpis.verificationCoverageTodayPercent < 100} />
+          <MetricCard label="Ahorro por reanudación" value={formatPercent(kpis.resumeReuseTodayPercent)} helper="Bytes reutilizados frente al volumen completado" />
           <MetricCard label="Última carga OK" value={formatDateTime(kpis.lastCompletedUtc)} />
           <MetricCard label="Última falla" value={formatDateTime(kpis.lastFailedUtc)} danger={Boolean(kpis.lastFailedUtc)} />
         </div>
@@ -357,6 +374,130 @@ function TextView({ summary }: { summary: SummaryResponse }) {
         </div>
       </section>
     </div>
+  );
+}
+
+function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
+  const { server, transfers, kpis } = summary;
+  const cards: Array<{ label: string; value: string; context: string; description: string; tone: KpiTone }> = [
+    {
+      label: "Salud operativa",
+      value: formatPercent(kpis.operationalHealthScore),
+      context: server.isHealthy ? "Dependencias disponibles" : "Hay servicios degradados",
+      description: "Índice compuesto de disponibilidad del servidor, fallas de la última hora, pendientes vencidos y presión de la cola. 100 % representa la mejor condición observada.",
+      tone: !server.isHealthy || kpis.operationalHealthScore < 70 ? "red" : kpis.operationalHealthScore < 90 ? "gold" : "green"
+    },
+    {
+      label: "Éxito del día",
+      value: formatPercent(kpis.successRateTodayPercent),
+      context: `${transfers.completedToday} completadas de ${kpis.totalTransfersToday}`,
+      description: "Porcentaje de transferencias cerradas hoy con estado completado. El denominador incluye cierres fallidos, cancelados, rechazados, expirados y fallas de catálogo.",
+      tone: kpis.totalTransfersToday === 0 ? "slate" : kpis.successRateTodayPercent >= 95 ? "green" : kpis.successRateTodayPercent >= 85 ? "gold" : "red"
+    },
+    {
+      label: "En transmisión",
+      value: String(transfers.activeTransfers),
+      context: `${transfers.waitingTransfers} esperando turno`,
+      description: "Sesiones que están enviando bytes en este instante. La cifra de espera corresponde a sesiones admitidas que todavía no inician su flujo de datos.",
+      tone: transfers.activeTransfers > 0 ? "blue" : "slate"
+    },
+    {
+      label: "Fallas del día",
+      value: String(transfers.failedToday),
+      context: `${kpis.catalogFailuresToday} de catálogo`,
+      description: "Cierres no exitosos del día. Incluye fallas técnicas, fallas de catálogo, rechazos, cancelaciones y expiraciones; no incluye cargas aún pendientes.",
+      tone: transfers.failedToday > 0 ? "red" : "green"
+    },
+    {
+      label: "Pendientes críticos",
+      value: String(kpis.stalePendingTransfers),
+      context: `${transfers.pausedResumableTransfers} reanudables`,
+      description: "Transferencias que permanecen pendientes por más de 30 minutos. Las reanudables conservan una copia parcial vigente y pueden continuar sin empezar desde cero.",
+      tone: kpis.stalePendingTransfers > 0 ? "red" : transfers.pausedResumableTransfers > 0 ? "violet" : "green"
+    },
+    {
+      label: "Cobertura de recibos",
+      value: formatPercent(kpis.receiptCoverageTodayPercent),
+      context: `${kpis.completedWithoutReceiptToday} sin recibo`,
+      description: "Porcentaje de transferencias completadas hoy que tienen un recibo digital asociado. Una cifra menor a 100 % requiere revisar la emisión o persistencia de evidencia.",
+      tone: kpis.completedWithoutReceiptToday > 0 ? "red" : "green"
+    },
+    {
+      label: "Verificación aplicada",
+      value: formatPercent(kpis.verificationCoverageTodayPercent),
+      context: `${transfers.verificationBypassedToday} omitidas por política`,
+      description: "Cobertura de verificación entre los archivos completados que la política obliga a validar. Las omisiones autorizadas por política se informan aparte y no reducen este porcentaje.",
+      tone: kpis.verificationCoverageTodayPercent < 100 ? "red" : transfers.verificationBypassedToday > 0 ? "gold" : "green"
+    },
+    {
+      label: "Duración P95",
+      value: formatSeconds(kpis.p95UploadDurationTodaySeconds),
+      context: `Mediana ${formatSeconds(kpis.medianUploadDurationTodaySeconds)}`,
+      description: "El 95 % de las transferencias completadas hoy terminó en este tiempo o menos. La mediana representa el comportamiento típico y es menos sensible a archivos atípicos.",
+      tone: "blue"
+    },
+    {
+      label: "Volumen confirmado",
+      value: formatBytes(transfers.totalBytesTransferredToday),
+      context: `P95 por archivo ${formatBytes(kpis.p95FileSizeTodayBytes)}`,
+      description: "Suma de bytes de transferencias completadas durante el día. El P95 permite dimensionar capacidad sin dejar que un único archivo gigantesco distorsione la lectura.",
+      tone: "blue"
+    },
+    {
+      label: "Throughput",
+      value: `${transfers.averageThroughputMbps.toFixed(2)} Mbps`,
+      context: `${formatBytes(transfers.bytesTransferredLastHour)} en 1 h`,
+      description: "Velocidad efectiva promedio calculada con los bytes confirmados en la última hora. No es la velocidad instantánea de la red ni el ancho de banda contratado.",
+      tone: "blue"
+    },
+    {
+      label: "Continuidad recuperada",
+      value: formatPercent(kpis.resumeReuseTodayPercent),
+      context: `${formatBytes(transfers.resumedBytesToday)} reutilizados`,
+      description: "Proporción del volumen completado hoy que pudo reutilizarse al reanudar cargas interrumpidas. Evita retransmitir bytes ya custodiados por el servidor.",
+      tone: transfers.resumedBytesToday > 0 ? "violet" : "slate"
+    },
+    {
+      label: "Actividad institucional",
+      value: `${kpis.distinctRfcsToday} RFC`,
+      context: `Promedio ${formatBytes(kpis.averageFileSizeTodayBytes)}`,
+      description: "Cantidad de RFC distintos con actividad creada durante el día. El contexto muestra el tamaño promedio de los archivos completados.",
+      tone: "gold"
+    }
+  ];
+
+  return (
+    <section aria-label="KPI de mando">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <SectionTitle title="KPI de mando" subtitle="Indicadores operativos con definición, ventana de tiempo y contexto accionable." />
+        <span className="text-[11px] text-slate-500">Pase el cursor o use Tab sobre una tarjeta para conocer cómo se interpreta.</span>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        {cards.map(card => <KpiInsightCard key={card.label} {...card} />)}
+      </div>
+    </section>
+  );
+}
+
+function KpiInsightCard(props: { label: string; value: string; context: string; description: string; tone: KpiTone }) {
+  const styles = kpiToneClasses(props.tone);
+  return (
+    <article
+      tabIndex={0}
+      aria-label={`${props.label}: ${props.value}. ${props.context}. ${props.description}`}
+      className={`group relative rounded-2xl border p-4 outline-none transition hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-amber-300/60 ${styles.panel}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">{props.label}</p>
+        <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[10px] font-bold ${styles.icon}`} aria-hidden="true">i</span>
+      </div>
+      <p className={`mt-3 text-2xl font-semibold tracking-tight tabular-nums ${styles.value}`}>{props.value}</p>
+      <p className="mt-1 min-h-8 text-[11px] leading-4 text-slate-500">{props.context}</p>
+      <div role="tooltip" className="pointer-events-none invisible absolute left-4 right-4 top-[calc(100%-0.35rem)] z-50 translate-y-1 rounded-xl border border-amber-300/20 bg-[#080b10] p-3 text-[11px] leading-5 text-slate-200 opacity-0 shadow-2xl shadow-black/60 transition group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus:visible group-focus:translate-y-0 group-focus:opacity-100">
+        <span className="block font-semibold text-amber-200">Qué significa</span>
+        {props.description}
+      </div>
+    </article>
   );
 }
 
@@ -472,15 +613,15 @@ function TimelineView({ summary }: { summary: SummaryResponse }) {
         <PanelHeading eyebrow="Secuencia verificable" title="Cronología de transferencias" />
         <div className="relative mt-7 space-y-1 before:absolute before:bottom-4 before:left-[7px] before:top-4 before:w-px before:bg-gradient-to-b before:from-amber-300/60 before:via-white/10 before:to-transparent">
           {events.length === 0 && <p className="text-sm text-slate-500">No hay eventos recientes.</p>}
-          {events.map((event, index) => (
-            <article key={`${event.traceId ?? event.fileName}-${index}`} className="relative grid grid-cols-[16px_1fr] gap-4 py-3">
+          {events.map((event) => (
+            <article key={event.uploadId || `${event.traceId ?? event.fileName}-${event.createdUtc}`} className="relative grid grid-cols-[16px_1fr] gap-4 py-3">
               <span className={`relative z-10 mt-1 h-4 w-4 rounded-full border-4 border-[#11141a] ${statusDotClass(event.status)}`} />
               <div className="min-w-0 rounded-2xl border border-white/[0.06] bg-black/10 p-4">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <p className="truncate text-sm font-semibold text-white" title={event.fileName}>{event.fileName}</p>
                   <span className="shrink-0 text-[10px] tabular-nums text-slate-500">{formatDateTime(event.createdUtc)}</span>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500"><StatusBadge status={event.status} /><span>{formatBytes(event.bytesReceived)}</span><span>{event.verificationRequired ? (event.verificationPerformed ? "Verificado" : "Verificación pendiente") : "Verificación omitida"}</span></div>
+                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500"><StatusBadge status={event.status} detail={event.lastError} /><span>{formatBytes(event.bytesReceived)}</span><span>{event.verificationRequired ? (event.verificationPerformed ? "Verificado" : "Verificación pendiente") : "Verificación omitida"}</span></div>
               </div>
             </article>
           ))}
@@ -673,6 +814,58 @@ function largestResource(server: SummaryResponse["server"]): string {
   return `${largest.label} · ${formatPercent(largest.value)}`;
 }
 
+function ActivityStatusChip({ transfer }: { transfer: RecentTransferDto }) {
+  const kind = statusKind(transfer.status);
+  const presentation = statusPresentation(kind);
+  const verification = transfer.verificationRequired
+    ? transfer.verificationPerformed ? "Verificación ejecutada" : "Verificación requerida pendiente"
+    : "Verificación omitida por política";
+
+  return (
+    <span className="group relative inline-flex">
+      <span
+        tabIndex={0}
+        role="img"
+        aria-label={`${transfer.fileName}. ${presentation.label}. ${formatBytes(transfer.bytesReceived)}. ${verification}.`}
+        className={`h-5 w-5 cursor-help rounded-md border outline-none transition hover:scale-125 focus-visible:scale-125 focus-visible:ring-2 focus-visible:ring-white/70 ${presentation.dotClass}`}
+      />
+      <span role="tooltip" className="pointer-events-none invisible absolute left-1/2 top-7 z-50 w-72 -translate-x-1/2 translate-y-1 rounded-xl border border-white/10 bg-[#080b10] p-3 text-left opacity-0 shadow-2xl shadow-black/70 transition group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100">
+        <span className="block break-words text-xs font-semibold text-white">{transfer.fileName}</span>
+        <span className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[9px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span>
+        <span className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px] leading-4 text-slate-400">
+          <span>Estado técnico</span><span className="text-right font-mono text-slate-200">{transfer.status}</span>
+          <span>RFC</span><span className="truncate text-right font-mono text-slate-200">{transfer.rfc || "—"}</span>
+          <span>Tamaño</span><span className="text-right text-slate-200">{formatBytes(transfer.bytesReceived)}</span>
+          <span>Inicio</span><span className="text-right text-slate-200">{formatDateTime(transfer.createdUtc)}</span>
+          <span>Fin</span><span className="text-right text-slate-200">{formatDateTime(transfer.completedUtc)}</span>
+          <span>Control</span><span className="text-right text-slate-200">{verification}</span>
+        </span>
+        {transfer.lastError && <span className="mt-2 block rounded-lg border border-rose-400/20 bg-rose-400/[0.07] p-2 text-[10px] leading-4 text-rose-100">{transfer.lastError}</span>}
+        <span className="mt-2 block text-[9px] leading-4 text-slate-600">{presentation.description}</span>
+      </span>
+    </span>
+  );
+}
+
+function StatusLegend({ counts }: { counts: Record<StatusKind, number> }) {
+  const visibleKinds: StatusKind[] = ["transmitting", "pending", "paused", "completed", "catalogFailed", "failed", "cancelled", "unknown"];
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-2" aria-label="Leyenda de estados">
+      {visibleKinds.map(kind => {
+        const presentation = statusPresentation(kind);
+        return (
+          <span key={kind} className="group relative inline-flex cursor-help items-center gap-1.5 text-[10px] text-slate-400" tabIndex={0}>
+            <span className={`h-2.5 w-2.5 rounded-sm border ${presentation.dotClass}`} />
+            <span>{presentation.label}</span>
+            <span className="font-semibold tabular-nums text-slate-200">{counts[kind]}</span>
+            <span role="tooltip" className="pointer-events-none invisible absolute left-0 top-5 z-40 w-56 rounded-lg border border-white/10 bg-[#080b10] p-2 text-[10px] leading-4 text-slate-200 opacity-0 shadow-xl transition group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100">{presentation.description}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function RecentTransfers({ transfers }: { transfers: RecentTransferDto[] }) {
   return (
     <section className="overflow-hidden rounded-3xl border border-white/[0.07] bg-white/[0.025]">
@@ -684,15 +877,16 @@ function RecentTransfers({ transfers }: { transfers: RecentTransferDto[] }) {
         <span className="text-xs text-slate-500">{transfers.length} registros visibles</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[980px] text-left text-xs">
+        <table className="w-full min-w-[1080px] text-left text-xs">
           <thead className="bg-black/15 text-[10px] uppercase tracking-wider text-slate-500">
-            <tr><th className="px-5 py-3 font-semibold">Archivo</th><th className="py-3 font-semibold">Estado</th><th className="py-3 font-semibold">Tamaño</th><th className="py-3 font-semibold">Política</th><th className="py-3 font-semibold">Verificación</th><th className="py-3 font-semibold">Traza</th><th className="py-3 pr-5 font-semibold">Recibo</th></tr>
+            <tr><th className="px-5 py-3 font-semibold">Archivo</th><th className="py-3 font-semibold">RFC</th><th className="py-3 font-semibold">Estado</th><th className="py-3 font-semibold">Tamaño</th><th className="py-3 font-semibold">Política</th><th className="py-3 font-semibold">Verificación</th><th className="py-3 font-semibold">Traza</th><th className="py-3 pr-5 font-semibold">Recibo</th></tr>
           </thead>
           <tbody>
-            {transfers.map((transfer, index) => (
-              <tr key={`${transfer.traceId ?? transfer.fileName}-${index}`} className="border-t border-white/[0.05] text-slate-300 transition hover:bg-white/[0.025]">
+            {transfers.map((transfer) => (
+              <tr key={transfer.uploadId || `${transfer.traceId ?? transfer.fileName}-${transfer.createdUtc}`} className="border-t border-white/[0.05] text-slate-300 transition hover:bg-white/[0.025]">
                 <td className="max-w-72 truncate px-5 py-3.5 font-medium text-slate-100" title={transfer.fileName}>{transfer.fileName}</td>
-                <td><StatusBadge status={transfer.status} /></td>
+                <td className="max-w-36 truncate font-mono text-[10px] text-slate-400" title={transfer.rfc}>{transfer.rfc || "—"}</td>
+                <td><StatusBadge status={transfer.status} detail={transfer.lastError} /></td>
                 <td className="tabular-nums">{formatBytes(transfer.bytesReceived)}</td>
                 <td>{transfer.policyExtension ?? "—"}{transfer.policyVersion ? ` · v${transfer.policyVersion}` : ""}</td>
                 <td>{transfer.verificationRequired ? (transfer.verificationPerformed ? "Ejecutada" : "Pendiente") : "Omitida por política"}</td>
@@ -759,9 +953,10 @@ function MetricBar(props: { label: string; value: number; max: number; display: 
   );
 }
 
-function MetricCard(props: { label: string; value: string; helper?: string; accent?: boolean; danger?: boolean }) {
+function MetricCard(props: { label: string; value: string; helper?: string; description?: string; accent?: boolean; danger?: boolean }) {
   const border = props.danger ? "border-rose-400/25 bg-rose-500/[0.055]" : props.accent ? "border-amber-300/20 bg-amber-400/[0.055]" : "border-white/[0.07] bg-white/[0.025]";
-  return <div className={`rounded-2xl border p-4 ${border}`}><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{props.label}</p><p className={`mt-2 text-2xl font-semibold tracking-tight ${props.danger ? "text-rose-100" : "text-white"}`}>{props.value}</p>{props.helper && <p className="mt-2 text-xs leading-5 text-slate-500">{props.helper}</p>}</div>;
+  const explanation = props.description ?? props.helper ?? `${props.label}: ${props.value}`;
+  return <div tabIndex={0} aria-label={`${props.label}: ${props.value}. ${explanation}`} className={`group relative rounded-2xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60 ${border}`}><div className="flex items-start justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{props.label}</p><span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-white/10 text-[9px] font-bold text-slate-500" aria-hidden="true">i</span></div><p className={`mt-2 text-2xl font-semibold tracking-tight ${props.danger ? "text-rose-100" : "text-white"}`}>{props.value}</p>{props.helper && <p className="mt-2 text-xs leading-5 text-slate-500">{props.helper}</p>}<div role="tooltip" className="pointer-events-none invisible absolute left-3 right-3 top-[calc(100%-0.25rem)] z-40 rounded-xl border border-white/10 bg-[#080b10] p-3 text-[11px] leading-5 text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100"><span className="block font-semibold text-amber-200">Cómo leer este indicador</span>{explanation}</div></div>;
 }
 
 function SignalCard({ label, value, detail }: { label: string; value: string; detail: string }) {
@@ -788,10 +983,10 @@ function LiveBadge({ healthy }: { healthy: boolean }) {
   return <span className={`flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${healthy ? "border-emerald-400/20 bg-emerald-400/[0.07] text-emerald-300" : "border-rose-400/25 bg-rose-400/[0.08] text-rose-200"}`}><span className={`h-1.5 w-1.5 rounded-full ${healthy ? "ase-pulse bg-emerald-400" : "bg-rose-400"}`} />{healthy ? "Sistema en línea" : "Atención requerida"}</span>;
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, detail }: { status: string; detail?: string | null }) {
   const kind = statusKind(status);
-  const styles = kind === "completed" ? "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-300" : kind === "failed" ? "border-rose-400/25 bg-rose-400/[0.08] text-rose-200" : kind === "active" ? "border-sky-400/20 bg-sky-400/[0.08] text-sky-200" : "border-amber-400/20 bg-amber-400/[0.08] text-amber-200";
-  return <span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${styles}`}>{status}</span>;
+  const presentation = statusPresentation(kind);
+  return <span className="group relative inline-flex" tabIndex={0}><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span><span role="tooltip" className="pointer-events-none invisible absolute left-0 top-8 z-50 w-64 rounded-xl border border-white/10 bg-[#080b10] p-3 text-[10px] leading-4 text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100"><span className="font-semibold text-white">{status}</span><span className="mt-1 block text-slate-400">{presentation.description}</span>{detail && <span className="mt-2 block text-rose-200">{detail}</span>}</span></span>;
 }
 
 function ViewGlyph({ mode }: { mode: ViewMode }) {
@@ -844,20 +1039,92 @@ function readPreferredView(): ViewMode {
   return validViews.includes(value as ViewMode) ? value as ViewMode : "pulse";
 }
 
-function statusKind(status: string): "completed" | "failed" | "active" | "pending" {
-  const normalized = status.trim().toLowerCase();
-  if (["completed", "complete", "completado", "completedwithwarnings"].some(value => normalized.includes(value))) return "completed";
-  if (["failed", "error", "rejected", "fallido", "cancelled"].some(value => normalized.includes(value))) return "failed";
-  if (["uploading", "active", "transmitting", "verifying"].some(value => normalized.includes(value))) return "active";
-  return "pending";
+export function statusKind(status: string): StatusKind {
+  const normalized = status.trim().toLowerCase().replace(/[\s_-]/g, "");
+  if (!normalized) return "unknown";
+  if (normalized.includes("catalogfailed") || normalized.includes("catalogerror")) return "catalogFailed";
+  if (["completed", "complete", "completado", "completedwithwarnings", "success", "succeeded"].some(value => normalized.includes(value))) return "completed";
+  if (["cancelled", "canceled", "cancelado", "aborted"].some(value => normalized.includes(value))) return "cancelled";
+  if (["failed", "error", "rejected", "fallido", "invalid", "expired"].some(value => normalized.includes(value))) return "failed";
+  if (["paused", "resumable", "interrupted", "suspended"].some(value => normalized.includes(value))) return "paused";
+  if (["uploading", "active", "transmitting", "verifying", "processing", "streaming"].some(value => normalized.includes(value))) return "transmitting";
+  if (["pending", "queued", "waiting", "created", "initialized"].some(value => normalized.includes(value))) return "pending";
+  return "unknown";
 }
 
 function statusDotClass(status: string): string {
-  const kind = statusKind(status);
-  if (kind === "completed") return "border-emerald-300/25 bg-emerald-400/70 shadow-[0_0_12px_rgba(74,222,128,0.18)]";
-  if (kind === "failed") return "border-rose-300/30 bg-rose-400/80 shadow-[0_0_12px_rgba(251,113,133,0.2)]";
-  if (kind === "active") return "border-sky-300/25 bg-sky-400/75 shadow-[0_0_12px_rgba(56,189,248,0.2)]";
-  return "border-amber-300/25 bg-amber-400/60";
+  return statusPresentation(statusKind(status)).dotClass;
+}
+
+function statusPresentation(kind: StatusKind): { label: string; description: string; dotClass: string; badgeClass: string } {
+  const presentations: Record<StatusKind, { label: string; description: string; dotClass: string; badgeClass: string }> = {
+    completed: {
+      label: "Completado",
+      description: "El servidor recibió, cerró y confirmó correctamente la transferencia.",
+      dotClass: "border-emerald-300/35 bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.38)]",
+      badgeClass: "border-emerald-400/25 bg-emerald-400/[0.10] text-emerald-200"
+    },
+    transmitting: {
+      label: "Transmitiendo",
+      description: "La transferencia sigue en curso; todavía no debe interpretarse como éxito ni como falla.",
+      dotClass: "ase-pulse border-sky-200/45 bg-sky-400 shadow-[0_0_16px_rgba(56,189,248,0.48)]",
+      badgeClass: "border-sky-400/25 bg-sky-400/[0.10] text-sky-200"
+    },
+    pending: {
+      label: "Pendiente",
+      description: "La transferencia fue registrada o está en cola, pero aún no termina de enviar datos.",
+      dotClass: "border-amber-200/45 bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.30)]",
+      badgeClass: "border-amber-400/25 bg-amber-400/[0.10] text-amber-200"
+    },
+    paused: {
+      label: "Reanudable",
+      description: "La carga se interrumpió y conserva bytes parciales para continuar desde el último punto seguro.",
+      dotClass: "border-violet-200/45 bg-violet-400 shadow-[0_0_13px_rgba(167,139,250,0.35)]",
+      badgeClass: "border-violet-400/25 bg-violet-400/[0.10] text-violet-200"
+    },
+    catalogFailed: {
+      label: "Falla de catálogo",
+      description: "Los bytes llegaron al servidor, pero falló el registro final en el catálogo o sistema de destino.",
+      dotClass: "border-orange-200/45 bg-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.42)]",
+      badgeClass: "border-orange-400/30 bg-orange-400/[0.11] text-orange-200"
+    },
+    failed: {
+      label: "Fallido",
+      description: "La transferencia terminó con un error técnico, de validación, rechazo o expiración.",
+      dotClass: "border-rose-200/45 bg-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.42)]",
+      badgeClass: "border-rose-400/30 bg-rose-400/[0.11] text-rose-200"
+    },
+    cancelled: {
+      label: "Cancelado",
+      description: "La operación fue cancelada o abortada; no está en curso y tampoco cuenta como completada.",
+      dotClass: "border-slate-300/35 bg-slate-500 shadow-[0_0_10px_rgba(100,116,139,0.25)]",
+      badgeClass: "border-slate-400/25 bg-slate-400/[0.10] text-slate-200"
+    },
+    unknown: {
+      label: "Desconocido",
+      description: "El servidor reportó un estado que el Dashboard todavía no reconoce. Debe revisarse el contrato de estados.",
+      dotClass: "border-fuchsia-200/40 bg-fuchsia-500 shadow-[0_0_13px_rgba(217,70,239,0.35)]",
+      badgeClass: "border-fuchsia-400/25 bg-fuchsia-400/[0.10] text-fuchsia-200"
+    }
+  };
+  return presentations[kind];
+}
+
+function countRecentStatuses(transfers: RecentTransferDto[]): Record<StatusKind, number> {
+  const counts: Record<StatusKind, number> = { completed: 0, transmitting: 0, pending: 0, paused: 0, catalogFailed: 0, failed: 0, cancelled: 0, unknown: 0 };
+  transfers.forEach(transfer => { counts[statusKind(transfer.status)] += 1; });
+  return counts;
+}
+
+function kpiToneClasses(tone: KpiTone): { panel: string; icon: string; value: string } {
+  return ({
+    green: { panel: "border-emerald-400/15 bg-emerald-400/[0.035]", icon: "border-emerald-400/25 text-emerald-300", value: "text-emerald-100" },
+    red: { panel: "border-rose-400/25 bg-rose-400/[0.055]", icon: "border-rose-400/30 text-rose-300", value: "text-rose-100" },
+    blue: { panel: "border-sky-400/15 bg-sky-400/[0.035]", icon: "border-sky-400/25 text-sky-300", value: "text-sky-100" },
+    gold: { panel: "border-amber-400/18 bg-amber-400/[0.04]", icon: "border-amber-400/25 text-amber-300", value: "text-amber-100" },
+    violet: { panel: "border-violet-400/20 bg-violet-400/[0.045]", icon: "border-violet-400/30 text-violet-300", value: "text-violet-100" },
+    slate: { panel: "border-white/[0.07] bg-white/[0.025]", icon: "border-white/10 text-slate-400", value: "text-white" }
+  } satisfies Record<KpiTone, { panel: string; icon: string; value: string }>)[tone];
 }
 
 function tonePanel(tone: Tone): string {

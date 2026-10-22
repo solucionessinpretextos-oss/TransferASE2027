@@ -53,10 +53,18 @@ export interface OperationalKpisDto {
   operationalHealthScore: number;
   totalTransfersToday: number;
   successRateTodayPercent: number;
+  failureRateTodayPercent: number;
   failureRateLastHourPercent: number;
   averageUploadDurationTodaySeconds: number;
+  medianUploadDurationTodaySeconds: number;
   p95UploadDurationTodaySeconds: number;
   averageFileSizeTodayBytes: number;
+  p95FileSizeTodayBytes: number;
+  receiptCoverageTodayPercent: number;
+  verificationCoverageTodayPercent: number;
+  resumeReuseTodayPercent: number;
+  catalogFailuresToday: number;
+  completedWithoutReceiptToday: number;
   stalePendingTransfers: number;
   distinctRfcsToday: number;
   lastCompletedUtc?: string | null;
@@ -72,6 +80,8 @@ export interface SummaryResponse {
 }
 
 export interface RecentTransferDto {
+  uploadId: string;
+  rfc: string;
   fileName: string;
   status: string;
   bytesReceived: number;
@@ -82,6 +92,8 @@ export interface RecentTransferDto {
   policyVersion?: number | null;
   verificationRequired: boolean;
   verificationPerformed: boolean;
+  verificationOutcome?: string | null;
+  lastError?: string | null;
   traceId?: string | null;
   receiptId?: string | null;
 }
