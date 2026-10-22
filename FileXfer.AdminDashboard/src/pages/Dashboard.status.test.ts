@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { statusKind } from "./Dashboard";
+import { panelExplanation, statusKind } from "./Dashboard";
 
 describe("semántica visual de estados del Dashboard", () => {
   it.each([
@@ -19,5 +19,15 @@ describe("semántica visual de estados del Dashboard", () => {
 
   it("no confunde una falla de catálogo con un estado completado", () => {
     expect(statusKind("CatalogFailed")).not.toBe("completed");
+  });
+
+  it.each([
+    "Pulso operativo",
+    "Ruta de los archivos",
+    "Constelación de servicios",
+    "Recursos del servidor",
+    "Verificación y evidencia"
+  ])("mantiene explicación operativa para %s", (panel) => {
+    expect(panelExplanation(panel)).toBeTruthy();
   });
 });

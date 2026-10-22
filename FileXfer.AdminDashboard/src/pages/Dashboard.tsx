@@ -220,15 +220,15 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
             <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] uppercase tracking-wider text-slate-500">En vivo</span>
           </div>
           <div className="mt-7 grid gap-3 md:grid-cols-4">
-            <FlowNode index="01" label="En espera" value={transfers.waitingTransfers} detail="Listos para iniciar" tone="slate" />
-            <FlowNode index="02" label="Transmitiendo" value={transfers.activeTransfers} detail="Streams en curso" tone="blue" active={transfers.activeTransfers > 0} />
-            <FlowNode index="03" label="Reanudables" value={transfers.pausedResumableTransfers} detail="Parciales protegidos" tone="gold" />
-            <FlowNode index="04" label="Completados" value={transfers.completedToday} detail="Durante el día" tone="green" />
+            <FlowNode index="01" label="En espera" value={transfers.waitingTransfers} detail="Listos para iniciar" tone="slate" description="Sesiones admitidas en memoria que todavía esperan iniciar la transmisión efectiva de bytes. Un crecimiento sostenido puede indicar presión de concurrencia o red lenta." />
+            <FlowNode index="02" label="Transmitiendo" value={transfers.activeTransfers} detail="Streams en curso" tone="blue" active={transfers.activeTransfers > 0} description="Sesiones gRPC que están enviando datos en este instante. Son operaciones incompletas: todavía no cuentan como exitosas ni fallidas." />
+            <FlowNode index="03" label="Reanudables" value={transfers.pausedResumableTransfers} detail="Parciales protegidos" tone="gold" description="Cargas interrumpidas cuyo archivo parcial continúa dentro de la ventana de retención. El cliente puede seguir desde el último byte confirmado." />
+            <FlowNode index="04" label="Completados" value={transfers.completedToday} detail="Durante el día" tone="green" description="Transferencias cerradas hoy con estado Completed. Ya terminaron la recepción y validación exigida; la cobertura de recibos se informa por separado." />
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            <SignalCard label="Transferido hoy" value={formatBytes(transfers.totalBytesTransferredToday)} detail={`${transfers.averageThroughputMbps.toFixed(2)} Mbps promedio`} />
-            <SignalCard label="Recibos emitidos" value={String(transfers.receiptsIssuedToday)} detail="Evidencia firmada y encadenada" />
-            <SignalCard label="Recuperación" value={formatBytes(transfers.resumedBytesToday)} detail={`${transfers.resumedTransfersToday} cargas reanudadas`} />
+            <SignalCard label="Transferido hoy" value={formatBytes(transfers.totalBytesTransferredToday)} detail={`${transfers.averageThroughputMbps.toFixed(2)} Mbps promedio`} description="Suma de bytes pertenecientes a cargas completadas desde las 00:00 UTC. El throughput usa una ventana móvil de una hora y no representa la velocidad instantánea." />
+            <SignalCard label="Recibos emitidos" value={String(transfers.receiptsIssuedToday)} detail="Evidencia firmada y encadenada" description="Recibos digitales generados durante el día. Cada recibo aporta evidencia de integridad, identidad, fecha y encadenamiento de la transferencia." />
+            <SignalCard label="Recuperación" value={formatBytes(transfers.resumedBytesToday)} detail={`${transfers.resumedTransfersToday} cargas reanudadas`} description="Bytes que no tuvieron que retransmitirse porque el servidor conservó una carga parcial válida. Mide el valor práctico del mecanismo de continuidad." />
           </div>
         </Panel>
       </div>
@@ -237,15 +237,15 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
         <Panel>
           <PanelHeading eyebrow="Dependencias críticas" title="Constelación de servicios" />
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <ServiceTile label="Base de datos" ok={server.databaseOk} />
-            <ServiceTile label="Almacenamiento" ok={server.storageOk} />
-            <ServiceTile label="Bus interno" ok={server.messageBusOk} />
-            <ServiceTile label="Alertamiento" ok={!server.alertingEnabled || server.alertingOk} detail={server.alertingEnabled ? "Habilitado" : "Modo local"} />
+            <ServiceTile label="Base de datos" ok={server.databaseOk} description="Confirma que FileXfer puede conectarse y ejecutar una consulta mínima contra su base operativa. Una falla aquí afecta catálogo, sesiones, recibos y auditoría." />
+            <ServiceTile label="Almacenamiento" ok={server.storageOk} description="Comprueba disponibilidad y acceso a la ubicación configurada para archivos. Un estado degradado puede impedir escribir, reanudar o descargar contenido." />
+            <ServiceTile label="Bus interno" ok={server.messageBusOk} description="Valida el canal interno usado para coordinar trabajo y eventos del servidor. Su degradación puede retrasar procesos posteriores aunque la API siga respondiendo." />
+            <ServiceTile label="Alertamiento" ok={!server.alertingEnabled || server.alertingOk} detail={server.alertingEnabled ? "Habilitado" : "Modo local"} description={server.alertingEnabled ? "Verifica que el canal de notificación configurado pueda procesar alertas operativas. Revise cola, reintentos y dead-letter si aparece degradado." : "El alertamiento externo está deshabilitado en este ambiente. No es una falla: los eventos permanecen disponibles localmente para diagnóstico."} />
           </div>
           <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            <ResourceDial label="CPU" value={server.cpuUsagePercent} />
-            <ResourceDial label="Memoria" value={server.memoryUsagePercent} />
-            <ResourceDial label="Disco" value={server.diskUsagePercent} />
+            <ResourceDial label="CPU" value={server.cpuUsagePercent} description="Uso aproximado de procesador del servidor. Verde: menor a 75 %; ámbar: 75–89.9 %; rojo: 90 % o más." />
+            <ResourceDial label="Memoria" value={server.memoryUsagePercent} description="Porcentaje de memoria física utilizada. La presión sostenida puede provocar pausas, paginación y menor rendimiento en archivos grandes." />
+            <ResourceDial label="Disco" value={server.diskUsagePercent} description="Porcentaje de ocupación del volumen supervisado. A partir de 75 % requiere vigilancia; 90 % o más compromete continuidad y retención." />
           </div>
         </Panel>
 
@@ -485,7 +485,7 @@ function KpiInsightCard(props: { label: string; value: string; context: string; 
     <article
       tabIndex={0}
       aria-label={`${props.label}: ${props.value}. ${props.context}. ${props.description}`}
-      className={`group relative rounded-2xl border p-4 outline-none transition hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-amber-300/60 ${styles.panel}`}
+      className={`group/kpi relative isolate rounded-2xl border p-4 outline-none transition hover:z-[80] hover:-translate-y-0.5 focus-within:z-[80] focus-visible:ring-2 focus-visible:ring-amber-300/60 ${styles.panel}`}
     >
       <div className="flex items-start justify-between gap-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">{props.label}</p>
@@ -493,7 +493,7 @@ function KpiInsightCard(props: { label: string; value: string; context: string; 
       </div>
       <p className={`mt-3 text-2xl font-semibold tracking-tight tabular-nums ${styles.value}`}>{props.value}</p>
       <p className="mt-1 min-h-8 text-[11px] leading-4 text-slate-500">{props.context}</p>
-      <div role="tooltip" className="pointer-events-none invisible absolute left-4 right-4 top-[calc(100%-0.35rem)] z-50 translate-y-1 rounded-xl border border-amber-300/20 bg-[#080b10] p-3 text-[11px] leading-5 text-slate-200 opacity-0 shadow-2xl shadow-black/60 transition group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus:visible group-focus:translate-y-0 group-focus:opacity-100">
+      <div role="tooltip" className="pointer-events-none invisible absolute left-4 right-4 top-[calc(100%-0.35rem)] z-[90] translate-y-1 rounded-xl border border-amber-300/25 bg-[#05070b] p-3 text-[11px] leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/kpi:visible group-hover/kpi:translate-y-0 group-hover/kpi:opacity-100 group-focus/kpi:visible group-focus/kpi:translate-y-0 group-focus/kpi:opacity-100">
         <span className="block font-semibold text-amber-200">Qué significa</span>
         {props.description}
       </div>
@@ -822,14 +822,14 @@ function ActivityStatusChip({ transfer }: { transfer: RecentTransferDto }) {
     : "Verificación omitida por política";
 
   return (
-    <span className="group relative inline-flex">
+    <span className="group/activity relative inline-flex hover:z-[100] focus-within:z-[100]">
       <span
         tabIndex={0}
         role="img"
         aria-label={`${transfer.fileName}. ${presentation.label}. ${formatBytes(transfer.bytesReceived)}. ${verification}.`}
         className={`h-5 w-5 cursor-help rounded-md border outline-none transition hover:scale-125 focus-visible:scale-125 focus-visible:ring-2 focus-visible:ring-white/70 ${presentation.dotClass}`}
       />
-      <span role="tooltip" className="pointer-events-none invisible absolute left-1/2 top-7 z-50 w-72 -translate-x-1/2 translate-y-1 rounded-xl border border-white/10 bg-[#080b10] p-3 text-left opacity-0 shadow-2xl shadow-black/70 transition group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100">
+      <span role="tooltip" className="pointer-events-none invisible absolute left-1/2 top-7 z-[110] w-72 -translate-x-1/2 translate-y-1 rounded-xl border border-white/15 bg-[#05070b] p-3 text-left opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/activity:visible group-hover/activity:translate-y-0 group-hover/activity:opacity-100 group-focus-within/activity:visible group-focus-within/activity:translate-y-0 group-focus-within/activity:opacity-100">
         <span className="block break-words text-xs font-semibold text-white">{transfer.fileName}</span>
         <span className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[9px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span>
         <span className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px] leading-4 text-slate-400">
@@ -854,11 +854,11 @@ function StatusLegend({ counts }: { counts: Record<StatusKind, number> }) {
       {visibleKinds.map(kind => {
         const presentation = statusPresentation(kind);
         return (
-          <span key={kind} className="group relative inline-flex cursor-help items-center gap-1.5 text-[10px] text-slate-400" tabIndex={0}>
+          <span key={kind} className="group/legend relative inline-flex cursor-help items-center gap-1.5 text-[10px] text-slate-400 hover:z-[100] focus:z-[100]" tabIndex={0}>
             <span className={`h-2.5 w-2.5 rounded-sm border ${presentation.dotClass}`} />
             <span>{presentation.label}</span>
             <span className="font-semibold tabular-nums text-slate-200">{counts[kind]}</span>
-            <span role="tooltip" className="pointer-events-none invisible absolute left-0 top-5 z-40 w-56 rounded-lg border border-white/10 bg-[#080b10] p-2 text-[10px] leading-4 text-slate-200 opacity-0 shadow-xl transition group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100">{presentation.description}</span>
+            <span role="tooltip" className="pointer-events-none invisible absolute left-0 top-5 z-[110] w-56 rounded-lg border border-white/15 bg-[#05070b] p-2 text-[10px] leading-4 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_20px_60px_rgba(0,0,0,0.95)] transition group-hover/legend:visible group-hover/legend:opacity-100 group-focus/legend:visible group-focus/legend:opacity-100">{presentation.description}</span>
           </span>
         );
       })}
@@ -914,29 +914,29 @@ function HealthRing({ score, healthy }: { score: number; healthy: boolean }) {
   );
 }
 
-function FlowNode(props: { index: string; label: string; value: number; detail: string; tone: Tone; active?: boolean }) {
+function FlowNode(props: { index: string; label: string; value: number; detail: string; description: string; tone: Tone; active?: boolean }) {
   return (
     <div className={`relative rounded-2xl border p-4 ${tonePanel(props.tone)}`}>
-      <div className="flex items-center justify-between"><span className="text-[10px] font-semibold tracking-widest text-current opacity-55">{props.index}</span>{props.active && <span className="ase-pulse h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_16px_#38bdf8]" />}</div>
+      <div className="flex items-center justify-between"><span className="text-[10px] font-semibold tracking-widest text-current opacity-55">{props.index}</span><span className="flex items-center gap-2">{props.active && <span className="ase-pulse h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_16px_#38bdf8]" />}<InfoPopover title={props.label} description={props.description} align="right" compact /></span></div>
       <p className="mt-5 text-3xl font-semibold tabular-nums text-white">{props.value}</p><p className="mt-1 text-sm font-semibold">{props.label}</p><p className="mt-1 text-[11px] text-current opacity-55">{props.detail}</p>
     </div>
   );
 }
 
-function ResourceDial({ label, value }: { label: string; value: number }) {
+function ResourceDial({ label, value, description }: { label: string; value: number; description: string }) {
   const safe = clamp(value, 0, 100);
   return (
-    <div className="rounded-2xl border border-white/[0.06] bg-black/10 p-4">
-      <div className="flex items-center justify-between text-xs"><span className="font-semibold text-slate-300">{label}</span><span className="tabular-nums text-slate-400">{safe.toFixed(1)} %</span></div>
+    <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4">
+      <div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2 font-semibold text-slate-300">{label}<InfoPopover title={`Uso de ${label}`} description={description} align="left" compact /></span><span className="tabular-nums text-slate-400">{safe.toFixed(1)} %</span></div>
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className={`h-full rounded-full ${toneBar(usageTone(safe))}`} style={{ width: `${safe}%` }} /></div>
     </div>
   );
 }
 
-function ServiceTile({ label, ok, detail }: { label: string; ok: boolean; detail?: string }) {
+function ServiceTile({ label, ok, detail, description }: { label: string; ok: boolean; detail?: string; description: string }) {
   return (
     <div className={`rounded-2xl border p-4 ${ok ? "border-emerald-400/15 bg-emerald-400/[0.045]" : "border-rose-400/25 bg-rose-500/[0.07]"}`}>
-      <div className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-400 shadow-[0_0_12px_#4ade80]" : "bg-rose-400 shadow-[0_0_12px_#fb7185]"}`} /><span className="text-xs font-semibold text-slate-200">{label}</span></div>
+      <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-400 shadow-[0_0_12px_#4ade80]" : "bg-rose-400 shadow-[0_0_12px_#fb7185]"}`} /><span className="text-xs font-semibold text-slate-200">{label}</span></span><InfoPopover title={label} description={description} align="right" compact /></div>
       <p className={`mt-3 text-[11px] ${ok ? "text-emerald-300/75" : "text-rose-200"}`}>{detail ?? (ok ? "Operando" : "Requiere atención")}</p>
     </div>
   );
@@ -956,11 +956,11 @@ function MetricBar(props: { label: string; value: number; max: number; display: 
 function MetricCard(props: { label: string; value: string; helper?: string; description?: string; accent?: boolean; danger?: boolean }) {
   const border = props.danger ? "border-rose-400/25 bg-rose-500/[0.055]" : props.accent ? "border-amber-300/20 bg-amber-400/[0.055]" : "border-white/[0.07] bg-white/[0.025]";
   const explanation = props.description ?? props.helper ?? `${props.label}: ${props.value}`;
-  return <div tabIndex={0} aria-label={`${props.label}: ${props.value}. ${explanation}`} className={`group relative rounded-2xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60 ${border}`}><div className="flex items-start justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{props.label}</p><span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-white/10 text-[9px] font-bold text-slate-500" aria-hidden="true">i</span></div><p className={`mt-2 text-2xl font-semibold tracking-tight ${props.danger ? "text-rose-100" : "text-white"}`}>{props.value}</p>{props.helper && <p className="mt-2 text-xs leading-5 text-slate-500">{props.helper}</p>}<div role="tooltip" className="pointer-events-none invisible absolute left-3 right-3 top-[calc(100%-0.25rem)] z-40 rounded-xl border border-white/10 bg-[#080b10] p-3 text-[11px] leading-5 text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100"><span className="block font-semibold text-amber-200">Cómo leer este indicador</span>{explanation}</div></div>;
+  return <div tabIndex={0} aria-label={`${props.label}: ${props.value}. ${explanation}`} className={`group/metric relative isolate rounded-2xl border p-4 outline-none hover:z-[80] focus-within:z-[80] focus-visible:ring-2 focus-visible:ring-amber-300/60 ${border}`}><div className="flex items-start justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{props.label}</p><span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-white/10 text-[9px] font-bold text-slate-500" aria-hidden="true">i</span></div><p className={`mt-2 text-2xl font-semibold tracking-tight ${props.danger ? "text-rose-100" : "text-white"}`}>{props.value}</p>{props.helper && <p className="mt-2 text-xs leading-5 text-slate-500">{props.helper}</p>}<div role="tooltip" className="pointer-events-none invisible absolute left-3 right-3 top-[calc(100%-0.25rem)] z-[90] rounded-xl border border-amber-300/20 bg-[#05070b] p-3 text-[11px] leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/metric:visible group-hover/metric:opacity-100 group-focus/metric:visible group-focus/metric:opacity-100"><span className="block font-semibold text-amber-200">Cómo leer este indicador</span>{explanation}</div></div>;
 }
 
-function SignalCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <div className="rounded-2xl border border-white/[0.06] bg-black/10 p-4"><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p><p className="mt-2 text-xl font-semibold text-white">{value}</p><p className="mt-1 text-[11px] text-slate-500">{detail}</p></div>;
+function SignalCard({ label, value, detail, description }: { label: string; value: string; detail: string; description?: string }) {
+  return <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4"><div className="flex items-start justify-between gap-2"><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>{description && <InfoPopover title={label} description={description} align="right" compact />}</div><p className="mt-2 text-xl font-semibold text-white">{value}</p><p className="mt-1 text-[11px] text-slate-500">{detail}</p></div>;
 }
 
 function MiniMetric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
@@ -971,8 +971,44 @@ function Panel({ children, className = "" }: { children: React.ReactNode; classN
   return <section className={`rounded-3xl border border-white/[0.07] bg-white/[0.025] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.18)] sm:p-6 ${className}`}>{children}</section>;
 }
 
-function PanelHeading({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return <div><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">{eyebrow}</p><h3 className="mt-1 text-xl font-semibold tracking-tight text-white">{title}</h3></div>;
+function PanelHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description?: string }) {
+  const explanation = description ?? panelExplanation(title);
+  return <div className="relative"><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">{eyebrow}</p><div className="mt-1 flex items-center gap-2"><h3 className="text-xl font-semibold tracking-tight text-white">{title}</h3>{explanation && <InfoPopover title={title} description={explanation} align="left" />}</div></div>;
+}
+
+function InfoPopover({ title, description, align = "left", compact = false }: { title: string; description: string; align?: "left" | "right"; compact?: boolean }) {
+  const position = align === "right" ? "right-0" : "left-0";
+  const size = compact ? "h-4 w-4 text-[9px]" : "h-5 w-5 text-[10px]";
+  return (
+    <span className="group/help relative z-20 inline-flex shrink-0 hover:z-[100] focus-within:z-[100]">
+      <button type="button" aria-label={`Explicación: ${title}`} className={`grid place-items-center rounded-full border border-amber-300/25 bg-[#15120b] font-bold text-amber-200 outline-none transition hover:border-amber-200/60 hover:bg-amber-300/10 focus-visible:ring-2 focus-visible:ring-amber-300/70 ${size}`}>i</button>
+      <span role="tooltip" className={`pointer-events-none invisible absolute top-7 z-[110] w-80 max-w-[calc(100vw-2rem)] translate-y-1 rounded-xl border border-amber-300/25 bg-[#05070b] p-4 text-left text-[11px] font-normal leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/help:visible group-hover/help:translate-y-0 group-hover/help:opacity-100 group-focus-within/help:visible group-focus-within/help:translate-y-0 group-focus-within/help:opacity-100 ${position}`}>
+        <span className="block text-xs font-semibold text-amber-200">{title}</span>
+        <span className="mt-1 block text-slate-200">{description}</span>
+      </span>
+    </span>
+  );
+}
+
+export function panelExplanation(title: string): string | undefined {
+  const explanations: Record<string, string> = {
+    "Pulso operativo": "Índice de 0 a 100. Parte de 100 y descuenta disponibilidad degradada, tasa de fallas de la última hora, transferencias pendientes por más de 30 minutos y presión de sesiones activas o en espera. Es una señal operativa, no un SLA contractual.",
+    "Ruta de los archivos": "Combina el flujo actual en memoria con resultados persistidos del día: sesiones esperando, transmisiones activas, cargas parciales reanudables y transferencias completadas. Cada etapa tiene su propia explicación contextual.",
+    "Constelación de servicios": "Resume las dependencias que sostienen el ecosistema: base de datos, almacenamiento, bus interno y alertamiento. También muestra presión de CPU, memoria y disco. Una dependencia roja requiere diagnóstico aunque la página continúe respondiendo.",
+    "Huella de actividad": "Muestra las 20 transferencias más recientes ordenadas por fecha de creación. Cada bloque conserva identidad estable y usa un color exclusivo por estado; al enfocarlo muestra RFC, tiempos, tamaño, control aplicado y causa del error.",
+    "Recursos del servidor": "Compara CPU, memoria y disco contra una escala común de 0 a 100 %. Verde indica menos de 75 %, ámbar de 75 a 89.9 % y rojo 90 % o más. Una lectura aislada debe confirmarse con tendencia y duración.",
+    "Completadas contra fallidas": "Compara cierres exitosos y no exitosos en dos ventanas: día actual y última hora. Las fallas incluyen errores técnicos, fallas de catálogo, rechazos, cancelaciones y expiraciones.",
+    "Carga de la tubería": "Representa trabajo que todavía no finaliza: transmisiones activas, sesiones en espera y cargas parciales reanudables. Permite detectar acumulación antes de que se convierta en incumplimiento.",
+    "Verificación y evidencia": "Relaciona recibos digitales, cargas reanudadas y verificaciones omitidas por una política explícita. Sirve para vigilar custodia e integridad, no solamente volumen transferido.",
+    "Resumen ejecutivo": "Convierte las métricas del corte actual en observaciones accionables sobre estabilidad, focos de atención y continuidad. La lectura se recalcula automáticamente cada dos segundos.",
+    "Anillos operativos": "Normaliza métricas diferentes a una escala de 0 a 100 para comparar salud, éxito, estabilidad, holgura, recibos y verificación. Un anillo cerrado representa mejor cobertura o condición.",
+    "Mapa térmico operativo": "Agrupa señales por severidad. Verde significa condición normal, ámbar requiere vigilancia y rojo intervención. El color expresa condición, no cantidad absoluta.",
+    "Flujo de transferencias": "Presenta de izquierda a derecha el trabajo acumulado y el estado del proceso. Mezcla resultados diarios con actividad actual, por lo que las etapas no deben sumarse como si fueran una sola población.",
+    "Cronología de transferencias": "Ordena los eventos recientes desde el más nuevo y conserva su estado, tamaño y verificación. Es una vista rápida de trazabilidad; el recibo y la traza aparecen en la tabla detallada.",
+    "Radar operativo": "Compara varias dimensiones convertidas a puntuaciones de 0 a 100. Facilita descubrir desequilibrios, pero no sustituye umbrales técnicos ni compromisos de servicio.",
+    "Fortalezas y brechas": "Desglosa las dimensiones del radar para explicar qué componente eleva o reduce el equilibrio operativo. Valores bajos orientan la prioridad de investigación."
+  };
+  return explanations[title];
 }
 
 function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) {
@@ -986,7 +1022,7 @@ function LiveBadge({ healthy }: { healthy: boolean }) {
 function StatusBadge({ status, detail }: { status: string; detail?: string | null }) {
   const kind = statusKind(status);
   const presentation = statusPresentation(kind);
-  return <span className="group relative inline-flex" tabIndex={0}><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span><span role="tooltip" className="pointer-events-none invisible absolute left-0 top-8 z-50 w-64 rounded-xl border border-white/10 bg-[#080b10] p-3 text-[10px] leading-4 text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100"><span className="font-semibold text-white">{status}</span><span className="mt-1 block text-slate-400">{presentation.description}</span>{detail && <span className="mt-2 block text-rose-200">{detail}</span>}</span></span>;
+  return <span className="group/status relative inline-flex hover:z-[100] focus:z-[100]" tabIndex={0}><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span><span role="tooltip" className="pointer-events-none invisible absolute left-0 top-8 z-[110] w-64 rounded-xl border border-white/15 bg-[#05070b] p-3 text-[10px] leading-4 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/status:visible group-hover/status:opacity-100 group-focus/status:visible group-focus/status:opacity-100"><span className="font-semibold text-white">{status}</span><span className="mt-1 block text-slate-300">{presentation.description}</span>{detail && <span className="mt-2 block text-rose-200">{detail}</span>}</span></span>;
 }
 
 function ViewGlyph({ mode }: { mode: ViewMode }) {
