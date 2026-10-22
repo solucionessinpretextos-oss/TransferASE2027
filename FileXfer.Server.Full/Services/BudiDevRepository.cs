@@ -710,6 +710,31 @@ namespace FileXfer.Server.Services
             await using var cn = Conn();
 
             const string sqlV2 = @"
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                DECLARE @FilasActualizadas int = 0;
+
+                IF @ID_Upload IS NOT NULL
+                BEGIN
+                    UPDATE [dbo].[Transfer_ArchivosLocales] WITH (UPDLOCK, HOLDLOCK)
+                       SET [RFC_Origen]          = @RFC_Origen,
+                           [RequerimientoId]     = @RequerimientoId,
+                           [ResultadoId]         = NULL,
+                           [ColaboraId]          = @ColaboraId,
+                           [MovimientoId]        = NULL,
+                           [Nombre_Archivo]      = @Nombre_Archivo,
+                           [extension]           = @extension,
+                           [Ruta_ARchivo_Fisico] = @Ruta_ARchivo_Fisico,
+                           [Tamaño]               = @Tamano,
+                           [Hash]                = @Hash,
+                           [Estatus]             = 'A',
+                           [Fecha_Alta]          = CASE WHEN [Estatus] = 'A' THEN [Fecha_Alta] ELSE GETDATE() END
+                     WHERE [ID_Upload] = @ID_Upload;
+                    SET @FilasActualizadas = @@ROWCOUNT;
+                END;
+
+                IF @ID_Upload IS NULL OR @FilasActualizadas = 0
+                BEGIN
                 INSERT INTO [dbo].[Transfer_ArchivosLocales]
                            ([RFC_Origen]
                            ,[RequerimientoId]
@@ -739,13 +764,10 @@ namespace FileXfer.Server.Services
                            ,N''
                            ,0
                            ,0
-                           ,@ID_Upload
-                     WHERE @ID_Upload IS NULL
-                        OR NOT EXISTS (
-                            SELECT 1
-                            FROM [dbo].[Transfer_ArchivosLocales] WITH (UPDLOCK, HOLDLOCK)
-                            WHERE [ID_Upload] = @ID_Upload
-                        );";
+                           ,@ID_Upload;
+                END;
+
+                COMMIT TRANSACTION;";
 
             const string sqlV1 = @"
                 INSERT INTO [dbo].[Transfer_ArchivosLocales]
@@ -873,6 +895,31 @@ namespace FileXfer.Server.Services
             await using var cn = Conn();
 
             const string sqlV3 = @"
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                DECLARE @FilasActualizadas int = 0;
+
+                IF @ID_Upload IS NOT NULL
+                BEGIN
+                    UPDATE [dbo].[Transfer_ArchivosLocales] WITH (UPDLOCK, HOLDLOCK)
+                       SET [RFC_Origen]          = @RFC_Origen,
+                           [RequerimientoId]     = NULL,
+                           [ResultadoId]         = @ResultadoId,
+                           [ColaboraId]          = @ColaboraId,
+                           [MovimientoId]        = @MovimientoId,
+                           [Nombre_Archivo]      = @Nombre_Archivo,
+                           [extension]           = @extension,
+                           [Ruta_ARchivo_Fisico] = @Ruta_ARchivo_Fisico,
+                           [Tamaño]               = @Tamano,
+                           [Hash]                = @Hash,
+                           [Estatus]             = 'A',
+                           [Fecha_Alta]          = CASE WHEN [Estatus] = 'A' THEN [Fecha_Alta] ELSE GETDATE() END
+                     WHERE [ID_Upload] = @ID_Upload;
+                    SET @FilasActualizadas = @@ROWCOUNT;
+                END;
+
+                IF @ID_Upload IS NULL OR @FilasActualizadas = 0
+                BEGIN
                 INSERT INTO [dbo].[Transfer_ArchivosLocales]
                            ([RFC_Origen]
                            ,[ResultadoId]
@@ -904,13 +951,10 @@ namespace FileXfer.Server.Services
                            ,N''
                            ,0
                            ,0
-                           ,@ID_Upload
-                     WHERE @ID_Upload IS NULL
-                        OR NOT EXISTS (
-                            SELECT 1
-                            FROM [dbo].[Transfer_ArchivosLocales] WITH (UPDLOCK, HOLDLOCK)
-                            WHERE [ID_Upload] = @ID_Upload
-                        );";
+                           ,@ID_Upload;
+                END;
+
+                COMMIT TRANSACTION;";
 
             const string sqlV2 = @"
                 INSERT INTO [dbo].[Transfer_ArchivosLocales]

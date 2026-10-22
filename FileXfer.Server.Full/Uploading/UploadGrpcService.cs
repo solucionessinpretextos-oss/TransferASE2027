@@ -112,25 +112,6 @@ namespace FileXfer.Server.Uploading
             var entry = await db.Uploads.SingleOrDefaultAsync(
                 upload => upload.FileUuid == request.FileUuid,
                 context.CancellationToken);
-            if (entry is not null)
-            {
-                EnsureResumeIdentity(entry, request, rfc, deviceId);
-                if (string.Equals(entry.Status, "Completed", StringComparison.OrdinalIgnoreCase))
-                {
-                    return new UploadStatusReply
-                    {
-                        ResumeAllowed = false,
-                        AlreadyCompleted = true,
-                        NextOffset = entry.BytesReceived,
-                        Status = entry.Status,
-                        Message = "La carga ya fue completada anteriormente.",
-                        ReceiptId = entry.ReceiptId?.ToString("D") ?? string.Empty,
-                        TraceId = entry.TraceId ?? CurrentTraceId(request.CorrelationId),
-                        PolicyVersion = entry.PolicyVersion ?? 0,
-                        VerificationRequired = entry.VerificationRequired
-                    };
-                }
-            }
 
             FilePolicySnapshot policy;
             try
@@ -144,6 +125,48 @@ namespace FileXfer.Server.Uploading
             {
                 ServerMetrics.UploadPolicyRejectedTotal.Add(1);
                 throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
+            }
+
+            if (entry is not null)
+            {
+                EnsureResumeIdentity(entry, request, rfc, deviceId);
+                if (string.Equals(entry.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        // Una carga técnica completada no basta para declarar éxito: el usuario
+                        // puede haber dado de baja lógica el documento y luego volver a elegirlo.
+                        // La confirmación idempotente debe asegurar también que el registro de
+                        // negocio esté activo; de otro modo el cliente mostraría un recibo válido
+                        // mientras el requerimiento continuaría con cero documentos visibles.
+                        await AsegurarCatalogoActivoAsync(entry, rfc, context.CancellationToken);
+                    }
+                    catch (Exception exception)
+                    {
+                        _log.LogError(
+                            exception,
+                            "No se pudo confirmar el catálogo de una carga completada. RFC={Rfc}, UploadId={UploadId}, FileUuid={FileUuid}",
+                            rfc,
+                            entry.Id,
+                            entry.FileUuid);
+                        throw new RpcException(new Status(
+                            StatusCode.Unavailable,
+                            "La carga existe, pero no fue posible confirmar su registro documental. Intente nuevamente."));
+                    }
+
+                    return new UploadStatusReply
+                    {
+                        ResumeAllowed = false,
+                        AlreadyCompleted = true,
+                        NextOffset = entry.BytesReceived,
+                        Status = entry.Status,
+                        Message = "La carga y su registro documental ya están confirmados.",
+                        ReceiptId = entry.ReceiptId?.ToString("D") ?? string.Empty,
+                        TraceId = entry.TraceId ?? CurrentTraceId(request.CorrelationId),
+                        PolicyVersion = entry.PolicyVersion ?? 0,
+                        VerificationRequired = entry.VerificationRequired
+                    };
+                }
             }
 
             if (entry is null)
@@ -224,6 +247,83 @@ namespace FileXfer.Server.Uploading
                 PolicyVersion = policy.Version,
                 VerificationRequired = policy.RequiresVerification
             };
+        }
+
+        private async Task AsegurarCatalogoActivoAsync(
+            UploadEntry entry,
+            string rfc,
+            CancellationToken ct)
+        {
+            if (entry.Periodo is not > 0 ||
+                entry.IdEnte is not > 0 ||
+                entry.IdAuditoria is not > 0 ||
+                entry.IdActo is not > 0 ||
+                entry.IdOficio is not > 0 ||
+                (entry.IdRequerimiento is not > 0 && entry.IdResultado is not > 0))
+            {
+                throw new InvalidOperationException(
+                    "La carga completada no conserva un contexto documental válido.");
+            }
+
+            if (string.IsNullOrWhiteSpace(entry.StoredRelativePath) ||
+                string.IsNullOrWhiteSpace(entry.Sha256Server))
+            {
+                throw new InvalidOperationException(
+                    "La carga completada no conserva ruta o hash de servidor.");
+            }
+
+            var nombreFisico = Path.GetFileName(entry.StoredRelativePath);
+            var longitudPersistida = _assembler.GetPersistedLength(
+                BuildStorageKey(entry),
+                entry.FileUuid,
+                nombreFisico);
+            if (longitudPersistida != entry.BytesReceived || longitudPersistida <= 0)
+            {
+                throw new IOException(
+                    "El archivo físico de la carga completada no coincide con su longitud confirmada.");
+            }
+
+            var nombreArchivo = entry.OriginalFileName ?? nombreFisico;
+            ValidateFileName(nombreArchivo);
+            var extension = Path.GetExtension(nombreArchivo) ?? string.Empty;
+            if (extension.StartsWith(".", StringComparison.Ordinal))
+                extension = extension[1..];
+            if (extension.Length > 4)
+                extension = extension[^4..];
+
+            var tamano = entry.BytesReceived.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var hash8 = entry.Sha256Server.Length >= 8
+                ? entry.Sha256Server[..8]
+                : entry.Sha256Server;
+
+            if (entry.IdResultado is > 0)
+            {
+                await _budiDev.RegistrarArchivoLocalPorResultadoConUploadAsync(
+                    rfc,
+                    entry.IdResultado.Value,
+                    entry.IdEnte.Value,
+                    entry.IdOficio,
+                    nombreArchivo,
+                    extension,
+                    entry.StoredRelativePath,
+                    tamano,
+                    hash8,
+                    entry.Id,
+                    ct);
+                return;
+            }
+
+            await _budiDev.RegistrarArchivoLocalConUploadAsync(
+                rfc,
+                entry.IdRequerimiento!.Value,
+                entry.IdEnte.Value,
+                nombreArchivo,
+                extension,
+                entry.StoredRelativePath,
+                tamano,
+                hash8,
+                entry.Id,
+                ct);
         }
 
         /// <summary>

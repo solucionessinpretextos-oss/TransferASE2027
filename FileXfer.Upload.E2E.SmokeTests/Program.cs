@@ -148,6 +148,20 @@ try
         "El reintento idempotente produjo un recibo diferente.");
     Console.WriteLine("PASS retry=idempotent same-receipt=true");
 
+    await SoftDeleteBusinessRowAsync(budi, Path.GetFileName(validPath));
+    Require(await CountActiveBusinessRowsAsync(budi, Path.GetFileName(validPath)) == 0,
+        "La preparación de la prueba no dio de baja el documento del catálogo.");
+    var restoreProgress = new InlineProgress<ProgresoCargaArchivo>();
+    var restoreResult = await uploader.EnviarArchivosAsync(
+        context, new[] { validPath }, restoreProgress, CancellationToken.None);
+    Require(restoreResult.ArchivosEnviados == 1 && restoreResult.ArchivosReanudados == 1,
+        "La recarga de un documento dado de baja no reutilizó de forma segura la carga completada.");
+    Require(restoreResult.RecibosEmitidos.Single() == validResult.RecibosEmitidos.Single(),
+        "La reactivación idempotente cambió el recibo digital de la carga.");
+    Require(await CountActiveBusinessRowsAsync(budi, Path.GetFileName(validPath)) == 1,
+        "El documento recargado no volvió a quedar visible en el requerimiento.");
+    Console.WriteLine("PASS retry=soft-deleted-business-row reactivated=true visible-in-requirement=true");
+
     var repairedProgress = new InlineProgress<ProgresoCargaArchivo>();
     var repairedResult = await uploader.EnviarArchivosAsync(
         context, new[] { repairablePath }, repairedProgress, CancellationToken.None);
@@ -206,6 +220,8 @@ try
         $"BuDi_dev esperaba {successfulNames.Length} registros nuevos y encontró {businessRowsAfter - businessRowsBefore}.");
 
     Console.WriteLine("PASS persistence=FileXferDev+BuDi_dev storage-hash=verified receipt-signature=verified context=verified");
+    await SoftDeleteBusinessRowsAsync(budi, prefix + "%", successfulNames.Length);
+    Console.WriteLine("PASS cleanup=business-test-rows hidden-from-client=true");
     Console.WriteLine($"RESULT run={runId} successful={successfulNames.Length} rejected=3 duplicateRows=0 businessRows={businessRowsAfter - businessRowsBefore}");
     return 0;
 }
@@ -545,6 +561,70 @@ static async Task<long> CountBusinessRowsAsync(SqlConnection connection, string 
     command.Parameters.AddWithValue("@rfc", Rfc);
     command.Parameters.AddWithValue("@pattern", pattern);
     return Convert.ToInt64(await command.ExecuteScalarAsync());
+}
+
+static async Task SoftDeleteBusinessRowAsync(SqlConnection connection, string fileName)
+{
+    await using var command = connection.CreateCommand();
+    command.CommandText = """
+        UPDATE [dbo].[Transfer_ArchivosLocales]
+           SET [Estatus] = 'B'
+         WHERE [RFC_Origen] = @rfc
+           AND [RequerimientoId] = @req
+           AND [ColaboraId] = @ente
+           AND [Nombre_Archivo] = @name
+           AND [Estatus] = 'A';
+        SELECT @@ROWCOUNT;
+        """;
+    command.Parameters.AddWithValue("@rfc", Rfc);
+    command.Parameters.AddWithValue("@req", IdRequerimiento);
+    command.Parameters.AddWithValue("@ente", IdEnte);
+    command.Parameters.AddWithValue("@name", fileName);
+    Require(Convert.ToInt32(await command.ExecuteScalarAsync()) == 1,
+        $"No se pudo preparar la baja lógica controlada de {fileName}.");
+}
+
+static async Task<long> CountActiveBusinessRowsAsync(SqlConnection connection, string fileName)
+{
+    await using var command = connection.CreateCommand();
+    command.CommandText = """
+        SELECT COUNT_BIG(1)
+          FROM [dbo].[Transfer_ArchivosLocales]
+         WHERE [RFC_Origen] = @rfc
+           AND [RequerimientoId] = @req
+           AND [ColaboraId] = @ente
+           AND [Nombre_Archivo] = @name
+           AND [Estatus] = 'A';
+        """;
+    command.Parameters.AddWithValue("@rfc", Rfc);
+    command.Parameters.AddWithValue("@req", IdRequerimiento);
+    command.Parameters.AddWithValue("@ente", IdEnte);
+    command.Parameters.AddWithValue("@name", fileName);
+    return Convert.ToInt64(await command.ExecuteScalarAsync());
+}
+
+static async Task SoftDeleteBusinessRowsAsync(
+    SqlConnection connection,
+    string pattern,
+    int expectedRows)
+{
+    await using var command = connection.CreateCommand();
+    command.CommandText = """
+        UPDATE [dbo].[Transfer_ArchivosLocales]
+           SET [Estatus] = 'B'
+         WHERE [RFC_Origen] = @rfc
+           AND [RequerimientoId] = @req
+           AND [ColaboraId] = @ente
+           AND [Nombre_Archivo] LIKE @pattern
+           AND [Estatus] = 'A';
+        SELECT @@ROWCOUNT;
+        """;
+    command.Parameters.AddWithValue("@rfc", Rfc);
+    command.Parameters.AddWithValue("@req", IdRequerimiento);
+    command.Parameters.AddWithValue("@ente", IdEnte);
+    command.Parameters.AddWithValue("@pattern", pattern);
+    Require(Convert.ToInt32(await command.ExecuteScalarAsync()) == expectedRows,
+        "La limpieza controlada no ocultó exactamente los documentos generados por la prueba.");
 }
 
 static async Task VerifyExistingDownloadAsync(
