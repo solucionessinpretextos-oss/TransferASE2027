@@ -1,0 +1,13 @@
+_render/
+_render-final/
+_render-final-v2/
+_render-final-v3/
+_qa-pdf/
+_qa-pdf-v2/
+_qa-pdf-v3/
+_qa-pdf-v4/
+_build/__pycache__/
+_build/SofficeWordShim/bin/
+_build/SofficeWordShim/obj/
+_build/test-*.pdf
+_build/test-*.png

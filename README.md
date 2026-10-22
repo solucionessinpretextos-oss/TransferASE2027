@@ -13,6 +13,10 @@ Ecosistema corporativo para transferencia segura de archivos entre el cliente WP
 - `deployment/sql`: migraciones idempotentes para FileXferDb y BuDi.
 - `deployment/Test-StagingReadiness.ps1`: preflight bloqueante y auditable para configuración, infraestructura, esquema y salud posterior al despliegue.
 
+## Manuales oficiales
+
+La documentación gráfica y detallada de cliente, Dashboard, servidor, actualizador, validación de archivos y pruebas automatizadas está centralizada en [`docs/manuales`](docs/manuales/README.md). Cada manual se mantiene en Markdown para consulta directa en GitHub y en Word/PDF para distribución institucional.
+
 ## Garantías relevantes
 
 - Login exclusivamente con e.firma para todos los roles, con nonce de un solo uso, prueba de posesión RSA, raíces SAT explícitas y URLs OCSP/CRL permitidas. El ecosistema no solicita ni admite MFA en Development o Production.
