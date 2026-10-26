@@ -87,6 +87,16 @@ try {
     $clientHash = Get-Sha256Hex $clientZip
     if ($clientHash -ne ([string]$update.Sha256).ToLowerInvariant()) { throw 'El hash del paquete cliente no coincide.' }
 
+    $standaloneRelative = "client/TransferClienteASE-$($manifest.Version)-standalone-win-x64.exe"
+    $standalonePath = Resolve-ArtifactPath $standaloneRelative
+    if (-not (Test-Path -LiteralPath $standalonePath -PathType Leaf)) {
+        throw 'Falta el ejecutable autónomo del cliente.'
+    }
+    $standaloneHeader = [IO.File]::ReadAllBytes($standalonePath)[0..1]
+    if ($standaloneHeader[0] -ne 0x4D -or $standaloneHeader[1] -ne 0x5A) {
+        throw 'El ejecutable autónomo no tiene una cabecera PE válida.'
+    }
+
     try { $updateSignature = [Convert]::FromBase64String([string]$update.SignatureBase64) }
     catch [FormatException] { throw 'La firma del paquete cliente no es Base64 válida.' }
     $canonical = "FILEXFER-UPDATE-V1`n$($update.ClientId)`n$($manifest.Version)`n$clientHash"
@@ -149,11 +159,26 @@ try {
     $serverZip = Resolve-ArtifactPath $serverArtifact[0].Path
     $serverArchive = [IO.Compression.ZipFile]::OpenRead($serverZip)
     try {
+        $serverNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($entry in $serverArchive.Entries) {
+            $serverNames.Add($entry.FullName.Replace('\', '/')) | Out-Null
             if ($entry.FullName -match '(?i)(^|/)appsettings\.Development\.json$' -or
                 $entry.FullName -match '(?i)\.pdb$') {
                 throw "El paquete de servidor contiene un archivo no productivo: $($entry.FullName)"
             }
+        }
+
+        if (-not $serverNames.Contains('client-update.settings.json')) {
+            throw 'El paquete de servidor no contiene client-update.settings.json.'
+        }
+        $clientPackageName = [IO.Path]::GetFileName($clientZip)
+        $embeddedClientEntry = $serverArchive.GetEntry("wwwroot/updates/$clientPackageName")
+        if ($null -eq $embeddedClientEntry) {
+            throw 'El paquete de servidor no contiene el ZIP cliente que debe publicar.'
+        }
+        $embeddedHash = [Security.Cryptography.SHA256]::HashData($embeddedClientEntry.Open())
+        if ([Convert]::ToHexString($embeddedHash).ToLowerInvariant() -ne $clientHash) {
+            throw 'El ZIP cliente incluido en el servidor no coincide con el paquete firmado.'
         }
     }
     finally { $serverArchive.Dispose() }

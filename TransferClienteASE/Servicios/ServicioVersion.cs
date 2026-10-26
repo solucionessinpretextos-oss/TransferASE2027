@@ -447,7 +447,15 @@ namespace TransferClienteASE.Servicios
             }
 
             if (!File.Exists(fullPath))
-                return null;
+            {
+                // La publicación stand-alone incrusta el updater y la raíz pública.
+                // Las variables de entorno y los archivos instalados conservan
+                // precedencia para instalaciones administradas y versiones puente.
+                if (!string.IsNullOrWhiteSpace(configured))
+                    return null;
+
+                return EmbeddedRuntimeAssets.TryResolveUpdateAsset(defaultFileName);
+            }
 
             var attributes = File.GetAttributes(fullPath);
             if ((attributes & FileAttributes.ReparsePoint) != 0)

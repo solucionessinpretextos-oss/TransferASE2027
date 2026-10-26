@@ -49,8 +49,9 @@ Si la llave privada PEM está cifrada, la contraseña se lee de `TRANSFER_RELEAS
 
 La liberación se crea en `artifacts/releases/<version>` y contiene:
 
+- EXE autónomo del cliente: .NET, qpdf, updater y raíz pública viajan incrustados;
 - ZIP firmado del cliente.
-- ZIP del servidor.
+- ZIP autocontenido del servidor, con el ZIP cliente y `client-update.settings.json` listos para servir.
 - paquete de scripts de despliegue;
 - updater autónomo para verificación;
 - símbolos PDB separados del runtime y destinados a diagnóstico restringido;
@@ -61,6 +62,8 @@ La liberación se crea en `artifacts/releases/<version>` y contiene:
 - manifiesto de liberación y firma RSA-PSS.
 
 La llave privada nunca se copia a la salida. El pipeline inspecciona también el ZIP y rechaza extensiones o nombres compatibles con material privado.
+
+El EXE autónomo materializa sus herramientas integradas en `%LOCALAPPDATA%\AuditoriaSuperiorDelEstado\TransferClienteASE\runtime-assets` al utilizarlas. No requiere archivos colocados manualmente junto al ejecutable. El ZIP conserva updater y llave pública como archivos separados para que las instalaciones de versiones anteriores puedan procesarlo con su contrato existente.
 
 ## Verificación independiente
 

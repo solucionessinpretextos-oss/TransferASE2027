@@ -22,10 +22,14 @@
 
     <!-- 🔹 Versión del cliente (usada por el auto-update) -->
     <!-- Esta es la que leerá ServicioVersion.ObtenerVersionActual() -->
-    <Version>2.2.0.0</Version>
-    <AssemblyVersion>2.2.0.0</AssemblyVersion>
-    <FileVersion>2.2.0.0</FileVersion>
+    <Version>2.2.1.0</Version>
+    <AssemblyVersion>2.2.1.0</AssemblyVersion>
+    <FileVersion>2.2.1.0</FileVersion>
     <ApplicationIcon>Recursos\ase_icon.ico</ApplicationIcon>
+
+    <!-- La compilación temporal de WPF también debe recibir Grpc.Tools para que
+         incluya el código generado desde upload.proto al publicar por RID. -->
+    <IncludePackageReferencesDuringMarkupCompilation>true</IncludePackageReferencesDuringMarkupCompilation>
 
     <!-- (Opcional, pero muy útil para publicación) -->
     <!-- Generar un solo exe auto-contenido -->
@@ -129,13 +133,31 @@
   <ItemGroup>
     <ProjectReference Include="..\FileXfer.Pdf\FileXfer.Pdf.csproj" />
     <Content Include="..\tools\qpdf\win-x64\bin\**\*"
+             Condition="'$(QpdfBundlePath)' == ''"
              Link="qpdf\bin\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\qpdf\win-x64\THIRD-PARTY-NOTICES.txt"
+             Condition="'$(QpdfBundlePath)' == ''"
              Link="qpdf\THIRD-PARTY-NOTICES.txt"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- En la liberación autónoma estos tres recursos se incrustan dentro del EXE.
+       Sus rutas son proporcionadas por build/Build-Release.ps1; una compilación
+       normal de desarrollo conserva el comportamiento multiarchivo existente. -->
+  <ItemGroup Condition="'$(UpdaterExecutablePath)' != '' and Exists('$(UpdaterExecutablePath)')">
+    <EmbeddedResource Include="$(UpdaterExecutablePath)"
+                      LogicalName="TransferClienteASE.Embedded.TransferClienteASE.Updater.exe" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UpdatePublicKeyPath)' != '' and Exists('$(UpdatePublicKeyPath)')">
+    <EmbeddedResource Include="$(UpdatePublicKeyPath)"
+                      LogicalName="TransferClienteASE.Embedded.update-public.pem" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(QpdfBundlePath)' != '' and Exists('$(QpdfBundlePath)')">
+    <EmbeddedResource Include="$(QpdfBundlePath)"
+                      LogicalName="TransferClienteASE.Embedded.qpdf-win-x64.zip" />
   </ItemGroup>
 
   <!-- Generar clases cliente a partir del mismo proto que usa el servidor -->

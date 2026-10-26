@@ -29,6 +29,14 @@ using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// El manifiesto de cliente se entrega como archivo operativo independiente.
+// Esto permite publicar o retirar una versión sin reescribir appsettings.json
+// ni mezclar secretos del servidor con metadatos de distribución.
+builder.Configuration.AddJsonFile(
+    "client-update.settings.json",
+    optional: true,
+    reloadOnChange: true);
+
 builder.Host.UseWindowsService();
 
 builder.WebHost.ConfigureKestrel((context, options) =>

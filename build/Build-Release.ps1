@@ -156,6 +156,12 @@ if ($downloadUri.Scheme -ne [Uri]::UriSchemeHttps -or
     -not $downloadUri.AbsolutePath.EndsWith('.zip', [StringComparison]::OrdinalIgnoreCase)) {
     throw 'DownloadUrl debe ser HTTPS y terminar en .zip.'
 }
+$expectedDownloadFileName = "TransferClienteASE-$Version-win-x64.zip"
+if (-not [IO.Path]::GetFileName($downloadUri.AbsolutePath).Equals(
+        $expectedDownloadFileName,
+        [StringComparison]::OrdinalIgnoreCase)) {
+    throw "DownloadUrl debe terminar exactamente en /$expectedDownloadFileName."
+}
 
 $SigningKeyPath = [IO.Path]::GetFullPath($SigningKeyPath)
 $TrustedPublicKeyPath = [IO.Path]::GetFullPath($TrustedPublicKeyPath)
@@ -205,6 +211,7 @@ try {
     $serverPublish = Join-Path $workRoot 'server'
     $updaterPublish = Join-Path $workRoot 'updater'
     New-Item -ItemType Directory -Path $clientPublish, $serverPublish, $updaterPublish | Out-Null
+    $qpdfBundle = Join-Path $workRoot 'qpdf-win-x64.zip'
 
     foreach ($project in @(
         'FileXfer.Server.Full/FileXfer.Server.csproj',
@@ -215,9 +222,35 @@ try {
         Assert-NoVulnerableNuGetPackages $project
     }
 
-    Invoke-Checked npm @('ci', '--ignore-scripts') (Join-Path $repoRoot 'FileXfer.AdminDashboard')
-    Invoke-Checked npm @('audit', '--audit-level=high') (Join-Path $repoRoot 'FileXfer.AdminDashboard')
-    Invoke-Checked npm @('run', 'build') (Join-Path $repoRoot 'FileXfer.AdminDashboard')
+    $dashboardRoot = Join-Path $repoRoot 'FileXfer.AdminDashboard'
+    Invoke-Checked npm @('ci', '--ignore-scripts') $dashboardRoot
+    Invoke-Checked npm @('audit', '--audit-level=high') $dashboardRoot
+
+    # El cargador endurecido de SWC rechaza caches cuyo ancestro pueda ser
+    # reemplazado por otra identidad. ProgramData\ASE se crea con ACL explícita
+    # para que la compilación no dependa de un cache inseguro en AppData.
+    $swcAclRoot = Join-Path $env:ProgramData 'ASE\TransferBuildCache'
+    $swcCache = Join-Path $swcAclRoot 'swc'
+    New-Item -ItemType Directory -Path $swcCache -Force | Out-Null
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $icaclsArguments = @(
+        $swcAclRoot,
+        '/inheritance:r',
+        '/grant:r',
+        "*$($currentSid):(OI)(CI)(F)",
+        '*S-1-5-18:(OI)(CI)(F)',
+        '*S-1-5-32-544:(OI)(CI)(F)'
+    )
+    & icacls.exe @icaclsArguments | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo proteger el cache nativo de SWC.' }
+    $previousSwcCache = $env:SWC_NATIVE_BINDING_CACHE
+    try {
+        $env:SWC_NATIVE_BINDING_CACHE = $swcCache
+        Invoke-Checked npm @('run', 'build') $dashboardRoot
+    }
+    finally {
+        $env:SWC_NATIVE_BINDING_CACHE = $previousSwcCache
+    }
 
     $versionProperties = @(
         "-p:Version=$Version",
@@ -226,15 +259,46 @@ try {
         '-p:ContinuousIntegrationBuild=true'
     )
 
-    Invoke-Checked dotnet (@('publish', 'TransferClienteASEUpdater/TransferClienteASE.Updater.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true', '-o', $updaterPublish) + $versionProperties)
-    Invoke-Checked dotnet (@('publish', 'TransferClienteASE/TransferClienteASE.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=false', '-o', $clientPublish) + $versionProperties)
-    Invoke-Checked dotnet (@('publish', 'FileXfer.Server.Full/FileXfer.Server.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'false', '-o', $serverPublish) + $versionProperties)
+    Invoke-Checked dotnet (@('publish', 'TransferClienteASEUpdater/TransferClienteASE.Updater.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true', '-p:DebugType=None', '-p:DebugSymbols=false', '-o', $updaterPublish) + $versionProperties)
 
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        (Join-Path $repoRoot 'tools/qpdf/win-x64'),
+        $qpdfBundle,
+        [IO.Compression.CompressionLevel]::Optimal,
+        $false)
+
+    # WPF genera un proyecto temporal para XAML. Compilar primero por RID evita
+    # que esa fase pierda el código gRPC generado; publish --no-build se limita
+    # después a producir el bundle único con los recursos ya incrustados.
     $updaterExe = Join-Path $updaterPublish 'TransferClienteASE.Updater.exe'
+    if (-not (Test-Path -LiteralPath $updaterExe -PathType Leaf)) { throw "No se publicó $updaterExe" }
+    $certificate = $null
+    if (-not [string]::IsNullOrWhiteSpace($CodeSigningCertificateThumbprint)) {
+        # El updater debe firmarse antes de incrustarlo en el EXE autónomo.
+        $certificate = Get-CodeSigningCertificate $CodeSigningCertificateThumbprint
+        $updaterSignature = Set-AuthenticodeSignature -LiteralPath $updaterExe -Certificate $certificate -HashAlgorithm SHA256 -TimestampServer $TimestampServer
+        if ($updaterSignature.Status -ne [Management.Automation.SignatureStatus]::Valid) {
+            throw "Firma Authenticode inválida para ${updaterExe}: $($updaterSignature.StatusMessage)"
+        }
+    }
+    $embeddedAssetProperties = @(
+        "-p:UpdaterExecutablePath=$updaterExe",
+        "-p:UpdatePublicKeyPath=$TrustedPublicKeyPath",
+        "-p:QpdfBundlePath=$qpdfBundle"
+    )
+    Invoke-Checked dotnet (@('build', 'TransferClienteASE/TransferClienteASE.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=false') + $versionProperties + $embeddedAssetProperties)
+    Invoke-Checked dotnet (@('publish', 'TransferClienteASE/TransferClienteASE.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--no-build', '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:IncludeAllContentForSelfExtract=true', '-p:EnableCompressionInSingleFile=true', '-p:DebugType=None', '-p:DebugSymbols=false', '-o', $clientPublish) + $versionProperties + $embeddedAssetProperties)
+    Invoke-Checked dotnet (@('publish', 'FileXfer.Server.Full/FileXfer.Server.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=false', '-o', $serverPublish) + $versionProperties)
+
     $clientExe = Join-Path $clientPublish 'TransferClienteASE.exe'
     $serverExe = Join-Path $serverPublish 'FileXfer.Server.exe'
     foreach ($required in @($updaterExe, $clientExe, $serverExe)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "No se publicó $required" }
+    }
+
+    $standaloneSelfTest = Start-Process -FilePath $clientExe -ArgumentList '--self-test' -Wait -PassThru
+    if ($standaloneSelfTest.ExitCode -ne 0) {
+        throw "El EXE autónomo no pudo materializar o ejecutar sus recursos integrados (código $($standaloneSelfTest.ExitCode))."
     }
 
     Copy-Item -LiteralPath $updaterExe -Destination (Join-Path $clientPublish 'TransferClienteASE.Updater.exe')
@@ -250,8 +314,7 @@ try {
 
     $productionReady = -not $isDirty
     if (-not [string]::IsNullOrWhiteSpace($CodeSigningCertificateThumbprint)) {
-        $certificate = Get-CodeSigningCertificate $CodeSigningCertificateThumbprint
-        foreach ($binary in @($clientExe, $updaterExe, (Join-Path $clientPublish 'TransferClienteASE.Updater.exe'), $serverExe)) {
+        foreach ($binary in @($clientExe, $serverExe)) {
             $result = Set-AuthenticodeSignature -LiteralPath $binary -Certificate $certificate -HashAlgorithm SHA256 -TimestampServer $TimestampServer
             if ($result.Status -ne [Management.Automation.SignatureStatus]::Valid) {
                 throw "Firma Authenticode inválida para ${binary}: $($result.StatusMessage)"
@@ -294,13 +357,12 @@ try {
     New-Item -ItemType Directory -Path $clientDirectory, $serverDirectory, $deploymentDirectory, $toolsDirectory | Out-Null
 
     $clientZip = Join-Path $clientDirectory "TransferClienteASE-$Version-win-x64.zip"
+    $standaloneExe = Join-Path $clientDirectory "TransferClienteASE-$Version-standalone-win-x64.exe"
     $serverZip = Join-Path $serverDirectory "FileXfer.Server-$Version-win-x64.zip"
     $deploymentZip = Join-Path $deploymentDirectory "FileXfer.Deployment-$Version.zip"
     $symbolsZip = Join-Path $toolsDirectory "FileXfer.Symbols-$Version.zip"
+    Copy-Item -LiteralPath $clientExe -Destination $standaloneExe
     [IO.Compression.ZipFile]::CreateFromDirectory($clientPublish, $clientZip, [IO.Compression.CompressionLevel]::Optimal, $false)
-    [IO.Compression.ZipFile]::CreateFromDirectory($serverPublish, $serverZip, [IO.Compression.CompressionLevel]::Optimal, $false)
-    [IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $repoRoot 'deployment'), $deploymentZip, [IO.Compression.CompressionLevel]::Optimal, $false)
-    [IO.Compression.ZipFile]::CreateFromDirectory($symbolsRoot, $symbolsZip, [IO.Compression.CompressionLevel]::Optimal, $false)
     Copy-Item -LiteralPath $updaterExe -Destination (Join-Path $toolsDirectory 'TransferClienteASE.Updater.exe')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Verify-Release.ps1') -Destination (Join-Path $toolsDirectory 'Verify-Release.ps1')
     Copy-Item -LiteralPath $TrustedPublicKeyPath -Destination (Join-Path $releaseDirectory 'update-public.pem')
@@ -332,7 +394,20 @@ try {
     $settingsPath = Join-Path $releaseDirectory 'client-update.settings.json'
     Write-Utf8NoBom $settingsPath (($updateSettings | ConvertTo-Json -Depth 8) + "`n")
 
+    # El ZIP del servidor ya lleva el paquete cliente y el manifiesto operativo.
+    # Tras instalarlo, UseStaticFiles expone /updates/<paquete> y el endpoint de
+    # metadatos lee client-update.settings.json con recarga en caliente.
+    $serverUpdatesDirectory = Join-Path $serverPublish 'wwwroot\updates'
+    New-Item -ItemType Directory -Path $serverUpdatesDirectory -Force | Out-Null
+    Copy-Item -LiteralPath $clientZip -Destination (Join-Path $serverUpdatesDirectory ([IO.Path]::GetFileName($clientZip)))
+    Copy-Item -LiteralPath $settingsPath -Destination (Join-Path $serverPublish 'client-update.settings.json')
+
+    [IO.Compression.ZipFile]::CreateFromDirectory($serverPublish, $serverZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    [IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $repoRoot 'deployment'), $deploymentZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    [IO.Compression.ZipFile]::CreateFromDirectory($symbolsRoot, $symbolsZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+
     $artifactPaths = @(
+        $standaloneExe,
         $clientZip,
         $serverZip,
         $deploymentZip,
