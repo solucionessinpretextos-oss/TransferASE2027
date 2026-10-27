@@ -105,6 +105,8 @@ El entorno BuDi validado durante la preparación negocia TLS 1.0 y presenta una 
 
 El servicio falla al arrancar en producción si no existe una llave persistente de recibos. Una llave efímera solo está permitida en `Development`. La llave configurada es también la raíz de confianza de la verificación: no la rote sin un procedimiento que exporte/verifique el historial y despliegue soporte explícito para llaves anteriores; cambiarla directamente hará que los recibos históricos dejen de validarse en línea.
 
+Al reemplazar un servicio existente, el instalador conserva su cuenta de inicio y la contraseña administrada por Windows. Aborta si `-ServiceAccount` no coincide con la identidad registrada. Para crear un servicio nuevo solo admite cuentas integradas, virtuales o gMSA; una cuenta de usuario convencional debe configurarse previamente mediante el procedimiento corporativo de secretos.
+
 ## Política de archivos
 
 La lista aceptada ya no vive en el ejecutable. Adminístrela en **Dashboard → Políticas de archivos**. Todo cambio requiere motivo y crea una versión. Deshabilitar “verificación profunda” reduce garantías: el sistema lo advierte al administrador y al usuario, y lo registra en carga y recibo. Use esa excepción solo con análisis de riesgo documentado y un plan de reversión.

@@ -14,15 +14,15 @@ El ZIP no presentó rutas de escape. El contenido se usó únicamente como evide
 
 ## Topología detectada y destino de desarrollo
 
-- Directorio operativo esperado: `C:\Servicios\FileXfer`.
-- Nombre del servicio histórico: `FileXferService`.
+- Directorio operativo confirmado: `C:\Servicios\FileXferPruebas`.
+- Nombre del servicio confirmado: `FileXferPruebas.Server`.
 - Puerto HTTPS interno de Kestrel: `51136`.
 - Puerto HTTPS público: `51236`, traducido por NAT hacia `192.168.2.243:51136`.
-- Conexiones lógicas detectadas en el servicio instalado: `FileXferDev` y `BUZONDIGITAL`. El destino de desarrollo exige `FileXferDev` en 192.168.2.3\SQL2014 y `Budi_Dev` en 192.168.2.8.
+- Conexiones confirmadas en el servicio de pruebas: `FileXferDev` en 192.168.2.3\SQL2014 y `Budi_Dev` en 192.168.2.8.
 - Ruta de almacenamiento UNC existente.
 - Configuración JWT, límites, políticas y parámetros operativos válidos.
 
-Una lectura directa de la configuración del servidor el 27/10/2026 confirmó que el servicio instalado apunta a `BUZONDIGITAL` en SQL 192.168.2.8 y a `\\192.168.2.19\DocumentosBuzonDigital\Transfer\Finalizados`. El objetivo de desarrollo declarado por el propietario es `Budi_Dev` y el storage de pruebas en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`. El instalador exige las bases y el storage de desarrollo antes de detener un servicio; la configuración actualmente instalada no pasa esa validación. La decisión de sustituir el servicio o crear otro paralelo está pendiente.
+La primera inspección se hizo por error sobre `FileXferService`, que corresponde a otra instalación y apunta a `BUZONDIGITAL`. El 27/10/2026 se confirmó directamente que el destino correcto es `FileXferPruebas.Server`, ejecutado desde `C:\Servicios\FileXferPruebas`, con `FileXferDev`, `Budi_Dev`, `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados` y Kestrel en `51136`. La liberación debe reemplazar únicamente ese servicio de pruebas; `FileXferService` queda fuera del alcance.
 
 Los valores secretos no se documentan en este informe.
 
@@ -34,9 +34,9 @@ Los valores secretos no se documentan en este informe.
 4. El manifiesto antiguo anuncia la versión `2.0.1.2` por HTTP y no contiene SHA-256 ni firma criptográfica.
 5. El instalador histórico `TransferClienteASE-setup.exe` no posee firma Authenticode.
 6. El certificado `CER.cer` es una e.firma personal; no es una raíz SAT ni un certificado TLS del servidor.
-7. La publicación no contiene `Security:PathEncryptionKey`. Debe recuperarse de las variables de entorno o de la administración del servidor antes del cambio.
+7. La publicación no contiene `Security:PathEncryptionKey`. La llave original se recuperó del almacén de secretos de desarrollo y se validó contra el catálogo; debe transferirse al servidor mediante la configuración protegida del despliegue, nunca incorporarse al ZIP o al repositorio.
 8. Tampoco contiene raíces SAT, hosts OCSP/CRL permitidos ni una llave persistente de recibos con el contrato actual.
-9. El certificado TLS observado para el endpoint era autofirmado para `filexfer.local`, sin identidad válida para la IP pública; por eso la conexión normal no resulta confiable.
+9. El PFX del ZIP recibido era autofirmado para `filexfer.local`. El servicio activo usa otro certificado para `transfer-pruebas.ase-sinaloa.local`, con SAN para `SERVERDIG1`, 192.168.2.243 y 187.141.128.194; sigue siendo autofirmado y debe sustituirse por uno corporativo antes de producción.
 10. La llave JWT legada tiene menos de 32 caracteres. El migrador la rota por una llave aleatoria robusta; las sesiones activas deberán autenticarse nuevamente una vez.
 11. Las conexiones `FileXferDev` y `Budi_Dev` desactivan cifrado y confían en certificados no validados. El runtime endurecido las rechaza en producción; la migración incorpora una excepción temporal limitada a esas dos bases y a IPv4 privadas.
 
@@ -49,7 +49,7 @@ Una consulta de solo lectura sobre `Budi_Dev.dbo.Transfer_ArchivosLocales`, sin 
 
 La llave DES proporcionada por el propietario permitió descifrar 8,434 de las 8,435 rutas heredadas; una entrada histórica (ID 61918) tiene un valor anómalo. Una muestra de 500 se volvió a cifrar y coincidió exactamente con los datos almacenados. No se incorporó la llave al repositorio ni a los artefactos.
 
-Los 55 registros `v2:` tienen referencias en `FileXferDev.dbo.Uploads` y estado `Completed`, pero ninguno de los 55 archivos apareció en la ruta UNC vigente ni en la ruta de pruebas examinada. Deben recuperarse la llave AES original y el almacenamiento real, o conciliarse esas entradas con evidencia y respaldo antes de cualquier corrección de datos. No se modificó la base.
+La llave AES original se recuperó del almacén de secretos de desarrollo y descifró correctamente las 55 rutas `v2:`: 55 válidas y 0 fallidas. Los 55 registros tienen referencias en `FileXferDev.dbo.Uploads` y estado `Completed`, pero ninguno de los archivos apareció en las ubicaciones examinadas. Debe conservarse la llave y conciliarse la ausencia física con evidencia y respaldo antes de cualquier corrección de datos. No se modificó la base.
 
 No use `-GeneratePathEncryptionKeyForEmptyDatabase` en este servidor: contradice el inventario real y dejaría las 55 rutas AES existentes inaccesibles. La llave DES compartida es obligatoria para lectura y escritura.
 
@@ -77,8 +77,7 @@ La ingeniería queda preparada, pero una liberación no puede marcarse productiv
 1. certificado Authenticode y timestamp RFC 3161;
 2. certificado TLS confiable para la identidad pública definitiva;
 3. llave privada histórica de actualización o estrategia puente aprobada;
-4. `Security:PathEncryptionKey` histórico;
-5. cadena SAT y hosts OCSP/CRL oficiales;
-6. cuenta de servicio con permisos efectivos sobre la ruta UNC.
+4. cadena SAT y hosts OCSP/CRL oficiales;
+5. confirmación de permisos efectivos de la cuenta `Ase-sinaloa\juan.carrillo` —o la cuenta administrada que la sustituya— sobre la ruta UNC.
 
 Ninguno de estos faltantes se resuelve de manera segura desactivando validaciones. Eso sería hacer desaparecer la alarma, no el incendio.

@@ -2,7 +2,7 @@
 
 ## Resultado esperado
 
-El objetivo declarado para esta liberación es FileXferDev + Budi_Dev y el storage de pruebas en 192.168.2.21. El servicio hoy instalado en 192.168.2.243 usa BUZONDIGITAL y el storage 192.168.2.19. No ejecute el instalador contra ese servicio hasta decidir si el entorno de desarrollo irá en paralelo o lo sustituirá. El instalador compara bases y storage antes de detener cualquier servicio.
+El objetivo de esta liberación es el servicio `FileXferPruebas.Server` de 192.168.2.243, instalado en `C:\Servicios\FileXferPruebas`. Su configuración ya usa FileXferDev + Budi_Dev y el storage de pruebas en 192.168.2.21. La instalación reemplazará exclusivamente ese servicio y conservará respaldo transaccional. `FileXferService`, instalado en otra carpeta y conectado a BUZONDIGITAL, queda fuera del alcance.
 
 Topología actual del servicio instalado, que no debe confundirse con el destino de desarrollo:
 
@@ -10,11 +10,11 @@ Topología actual del servicio instalado, que no debe confundirse con el destino
 Cliente de Internet
   -> https://187.141.128.194:51236
   -> NAT/firewall: 187.141.128.194:51236 -> 192.168.2.243:51136
-  -> FileXferService en C:\Servicios\FileXfer
-  -> SQL FileXferDev + SQL BUZONDIGITAL + storage 192.168.2.19
+  -> FileXferPruebas.Server en C:\Servicios\FileXferPruebas
+  -> SQL FileXferDev + SQL Budi_Dev + storage 192.168.2.21
 ```
 
-`51236` es el puerto público actual y se traduce a `51136`. Un servicio paralelo necesita otro puerto interno, otra regla de firewall y, si se usará desde Internet, otra publicación NAT/TLS. El instalador puede configurar nombre de servicio, directorio y puerto independientes.
+`51236` es el puerto público actual y se traduce a `51136`. El despliegue conserva esa topología y valida que el proceso que ocupa `51136` sea el servicio de pruebas que se está sustituyendo.
 
 ## Contenido de la liberación
 
@@ -51,8 +51,8 @@ Get-Command pwsh.exe -ErrorAction Stop
 
 ```powershell
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-Copy-Item 'C:\Servicios\FileXfer' "D:\Respaldos\FileXfer-$stamp" -Recurse
-sc.exe qc FileXferService | Out-File "D:\Respaldos\FileXferService-$stamp.txt"
+Copy-Item 'C:\Servicios\FileXferPruebas' "D:\Respaldos\FileXferPruebas-$stamp" -Recurse
+sc.exe qc FileXferPruebas.Server | Out-File "D:\Respaldos\FileXferPruebas.Server-$stamp.txt"
 Get-ChildItem Env:Security__PathEncryptionKey,Env:Security__LegacyPathEncryptionKey,Env:Security__Jwt__SigningKey -ErrorAction SilentlyContinue |
   Select-Object Name,@{Name='Presente';Expression={-not [string]::IsNullOrWhiteSpace($_.Value)}}
 ```
@@ -63,44 +63,45 @@ Si alguna llave no aparece a nivel de máquina, ejecute desde el paquete de desp
 
 ```powershell
 & .\Find-FileXferPathKeys.ps1 `
-  -InstallDirectory 'C:\Servicios\FileXfer' `
-  -ServiceName 'FileXferService'
+  -InstallDirectory 'C:\Servicios\FileXferPruebas' `
+  -ServiceName 'FileXferPruebas.Server'
 ```
 
 La herramienta inspecciona únicamente las configuraciones conocidas, el entorno de máquina, el entorno específico del servicio y el perfil de su cuenta. Valida las llaves, muestra solo su origen y una huella abreviada, y las deja disponibles en el PowerShell actual. No cierre esa consola antes de ejecutar el instalador.
 
 ## Preparación de la migración desde la publicación del 26/10/2026
 
-La instalación anterior usa `appsettings.json`, pero sus conexiones y storage pertenecen a BUZONDIGITAL. No use su conversión automática para instalar el objetivo Budi_Dev. Prepare fuera de Git un `appsettings.Production.json` basado en la plantilla, con las conexiones FileXferDev/Budi_Dev, storage 192.168.2.21 y las llaves históricas recuperadas. Indique ese archivo mediante `-ProductionConfigPath`. El instalador abortará antes de detener el servicio si las bases o el storage no coinciden.
+La instalación de pruebas usa `appsettings.json` con FileXferDev/Budi_Dev y storage 192.168.2.21. Prepare fuera de Git un `appsettings.Production.json` basado en la plantilla, conservando esas conexiones, el storage y ambas llaves verificadas. Indique ese archivo mediante `-ProductionConfigPath`. El instalador abortará antes de detener el servicio si las bases, el storage o las llaves no coinciden con el catálogo.
 
 Por omisión, el instalador deja `client-update.settings.json` como `client-update.settings.pending.json`. Así los clientes anteriores reciben `404` silencioso y continúan trabajando, en vez de intentar un paquete firmado con una llave que todavía no conocen. No agregue `-EnableClientUpdates` durante esta primera migración.
 
-Ejemplo de parámetros del entorno de desarrollo. No ejecute este comando contra FileXferService mientras siga atendiendo BUZONDIGITAL; primero resuelva la decisión de servicio paralelo o sustitución:
+Ejemplo para sustituir el servicio de pruebas confirmado:
 
 ```powershell
 pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
-  -ServerPackagePath 'D:\Releases\2.2.1.0\server\FileXfer.Server-2.2.1.0-win-x64.zip' `
+  -ServerPackagePath 'D:\Releases\2.2.1.1\server\FileXfer.Server-2.2.1.1-win-x64.zip' `
   -ExpectedSha256 '<SHA256 DE checksums.sha256>' `
   -ProductionConfigPath 'D:\Configuracion\FileXferDev\appsettings.Production.json' `
-  -InstallDirectory 'C:\Servicios\FileXferDev' `
-  -ServiceName 'FileXferServiceDev' `
-  -TlsCertificateSubject 'CN=transfer-dev.ase-sinaloa.gob.mx' `
-  -AllowedHosts @('transfer-dev.ase-sinaloa.gob.mx','192.168.2.243','localhost','127.0.0.1') `
+  -InstallDirectory 'C:\Servicios\FileXferPruebas' `
+  -ServiceName 'FileXferPruebas.Server' `
+  -TlsCertificateSubject 'CN=transfer-pruebas.ase-sinaloa.local' `
+  -AllowedHosts @('transfer-pruebas.ase-sinaloa.local','SERVERDIG1','187.141.128.194','192.168.2.243','localhost','127.0.0.1') `
   -SatTrustedRootCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-root.cer') `
   -SatIntermediateCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-intermediate.cer') `
   -SatAllowedRevocationHosts @('ocsp.sat.gob.mx','crl.sat.gob.mx') `
   -AllowLegacyDevelopmentSqlTransport `
-  -ServiceAccount 'DOMINIO\gmsa-filexfer-dev$' `
-  -HttpsPort 51137 `
-  -HealthUri 'https://transfer-dev.ase-sinaloa.gob.mx:51137/healthz' `
+  -ServiceAccount 'Ase-sinaloa\juan.carrillo' `
+  -HttpsPort 51136 `
+  -HealthUri 'https://192.168.2.243:51136/healthz' `
+  -ReplaceExistingService `
   -OpenWindowsFirewall
 ```
 
-El DNS, el certificado TLS, la cuenta de servicio y los nombres SAT del ejemplo son ilustrativos. El archivo de configuración debe fijar Kestrel en 51137 para que coincida con el parámetro del servicio paralelo. Defina el DNS y la publicación de red antes de usar ese ejemplo. El instalador se detiene si faltan las raíces y hosts SAT; no habilita bypass.
+El DNS, el certificado TLS y los nombres SAT del ejemplo deben sustituirse por los autorizados. La cuenta mostrada es la que actualmente ejecuta `FileXferPruebas.Server`; el instalador conserva su identidad y la contraseña almacenada por Windows, y aborta si se intenta cambiarla durante el corte. Confirme sus permisos sobre la ruta UNC. El archivo de configuración debe fijar Kestrel en 51136. El instalador se detiene si faltan las raíces y hosts SAT; no habilita bypass.
 
 `-AllowLegacyDevelopmentSqlTransport` existe para FileXferDev en 192.168.2.3\SQL2014 y Budi_Dev en 192.168.2.8, con el transporte SQL de pruebas informado. El instalador valida ambos servidores, ambas bases y el storage 192.168.2.21 antes de detener un servicio. Retire la excepción cuando SQL Server tenga TLS 1.2+, certificado confiable, `Encrypt=True` y `TrustServerCertificate=False`.
 
-Si posteriormente se decide sustituir el servicio actual, respáldelo y use el nombre y directorio originales junto con `-ReplaceExistingService` solo después de verificar que el cambio de BUZONDIGITAL a Budi_Dev está autorizado. La configuración anterior en otra carpeta sirve como referencia, pero el instalador la rechazará si apunta a BUZONDIGITAL:
+Use como referencia la configuración actual de `FileXferPruebas.Server`; el instalador rechazará cualquier archivo que apunte a BUZONDIGITAL o al storage 192.168.2.19:
 
 ```powershell
 -LegacyConfigPath 'D:\PublicacionAnterior\appsettings.json'
@@ -122,11 +123,15 @@ El servicio lee tanto las rutas DES históricas como las 55 rutas AES `v2:` exis
 
 ```powershell
 pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
-  -ServerPackagePath 'D:\Releases\2.2.1.0\server\FileXfer.Server-2.2.1.0-win-x64.zip' `
+  -ServerPackagePath 'D:\Releases\2.2.1.1\server\FileXfer.Server-2.2.1.1-win-x64.zip' `
   -ExpectedSha256 '<SHA256 DE checksums.sha256>' `
-  -ProductionConfigPath 'D:\Configuracion\FileXfer\appsettings.Production.json' `
-  -HealthUri 'https://transfer.ase-sinaloa.gob.mx:51236/healthz' `
-  -ServiceAccount 'DOMINIO\gmsa-filexfer$' `
+  -ProductionConfigPath 'D:\Configuracion\FileXferPruebas\appsettings.Production.json' `
+  -InstallDirectory 'C:\Servicios\FileXferPruebas' `
+  -ServiceName 'FileXferPruebas.Server' `
+  -ServiceAccount 'Ase-sinaloa\juan.carrillo' `
+  -HealthUri 'https://192.168.2.243:51136/healthz' `
+  -AllowLegacyDevelopmentSqlTransport `
+  -ReplaceExistingService `
   -OpenWindowsFirewall
 ```
 
@@ -136,7 +141,7 @@ pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
 2. Extrae a una carpeta temporal junto a la instalación.
 3. Migra o conserva la configuración y comprueba llaves, certificados, SAT, conexiones, ruta y puerto.
 4. Materializa las llaves históricas necesarias en la configuración migrada y restringe su ACL a administradores, `SYSTEM` y la cuenta del servicio.
-5. Detiene `FileXferService` y verifica que ningún IIS/Kestrel ajeno conserve `51136`.
+5. Detiene `FileXferPruebas.Server` y verifica que ningún IIS/Kestrel ajeno conserve `51136`.
 6. Renombra la versión anterior como respaldo; no la borra.
 7. Activa el servidor nuevo, actualiza el servicio e inicia.
 8. Consulta `/healthz` con validación TLS normal; nunca usa `SkipCertificateCheck`.
@@ -147,7 +152,7 @@ Si el puerto sigue ocupado, determine si la publicación actual corre en IIS. No
 ## Validación posterior
 
 ```powershell
-Get-Service FileXferService
+Get-Service FileXferPruebas.Server
 Get-NetTCPConnection -LocalPort 51136 -State Listen
 Invoke-WebRequest 'https://transfer.ase-sinaloa.gob.mx:51236/healthz'
 ```
@@ -171,9 +176,9 @@ La liberación productiva debe construirse con la llave histórica:
 
 ```powershell
 pwsh -NoProfile -File .\build\Build-Release.ps1 `
-  -Version 2.2.1.0 `
+  -Version 2.2.1.1 `
   -MinSupportedVersion 2.0.1.2 `
-  -DownloadUrl 'https://transfer.ase-sinaloa.gob.mx:51236/updates/TransferClienteASE-2.2.1.0-win-x64.zip' `
+  -DownloadUrl 'https://transfer.ase-sinaloa.gob.mx:51236/updates/TransferClienteASE-2.2.1.1-win-x64.zip' `
   -SigningKeyPath 'D:\Secretos\TransferASE\update-private.pem' `
   -TrustedPublicKeyPath 'D:\Configuracion\TransferASE\update-public.pem' `
   -CodeSigningCertificateThumbprint '<HUELLA AUTHENTICODE>' `
@@ -188,9 +193,9 @@ Cuando los clientes ya confíen en la nueva llave pública, active el manifiesto
 
 ```powershell
 Copy-Item `
-  'C:\Servicios\FileXfer\client-update.settings.pending.json' `
-  'C:\Servicios\FileXfer\client-update.settings.json'
-Restart-Service FileXferService
+  'C:\Servicios\FileXferPruebas\client-update.settings.pending.json' `
+  'C:\Servicios\FileXferPruebas\client-update.settings.json'
+Restart-Service FileXferPruebas.Server
 ```
 
 También puede usar `-EnableClientUpdates` en instalaciones futuras, pero solo si el paquete está firmado con la llave histórica o la versión puente ya fue desplegada.

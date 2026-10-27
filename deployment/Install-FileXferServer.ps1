@@ -525,6 +525,26 @@ $backup = Join-Path $parent ($leaf + '.backup.' + (Get-Date -Format 'yyyyMMdd-HH
 $failed = Join-Path $parent ($leaf + '.failed.' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $hadPreviousInstall = Test-Path -LiteralPath $install -PathType Container
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+$escapedServiceName = $ServiceName.Replace("'", "''")
+$serviceMetadata = if ($null -ne $service) {
+    Get-CimInstance -ClassName Win32_Service -Filter "Name='$escapedServiceName'" -ErrorAction Stop
+} else {
+    $null
+}
+if ($null -ne $serviceMetadata -and
+    -not ([string]$serviceMetadata.StartName).Equals($ServiceAccount, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "El servicio $ServiceName usa la cuenta '$($serviceMetadata.StartName)', no '$ServiceAccount'. Para evitar perder la contraseña o los permisos, conserve la cuenta actual durante este despliegue."
+}
+if ($null -eq $service) {
+    $supportsPasswordlessCreation =
+        $ServiceAccount.StartsWith('NT AUTHORITY\', [StringComparison]::OrdinalIgnoreCase) -or
+        $ServiceAccount.StartsWith('NT SERVICE\', [StringComparison]::OrdinalIgnoreCase) -or
+        $ServiceAccount.Equals('LocalSystem', [StringComparison]::OrdinalIgnoreCase) -or
+        $ServiceAccount.EndsWith('$', [StringComparison]::Ordinal)
+    if (-not $supportsPasswordlessCreation) {
+        throw 'La creación de un servicio nuevo con una cuenta de usuario exige administrar su contraseña fuera de este instalador. Cree el servicio previamente o utilice una gMSA/cuenta integrada. Las actualizaciones conservan la identidad existente.'
+    }
+}
 if ($null -ne $service -and -not $ReplaceExistingService) {
     throw "El servicio $ServiceName ya existe. Use un nombre/directorio/puerto independientes para desarrollo o indique -ReplaceExistingService cuando el reemplazo esté decidido."
 }
@@ -603,7 +623,9 @@ try {
         $createdService = $true
     }
     else {
-        Invoke-ServiceControl @('config', $ServiceName, "binPath= $binaryPath", 'start= auto', "DisplayName= $ServiceDisplayName", "obj= $ServiceAccount")
+        # Conservar la identidad y la contraseña administradas por Windows. Volver a enviar
+        # obj= sin password= puede invalidar el inicio de sesión de una cuenta de dominio.
+        Invoke-ServiceControl @('config', $ServiceName, "binPath= $binaryPath", 'start= auto', "DisplayName= $ServiceDisplayName")
     }
     Invoke-ServiceControl @('description', $ServiceName, 'Servicio seguro de transferencia de archivos de la ASE Sinaloa')
     Invoke-ServiceControl @('failure', $ServiceName, 'reset= 86400', 'actions= restart/5000/restart/15000/restart/60000')
