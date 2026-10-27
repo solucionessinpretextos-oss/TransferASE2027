@@ -103,18 +103,43 @@ $configurationRoots = @(
 
 foreach ($root in $configurationRoots) {
     if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
-    foreach ($file in Get-ChildItem -LiteralPath $root -Filter 'appsettings*.json' -File -Recurse -ErrorAction SilentlyContinue) {
-        try { $json = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop }
+    foreach ($file in Get-ChildItem -LiteralPath $root -Filter 'appsettings*.json' -File -ErrorAction SilentlyContinue) {
+        try {
+            $content = [IO.File]::ReadAllText($file.FullName, [Text.UTF8Encoding]::new($false, $true))
+        }
         catch {
-            Write-Warning "Se omitió JSON inválido: $($file.FullName)"
+            $content = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::Default)
+        }
+
+        $json = $null
+        try { $json = $content | ConvertFrom-Json -ErrorAction Stop }
+        catch { Write-Verbose "Se usará lectura compatible para JSON legado: $($file.FullName)" }
+
+        if ($null -ne $json) {
+            $securityProperty = $json.PSObject.Properties['Security']
+            if ($null -ne $securityProperty) {
+                $security = $securityProperty.Value
+                foreach ($definition in $settingDefinitions) {
+                    $valueProperty = $security.PSObject.Properties[$definition.JsonName]
+                    $value = if ($null -eq $valueProperty) { $null } else { $valueProperty.Value }
+                    Add-KeyCandidate $definition.EnvironmentName ([string]$value) $file.FullName
+                }
+            }
             continue
         }
-        $securityProperty = $json.PSObject.Properties['Security']
-        if ($null -eq $securityProperty) { continue }
-        $security = $securityProperty.Value
+
         foreach ($definition in $settingDefinitions) {
-            $valueProperty = $security.PSObject.Properties[$definition.JsonName]
-            $value = if ($null -eq $valueProperty) { $null } else { $valueProperty.Value }
+            $propertyName = [Text.RegularExpressions.Regex]::Escape($definition.JsonName)
+            $pattern = '"' + $propertyName + '"\s*:\s*"(?<value>(?:\\.|[^"\\])*)"'
+            $match = [Text.RegularExpressions.Regex]::Match(
+                $content,
+                $pattern,
+                [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if (-not $match.Success) { continue }
+
+            $encodedValue = $match.Groups['value'].Value
+            try { $value = ('"' + $encodedValue + '"') | ConvertFrom-Json -ErrorAction Stop }
+            catch { throw "No se pudo interpretar $($definition.JsonName) en $($file.FullName)." }
             Add-KeyCandidate $definition.EnvironmentName ([string]$value) $file.FullName
         }
     }
@@ -123,7 +148,8 @@ foreach ($root in $configurationRoots) {
 $results = [Collections.Generic.List[object]]::new()
 foreach ($definition in $settingDefinitions) {
     $matches = @($candidates | Where-Object EnvironmentName -EQ $definition.EnvironmentName)
-    $distinctValues = @($matches.Value | Sort-Object -Unique)
+    $distinctValues = @($matches | ForEach-Object { $_.Value } | Sort-Object -Unique)
+    $sources = @($matches | ForEach-Object { $_.Source } | Sort-Object -Unique)
     if ($distinctValues.Count -eq 0) {
         $results.Add([pscustomobject]@{
             Llave = $definition.Description
@@ -134,7 +160,7 @@ foreach ($definition in $settingDefinitions) {
         continue
     }
     if ($distinctValues.Count -gt 1) {
-        throw "Se encontraron valores diferentes para $($definition.EnvironmentName). No se eligió ninguno automáticamente. Fuentes: $($matches.Source -join '; ')"
+        throw "Se encontraron valores diferentes para $($definition.EnvironmentName). No se eligió ninguno automáticamente. Fuentes: $($sources -join '; ')"
     }
 
     $value = [string]$distinctValues[0]
@@ -152,7 +178,7 @@ foreach ($definition in $settingDefinitions) {
     $results.Add([pscustomobject]@{
         Llave = $definition.Description
         Estado = 'RECUPERADA Y VALIDADA'
-        Fuente = ($matches.Source | Sort-Object -Unique) -join '; '
+        Fuente = $sources -join '; '
         Huella = Get-Fingerprint $value
     })
 }
