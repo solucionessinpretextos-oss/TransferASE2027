@@ -54,6 +54,8 @@ El último comando solo informa si los secretos existen; no los imprime.
 
 La instalación anterior usa `appsettings.json`. El instalador detecta ese archivo, lo convierte en `appsettings.Production.json`, conserva conexiones, almacenamiento y puerto, elimina `Actualizaciones` HTTP y obliga a configurar seguridad faltante. Como la llave JWT encontrada es demasiado corta, la rota de forma automática; esto solo obliga a iniciar sesión otra vez y no modifica archivos ni rutas cifradas.
 
+Por omisión, el instalador deja `client-update.settings.json` como `client-update.settings.pending.json`. Así los clientes anteriores reciben `404` silencioso y continúan trabajando, en vez de intentar un paquete firmado con una llave que todavía no conocen. No agregue `-EnableClientUpdates` durante esta primera migración.
+
 Ejemplo:
 
 ```powershell
@@ -156,6 +158,17 @@ pwsh -NoProfile -File .\build\Build-Release.ps1 `
 ```
 
 Si no aparece la llave privada histórica, la única salida segura es una actualización puente distribuida manualmente/corporativamente que instale la nueva llave pública. No se debe reactivar el instalador HTTP sin hash ni aceptar firmas omitidas.
+
+Cuando los clientes ya confíen en la nueva llave pública, active el manifiesto pendiente:
+
+```powershell
+Copy-Item `
+  'C:\Servicios\FileXfer\client-update.settings.pending.json' `
+  'C:\Servicios\FileXfer\client-update.settings.json'
+Restart-Service FileXferService
+```
+
+También puede usar `-EnableClientUpdates` en instalaciones futuras, pero solo si el paquete está firmado con la llave histórica o la versión puente ya fue desplegada.
 
 ## Despliegue por anillos
 

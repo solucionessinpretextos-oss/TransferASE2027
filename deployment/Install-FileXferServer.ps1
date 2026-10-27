@@ -33,6 +33,8 @@ param(
 
     [switch]$AllowLegacyDevelopmentSqlTransport,
 
+    [switch]$EnableClientUpdates,
+
     [Parameter(Mandatory)]
     [ValidatePattern('^https://')]
     [string]$HealthUri,
@@ -374,6 +376,18 @@ try {
     $stagedExe = Join-Path $stage 'FileXfer.Server.exe'
     if (-not (Test-Path -LiteralPath $stagedExe -PathType Leaf)) {
         throw 'El paquete no contiene FileXfer.Server.exe.'
+    }
+
+    $activeUpdateSettings = Join-Path $stage 'client-update.settings.json'
+    $pendingUpdateSettings = Join-Path $stage 'client-update.settings.pending.json'
+    if ($EnableClientUpdates) {
+        if (-not (Test-Path -LiteralPath $activeUpdateSettings -PathType Leaf)) {
+            throw 'Se solicitó habilitar actualizaciones, pero el paquete no contiene client-update.settings.json.'
+        }
+    }
+    elseif (Test-Path -LiteralPath $activeUpdateSettings -PathType Leaf) {
+        Move-Item -LiteralPath $activeUpdateSettings -Destination $pendingUpdateSettings
+        Write-Warning 'Actualización automática en espera: los clientes anteriores seguirán operando sin intentar un paquete firmado con la llave nueva.'
     }
 
     $stagedConfig = Join-Path $stage 'appsettings.Production.json'

@@ -52,6 +52,7 @@ Los valores secretos no se documentan en este informe.
 - Instalación con staging, respaldo, comprobación de salud y rollback.
 - Verificación de que IIS/Kestrel anterior no mantenga ocupado el puerto.
 - Canal de cliente exclusivamente HTTPS, con hash y firma RSA-PSS-SHA256.
+- Activación de actualizaciones diferida por defecto: el manifiesto queda pendiente hasta recuperar la llave histórica o completar la actualización puente.
 
 ## Bloqueadores externos pendientes
 
