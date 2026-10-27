@@ -107,6 +107,25 @@ static void TestSqlTransportPolicy()
             "LocalOnly",
             "Server=(localdb)\\MSSQLLocalDB;Database=FileXfer;Encrypt=True;TrustServerCertificate=False"),
         "La política SQL aceptó LocalDB en producción.");
+
+    SqlTransportPolicy.ValidateRestrictedDevelopmentDatabase(
+        "FileXferDev",
+        "Server=192.168.2.3\\SQL2014;Database=FileXferDev;Encrypt=False;TrustServerCertificate=True",
+        "FileXferDev");
+
+    Expect<InvalidOperationException>(
+        () => SqlTransportPolicy.ValidateRestrictedDevelopmentDatabase(
+            "WrongDatabase",
+            "Server=192.168.2.3;Database=FileXfer;Encrypt=False;TrustServerCertificate=True",
+            "FileXferDev"),
+        "La excepción SQL de pruebas aceptó una base productiva.");
+
+    Expect<InvalidOperationException>(
+        () => SqlTransportPolicy.ValidateRestrictedDevelopmentDatabase(
+            "PublicServer",
+            "Server=187.141.128.194;Database=FileXferDev;Encrypt=False;TrustServerCertificate=True",
+            "FileXferDev"),
+        "La excepción SQL de pruebas aceptó una IP pública.");
 }
 
 static void TestAlertConfigurationPolicy()

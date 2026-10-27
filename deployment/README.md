@@ -2,6 +2,8 @@
 
 La generación, firma y verificación de binarios está documentada en `RELEASE.md`. No publique manualmente una carpeta `bin/Release`: use el manifiesto firmado generado por `build/Build-Release.ps1`.
 
+Para la actualización en sitio del servidor publicado el 26/10/2026 use `INSTALACION-Y-ACTUALIZACION.md`. El diagnóstico de ese ZIP está en `BASELINE-SERVIDOR-20261026.md`; `Install-FileXferServer.ps1` invoca `Convert-LegacyServerConfiguration.ps1` para conservar la operación sin reintroducir el canal HTTP antiguo ni PFX dentro del paquete.
+
 ## Preflight automatizado
 
 Copie `staging-readiness.example.json` fuera del repositorio, reemplace todos los valores `.example` y configure las dos cadenas SQL exclusivamente en las variables de entorno indicadas por el perfil. El JSON no admite contraseñas, tokens, llaves ni cadenas de conexión embebidas.
@@ -45,7 +47,7 @@ La comprobación de storage debe ejecutarse bajo la misma cuenta configurada en 
 4. Ejecutar `sql/001_budi_transfer_archivos_hardening.sql` en BuDi con `sqlcmd -b -I`. El script usa una transacción, bloqueo de aplicación y postcondiciones; aborta y revierte si detecta duplicados o índices incompatibles.
 5. Revisar y ejecutar, en orden, `sql/002_filexferdb_idempotent.sql`, `sql/003_transfer_capabilities_2027.sql`, `sql/004_durable_alert_outbox_2027.sql` y `sql/005_disable_mfa_2027.sql` en FileXferDb. Los scripts son idempotentes; sus preflight abortan antes de truncar datos o crear índices sobre duplicados. El último normaliza cuentas heredadas y revoca sesiones antiguas.
 6. Ejecutar la fase `PostMigration`; esta confirma en `__EFMigrationsHistory` que se aplicó hasta `DisableMfa2027`, comprueba que no queden cuentas o enrolamientos MFA activos y verifica tablas de políticas, revisiones, recibos, cadena, índices de reanudación y `AlertOutboxDeliveries`.
-7. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.2.0.0 y updater desde artefactos firmados.
+7. Instalar primero el servidor (es compatible con el cliente anterior), validar salud y después distribuir cliente 2.2.1.0 y updater desde artefactos firmados.
 8. Ejecutar la fase `PostDeploy`; después validar login de cliente y administrativo únicamente con e.firma, renovación de sesión, consulta de políticas, catálogos y una carga controlada por cada acto soportado.
 9. Probar los cuatro PDF de control: válido, cifrado, reparable y con contenido activo. Confirmar mensajes, porcentajes y que la reparación se revalida.
 10. Cortar una carga a mitad, reintentar y comprobar que continúa desde un offset mayor que cero, genera una sola catalogación y un solo recibo.

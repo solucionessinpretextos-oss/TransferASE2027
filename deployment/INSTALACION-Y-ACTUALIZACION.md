@@ -1,97 +1,166 @@
 # Instalación y actualización de Transfer ASE
 
-## Qué contiene una liberación
+## Resultado esperado
 
-- `client/TransferClienteASE-<versión>-standalone-win-x64.exe`: cliente portátil de un solo archivo. No requiere instalar .NET, qpdf ni copiar DLL junto al EXE.
-- `client/TransferClienteASE-<versión>-win-x64.zip`: paquete firmado que consumen los clientes ya instalados. Conserva updater y llave pública externos para compatibilidad con versiones anteriores.
-- `server/FileXfer.Server-<versión>-win-x64.zip`: servidor autocontenido, Dashboard, manifiesto de actualización y el ZIP del cliente listo para servir.
-- `deployment/FileXfer.Deployment-<versión>.zip`: scripts, plantilla de producción y comprobaciones operativas.
+La actualización sustituye la versión anterior sin cambiar las bases de datos, la ruta UNC ni el puerto interno. El instalador trabaja en staging, conserva la versión anterior, valida el servicio nuevo y revierte automáticamente si `/healthz` no responde correctamente.
+
+Topología confirmada:
+
+```text
+Cliente de Internet
+  -> https://187.141.128.194:51236
+  -> NAT/firewall: 187.141.128.194:51236 -> 192.168.2.243:51136
+  -> FileXferService en C:\Servicios\FileXfer
+  -> SQL FileXferDev + SQL Budi_Dev + almacenamiento UNC
+```
+
+`51236` es el puerto público. Kestrel y el Firewall de Windows del servidor usan `51136`. Cambiar ambos a `51236` rompería la traducción actual o exigiría modificar el NAT.
+
+## Contenido de la liberación
+
+- `client/TransferClienteASE-<versión>-standalone-win-x64.exe`: cliente autónomo de un solo archivo. No requiere instalar .NET ni copiar DLL.
+- `client/TransferClienteASE-<versión>-win-x64.zip`: paquete firmado para actualización automática.
+- `server/FileXfer.Server-<versión>-win-x64.zip`: servidor autocontenido, Dashboard, manifiesto y ZIP cliente que se publicará.
+- `deployment/FileXfer.Deployment-<versión>.zip`: instalador transaccional, migrador de configuración y comprobaciones.
 - `release-manifest.json`, `release-manifest.sig` y `checksums.sha256`: evidencia criptográfica de la liberación.
 
-## Requisitos previos que no son opcionales
+El paquete nuevo no debe contener PFX, llaves privadas, instaladores históricos ni el contrato HTTP antiguo de actualización.
 
-1. Un nombre DNS para el servidor, por ejemplo `transfer.ase-sinaloa.gob.mx`, apuntando a `187.141.128.194` desde Internet y a `192.168.2.243` desde la red interna si se usa DNS dividido.
-2. Un certificado TLS válido cuyo SAN incluya ese DNS. Un certificado para `filexfer.local` no valida una conexión a la IP pública.
-3. Regla NAT del puerto TCP 51236 hacia `192.168.2.243:51236` y regla de Firewall de Windows.
-4. Cuenta de servicio con lectura/escritura sobre `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`. Para ambiente corporativo se recomienda gMSA; `LocalSystem` no es una identidad apropiada para un recurso UNC.
-5. La misma llave privada de actualización cuya llave pública ya poseen los clientes instalados. Sin ella no existe una migración automática segura desde esos clientes.
+## Datos que deben recuperarse antes de tocar el servidor
 
-## Primera instalación del servidor
+1. `Security__PathEncryptionKey` o `Security:PathEncryptionKey` de la instalación actual. Debe ser Base64 de 32 bytes. Si se sustituye, las rutas ya cifradas quedan ilegibles.
+2. Llave privada RSA histórica de actualización. Debe corresponder a `update-public.pem` instalado en los clientes anteriores.
+3. Certificado TLS confiable con SAN para el nombre DNS público recomendado o, si se insiste en usar la IP, SAN IP `187.141.128.194`.
+4. Raíces/intermedios SAT autorizados y lista exacta de hosts OCSP/CRL del SAT.
+5. Cuenta de servicio con lectura y escritura en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`.
 
-1. Importe el certificado TLS en `Certificados (equipo local) > Personal` y conceda lectura de su llave privada a la cuenta del servicio.
-2. Copie `appsettings.Production.template.json` como `appsettings.Production.json` fuera del repositorio.
-3. Sustituya todos los valores `__PENDIENTES__`. No deje secretos dentro del ZIP ni de Git.
-4. Compruebe que `Kestrel:Endpoints:Https:Certificate:Subject` identifica el certificado correcto y que el puerto es 51236.
-5. Abra PowerShell 7 como administrador en la carpeta del paquete de despliegue.
-6. Ejecute:
+No use `CER.cer` del paquete anterior como raíz SAT: es el certificado personal de una e.firma, no una autoridad de confianza.
+
+## Respaldo previo obligatorio
+
+En el servidor, abra PowerShell 7 como administrador:
+
+```powershell
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+Copy-Item 'C:\Servicios\FileXfer' "D:\Respaldos\FileXfer-$stamp" -Recurse
+sc.exe qc FileXferService | Out-File "D:\Respaldos\FileXferService-$stamp.txt"
+Get-ChildItem Env:Security__PathEncryptionKey,Env:Security__Jwt__SigningKey -ErrorAction SilentlyContinue |
+  Select-Object Name,@{Name='Presente';Expression={-not [string]::IsNullOrWhiteSpace($_.Value)}}
+```
+
+El último comando solo informa si los secretos existen; no los imprime.
+
+## Migración transparente desde la publicación del 26/10/2026
+
+La instalación anterior usa `appsettings.json`. El instalador detecta ese archivo, lo convierte en `appsettings.Production.json`, conserva conexiones, almacenamiento y puerto, elimina `Actualizaciones` HTTP y obliga a configurar seguridad faltante. Como la llave JWT encontrada es demasiado corta, la rota de forma automática; esto solo obliga a iniciar sesión otra vez y no modifica archivos ni rutas cifradas.
+
+Ejemplo:
 
 ```powershell
 pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
   -ServerPackagePath 'D:\Releases\2.2.1.0\server\FileXfer.Server-2.2.1.0-win-x64.zip' `
-  -ExpectedSha256 '<SHA256 TOMADO DE checksums.sha256>' `
+  -ExpectedSha256 '<SHA256 DE checksums.sha256>' `
+  -InstallDirectory 'C:\Servicios\FileXfer' `
+  -ServiceName 'FileXferService' `
+  -TlsCertificateSubject 'CN=transfer.ase-sinaloa.gob.mx' `
+  -AllowedHosts @('transfer.ase-sinaloa.gob.mx','187.141.128.194','192.168.2.243','localhost','127.0.0.1') `
+  -SatTrustedRootCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-root.cer') `
+  -SatIntermediateCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-intermediate.cer') `
+  -SatAllowedRevocationHosts @('ocsp.sat.gob.mx','crl.sat.gob.mx') `
+  -AllowLegacyDevelopmentSqlTransport `
+  -ServiceAccount 'DOMINIO\gmsa-filexfer$' `
+  -HealthUri 'https://transfer.ase-sinaloa.gob.mx:51236/healthz' `
+  -OpenWindowsFirewall
+```
+
+Los nombres SAT del ejemplo son ilustrativos: use únicamente rutas y hosts confirmados por la documentación/cadena real del SAT. El instalador se detiene si faltan; no habilita bypass.
+
+`-AllowLegacyDevelopmentSqlTransport` existe exclusivamente porque este servidor apunta a `FileXferDev` y `Budi_Dev` sobre IPv4 privadas con el TLS legado informado. El runtime rechaza esa excepción si cambia la base o el destino deja de ser privado. Retire el interruptor cuando SQL Server tenga TLS 1.2+, certificado confiable, `Encrypt=True` y `TrustServerCertificate=False`.
+
+Si la instalación anterior está en otra carpeta, indique el archivo de forma explícita:
+
+```powershell
+-LegacyConfigPath 'D:\PublicacionAnterior\appsettings.json'
+```
+
+Use `-GeneratePathEncryptionKeyForEmptyDatabase` solo si se verificó técnicamente que la base FileXfer no contiene ninguna ruta cifrada previa. No es un atajo de instalación.
+
+## Instalación limpia
+
+1. Copie `appsettings.Production.template.json` como `appsettings.Production.json` fuera de Git.
+2. Sustituya todos los marcadores `__...__`.
+3. Importe el certificado TLS en `Equipo local > Personal` y conceda lectura de su llave privada a la cuenta del servicio.
+4. Configure la llave de recibos RSA persistente y sus ACL.
+5. Ejecute el instalador con `-ProductionConfigPath`.
+
+```powershell
+pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
+  -ServerPackagePath 'D:\Releases\2.2.1.0\server\FileXfer.Server-2.2.1.0-win-x64.zip' `
+  -ExpectedSha256 '<SHA256 DE checksums.sha256>' `
   -ProductionConfigPath 'D:\Configuracion\FileXfer\appsettings.Production.json' `
   -HealthUri 'https://transfer.ase-sinaloa.gob.mx:51236/healthz' `
   -ServiceAccount 'DOMINIO\gmsa-filexfer$' `
   -OpenWindowsFirewall
 ```
 
-7. Confirme `HTTP 200` en `/healthz`, abra `/admin/` y pruebe autenticación con e.firma.
-8. Desde otro equipo descargue exactamente la URL publicada en `client-update.settings.json` y compruebe su SHA-256.
+## Qué hace el instalador
 
-El instalador extrae primero en staging, conserva la configuración productiva, detiene el servicio, mueve la versión anterior a un respaldo, instala, inicia y consulta salud con TLS normal. Si la salud falla, revierte a la carpeta anterior. No usa `-SkipCertificateCheck`.
+1. Verifica SHA-256 y rutas seguras del ZIP.
+2. Extrae a una carpeta temporal junto a la instalación.
+3. Migra o conserva la configuración y comprueba llaves, certificados, SAT, conexiones, ruta y puerto.
+4. Materializa las llaves históricas necesarias en la configuración migrada y restringe su ACL a administradores, `SYSTEM` y la cuenta del servicio.
+5. Detiene `FileXferService` y verifica que ningún IIS/Kestrel ajeno conserve `51136`.
+6. Renombra la versión anterior como respaldo; no la borra.
+7. Activa el servidor nuevo, actualiza el servicio e inicia.
+8. Consulta `/healthz` con validación TLS normal; nunca usa `SkipCertificateCheck`.
+9. Si algo falla, aparta la versión fallida, restaura la anterior y reinicia el servicio.
 
-## Actualizar el servidor
+Si el puerto sigue ocupado, determine si la publicación actual corre en IIS. No ejecute simultáneamente IIS y Windows Service sobre el mismo puerto.
 
-El nuevo ZIP ya lleva el manifiesto y el cliente que debe publicar. Para actualizar no repita la ruta de configuración: el instalador conserva la existente.
+## Validación posterior
 
 ```powershell
-pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
-  -ServerPackagePath 'D:\Releases\2.2.1.0\server\FileXfer.Server-2.2.1.0-win-x64.zip' `
-  -ExpectedSha256 '<SHA256 TOMADO DE checksums.sha256>' `
-  -HealthUri 'https://transfer.ase-sinaloa.gob.mx:51236/healthz' `
-  -ServiceAccount 'DOMINIO\gmsa-filexfer$'
+Get-Service FileXferService
+Get-NetTCPConnection -LocalPort 51136 -State Listen
+Invoke-WebRequest 'https://transfer.ase-sinaloa.gob.mx:51236/healthz'
 ```
 
-Conserve el respaldo hasta terminar el piloto. Después puede archivarlo fuera del servidor según la política de retención.
+Después:
+
+1. Abra `/admin/` e inicie sesión con e.firma.
+2. Pruebe con Juan Manuel Carrillo Rojo: consulta de oficios/requerimientos, carga, reanudación, recibo y descarga.
+3. Reinicie cliente y servicio durante una carga de prueba y confirme reanudación.
+4. Verifique un archivo grande y uno inválido/reparable.
+5. Confirme que el Dashboard distingue transmisión, completado, rechazado y falla.
 
 ## Actualización automática de clientes
 
-1. El cliente consulta `GET /admin/client-updates/transfer-cliente-ase?currentVersion=<versión>`.
-2. El servidor responde versión, URL HTTPS, SHA-256 y firma RSA-PSS-SHA256.
-3. El cliente descarga el ZIP, valida hash y firma antes de iniciar el updater.
-4. El updater vuelve a validar, espera el cierre del cliente, respalda, aplica y revierte si una copia falla.
-5. El cliente nuevo arranca desde el mismo directorio.
+1. El cliente consulta `GET /admin/client-updates/transfer-cliente-ase`.
+2. El servidor responde URL HTTPS, versión, SHA-256 y firma RSA-PSS-SHA256.
+3. Cliente y updater validan hash y firma antes de instalar.
+4. El updater usa staging, respaldo y rollback local.
 
-La liberación debe construirse con la llave histórica:
+La liberación productiva debe construirse con la llave histórica:
 
 ```powershell
 pwsh -NoProfile -File .\build\Build-Release.ps1 `
   -Version 2.2.1.0 `
-  -MinSupportedVersion 2.1.0.0 `
+  -MinSupportedVersion 2.0.1.2 `
   -DownloadUrl 'https://transfer.ase-sinaloa.gob.mx:51236/updates/TransferClienteASE-2.2.1.0-win-x64.zip' `
   -SigningKeyPath 'D:\Secretos\TransferASE\update-private.pem' `
   -TrustedPublicKeyPath 'D:\Configuracion\TransferASE\update-public.pem' `
   -CodeSigningCertificateThumbprint '<HUELLA AUTHENTICODE>' `
   -TimestampServer '<URL RFC3161 AUTORIZADA>' `
-  -ReleaseNotes 'Cliente autónomo y actualización automática endurecida.' `
+  -ReleaseNotes 'Cliente autónomo, reanudación durable y actualización segura.' `
   -IsCritical $true
 ```
 
-`update-private.pem` nunca se copia al servidor ni al repositorio. El servidor solo necesita metadatos firmados; los clientes llevan la llave pública.
-
-## Si no aparece la llave privada histórica
-
-No cambie el servidor para aceptar paquetes sin firma y no sustituya silenciosamente `update-public.pem`. Las opciones seguras son:
-
-1. Recuperar la llave histórica de la bóveda o respaldo y producir la actualización automática normal.
-2. Distribuir una única actualización puente por el mecanismo corporativo de software. Esa versión instala la nueva raíz pública; desde ese momento todas las versiones posteriores vuelven a ser automáticas.
-
-Criptográficamente no existe una tercera opción segura. El certificado público permite verificar, pero no permite fabricar una firma válida.
+Si no aparece la llave privada histórica, la única salida segura es una actualización puente distribuida manualmente/corporativamente que instale la nueva llave pública. No se debe reactivar el instalador HTTP sin hash ni aceptar firmas omitidas.
 
 ## Despliegue por anillos
 
-1. Instale manualmente el EXE autónomo en un equipo técnico.
-2. Publique a 3-5 equipos piloto y observe salud, fallas, reinicios y descargas grandes durante 24 horas.
-3. Mantenga en el servidor el ZIP anterior y su manifiesto durante la ventana de reversión.
-4. Habilite `IsCritical=true` para la población general solo después del piloto.
-5. Ante errores, retire `client-update.settings.json` nuevo o restaure servidor; nunca edite hashes ni firmas a mano.
+1. Equipo técnico.
+2. De 3 a 5 equipos piloto durante 24 horas.
+3. Población general solo si el piloto no presenta regresiones.
+4. Conserve el respaldo del servidor, ZIP anterior y manifiesto firmado durante toda la ventana.
+5. Ante una anomalía, retire el manifiesto nuevo y restaure el servidor; nunca edite firmas o hashes a mano.

@@ -161,10 +161,15 @@ try {
     try {
         $serverNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($entry in $serverArchive.Entries) {
-            $serverNames.Add($entry.FullName.Replace('\', '/')) | Out-Null
+            $normalizedServerName = $entry.FullName.Replace('\', '/')
+            $serverNames.Add($normalizedServerName) | Out-Null
             if ($entry.FullName -match '(?i)(^|/)appsettings\.Development\.json$' -or
                 $entry.FullName -match '(?i)\.pdb$') {
                 throw "El paquete de servidor contiene un archivo no productivo: $($entry.FullName)"
+            }
+            if ($normalizedServerName -match '(?i)(\.pfx$|\.p12$|\.key$|(^|/)(private|private[-_.]key|signing[-_.]key)(\.pem)?$)' -or
+                $normalizedServerName -match '(?i)(^|/)(UPDATES|wwwroot/UPDATES)/TransferClienteASE-setup.*\.exe$') {
+                throw "El paquete de servidor contiene material privado o un instalador legado: $normalizedServerName"
             }
         }
 
@@ -180,8 +185,54 @@ try {
         if ([Convert]::ToHexString($embeddedHash).ToLowerInvariant() -ne $clientHash) {
             throw 'El ZIP cliente incluido en el servidor no coincide con el paquete firmado.'
         }
+
+        $baseSettingsEntry = @($serverArchive.Entries | Where-Object {
+            $_.FullName.Replace('\', '/').Equals('appsettings.json', [StringComparison]::OrdinalIgnoreCase)
+        }) | Select-Object -First 1
+        if ($null -eq $baseSettingsEntry) { throw 'El paquete de servidor no contiene appsettings.json base.' }
+        $settingsReader = [IO.StreamReader]::new($baseSettingsEntry.Open(), [Text.Encoding]::UTF8, $true)
+        try { $baseSettings = $settingsReader.ReadToEnd() | ConvertFrom-Json }
+        finally { $settingsReader.Dispose() }
+        if ($null -ne $baseSettings.PSObject.Properties['Actualizaciones']) {
+            throw 'appsettings.json conserva el contrato de actualización HTTP legado.'
+        }
+        foreach ($value in @(
+            $baseSettings.ConnectionStrings.FileXferDb,
+            $baseSettings.ConnectionStrings.BudiDev,
+            $baseSettings.Security.Jwt.SigningKey,
+            $baseSettings.Security.PathEncryptionKey
+        )) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                throw 'appsettings.json base contiene conexiones o secretos que deben inyectarse en producción.'
+            }
+        }
     }
     finally { $serverArchive.Dispose() }
+
+    $deploymentArtifact = @($manifest.Artifacts | Where-Object { $_.Path -match '^deployment/.+\.zip$' })
+    if ($deploymentArtifact.Count -ne 1) { throw 'Debe existir exactamente un ZIP de despliegue.' }
+    $deploymentZip = Resolve-ArtifactPath $deploymentArtifact[0].Path
+    $deploymentArchive = [IO.Compression.ZipFile]::OpenRead($deploymentZip)
+    try {
+        $deploymentNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in $deploymentArchive.Entries) {
+            $deploymentNames.Add($entry.FullName.Replace('\', '/')) | Out-Null
+            if ($entry.FullName -match '(?i)(\.pfx$|\.p12$|\.key$|(^|/)(private|private[-_.]key|signing[-_.]key)(\.pem)?$)') {
+                throw "El paquete de despliegue contiene material privado: $($entry.FullName)"
+            }
+        }
+        foreach ($requiredDeploymentEntry in @(
+            'Install-FileXferServer.ps1',
+            'Convert-LegacyServerConfiguration.ps1',
+            'appsettings.Production.template.json',
+            'BASELINE-SERVIDOR-20261026.md'
+        )) {
+            if (-not $deploymentNames.Contains($requiredDeploymentEntry)) {
+                throw "El paquete de despliegue no contiene $requiredDeploymentEntry."
+            }
+        }
+    }
+    finally { $deploymentArchive.Dispose() }
 
     Write-Host "PASS release=$($manifest.Version) signed-manifest artifacts=$(@($manifest.Artifacts).Count) updater-verify-only"
 }

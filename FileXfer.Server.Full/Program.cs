@@ -176,7 +176,17 @@ if (!builder.Environment.IsDevelopment() &&
         "ConnectionStrings:BudiDev es obligatoria fuera de Development.");
 }
 
-if (!builder.Environment.IsDevelopment())
+var allowLegacyDevelopmentSqlTransport = builder.Configuration.GetValue<bool>(
+    "Security:SqlTransport:AllowLegacyDevelopmentSqlTransport");
+if (!builder.Environment.IsDevelopment() && allowLegacyDevelopmentSqlTransport)
+{
+    SqlTransportPolicy.ValidateRestrictedDevelopmentDatabase("FileXferDb", cs, "FileXferDev");
+    SqlTransportPolicy.ValidateRestrictedDevelopmentDatabase(
+        "BudiDev",
+        builder.Configuration.GetConnectionString("BudiDev"),
+        "Budi_Dev");
+}
+else if (!builder.Environment.IsDevelopment())
 {
     SqlTransportPolicy.ValidateProduction("FileXferDb", cs);
     SqlTransportPolicy.ValidateProduction(
@@ -364,6 +374,12 @@ builder.Services.AddSingleton<IAlertDeliveryState>(sp => sp.GetRequiredService<A
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<AlertDeliveryQueue>());
 
 var app = builder.Build();
+
+if (allowLegacyDevelopmentSqlTransport)
+{
+    app.Logger.LogWarning(
+        "SQL de pruebas opera temporalmente sin autenticación TLS. La excepción está limitada a FileXferDev/Budi_Dev en IPv4 privada y no es apta para producción.");
+}
 
 using (var scope = app.Services.CreateScope())
 {
