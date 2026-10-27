@@ -200,7 +200,8 @@ try {
             $baseSettings.ConnectionStrings.FileXferDb,
             $baseSettings.ConnectionStrings.BudiDev,
             $baseSettings.Security.Jwt.SigningKey,
-            $baseSettings.Security.PathEncryptionKey
+            $baseSettings.Security.PathEncryptionKey,
+            $baseSettings.Security.LegacyPathEncryptionKey
         )) {
             if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
                 throw 'appsettings.json base contiene conexiones o secretos que deben inyectarse en producción.'
@@ -224,6 +225,7 @@ try {
         foreach ($requiredDeploymentEntry in @(
             'Install-FileXferServer.ps1',
             'Convert-LegacyServerConfiguration.ps1',
+            'Find-FileXferPathKeys.ps1',
             'appsettings.Production.template.json',
             'BASELINE-SERVIDOR-20261026.md'
         )) {

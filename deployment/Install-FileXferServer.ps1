@@ -31,6 +31,8 @@ param(
 
     [switch]$GeneratePathEncryptionKeyForEmptyDatabase,
 
+    [switch]$AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog,
+
     [switch]$AllowLegacyDevelopmentSqlTransport,
 
     [switch]$EnableClientUpdates,
@@ -213,6 +215,16 @@ function Assert-ProductionConfiguration {
     catch { throw 'Security:PathEncryptionKey no contiene Base64 válido.' }
     if ($pathKeyBytes.Length -ne 32) { throw 'Security:PathEncryptionKey debe decodificar exactamente 32 bytes.' }
 
+    $legacyPathKey = [string](Get-Setting $config @('Security', 'LegacyPathEncryptionKey') 'Security__LegacyPathEncryptionKey')
+    if ([string]::IsNullOrWhiteSpace($legacyPathKey)) {
+        if (-not $AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog) {
+            throw 'Falta Security:LegacyPathEncryptionKey. La instalación se detuvo para proteger el acceso a rutas históricas.'
+        }
+    }
+    elseif ($legacyPathKey.Length -lt 8) {
+        throw 'Security:LegacyPathEncryptionKey debe contener al menos 8 caracteres.'
+    }
+
     $allowEphemeral = Get-NestedValue $config @('Security', 'Receipts', 'AllowEphemeralDevelopmentKey')
     if ([bool]$allowEphemeral) {
         throw 'Security:Receipts:AllowEphemeralDevelopmentKey debe ser false en producción.'
@@ -295,6 +307,9 @@ function Convert-LegacyConfiguration {
     }
     if ($GeneratePathEncryptionKeyForEmptyDatabase) {
         $arguments.GeneratePathEncryptionKeyForEmptyDatabase = $true
+    }
+    if ($AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog) {
+        $arguments.AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog = $true
     }
     if ($AllowLegacyDevelopmentSqlTransport) {
         $arguments.AllowLegacyDevelopmentSqlTransport = $true

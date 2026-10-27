@@ -28,11 +28,12 @@ El paquete nuevo no debe contener PFX, llaves privadas, instaladores históricos
 
 ## Datos que deben recuperarse antes de tocar el servidor
 
-1. `Security__PathEncryptionKey` o `Security:PathEncryptionKey` de la instalación actual. Debe ser Base64 de 32 bytes. Si se sustituye, las rutas ya cifradas quedan ilegibles.
-2. Llave privada RSA histórica de actualización. Debe corresponder a `update-public.pem` instalado en los clientes anteriores.
-3. Certificado TLS confiable con SAN para el nombre DNS público recomendado o, si se insiste en usar la IP, SAN IP `187.141.128.194`.
-4. Raíces/intermedios SAT autorizados y lista exacta de hosts OCSP/CRL del SAT.
-5. Cuenta de servicio con lectura y escritura en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`.
+1. `Security__PathEncryptionKey` o `Security:PathEncryptionKey` de la instalación actual. Debe ser Base64 de 32 bytes. Si se sustituye, las rutas AES v2 ya cifradas quedan ilegibles.
+2. `Security__LegacyPathEncryptionKey` o `Security:LegacyPathEncryptionKey` de la instalación actual. Debe tener al menos 8 caracteres y permite abrir las rutas DES históricas.
+3. Llave privada RSA histórica de actualización. Debe corresponder a `update-public.pem` instalado en los clientes anteriores.
+4. Certificado TLS confiable con SAN para el nombre DNS público recomendado o, si se insiste en usar la IP, SAN IP `187.141.128.194`.
+5. Raíces/intermedios SAT autorizados y lista exacta de hosts OCSP/CRL del SAT.
+6. Cuenta de servicio con lectura y escritura en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`.
 
 No use `CER.cer` del paquete anterior como raíz SAT: es el certificado personal de una e.firma, no una autoridad de confianza.
 
@@ -44,11 +45,21 @@ En el servidor, abra PowerShell 7 como administrador:
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 Copy-Item 'C:\Servicios\FileXfer' "D:\Respaldos\FileXfer-$stamp" -Recurse
 sc.exe qc FileXferService | Out-File "D:\Respaldos\FileXferService-$stamp.txt"
-Get-ChildItem Env:Security__PathEncryptionKey,Env:Security__Jwt__SigningKey -ErrorAction SilentlyContinue |
+Get-ChildItem Env:Security__PathEncryptionKey,Env:Security__LegacyPathEncryptionKey,Env:Security__Jwt__SigningKey -ErrorAction SilentlyContinue |
   Select-Object Name,@{Name='Presente';Expression={-not [string]::IsNullOrWhiteSpace($_.Value)}}
 ```
 
 El último comando solo informa si los secretos existen; no los imprime.
+
+Si alguna llave no aparece a nivel de máquina, ejecute desde el paquete de despliegue:
+
+```powershell
+& .\Find-FileXferPathKeys.ps1 `
+  -InstallDirectory 'C:\Servicios\FileXfer' `
+  -ServiceName 'FileXferService'
+```
+
+La herramienta inspecciona únicamente las configuraciones conocidas, el entorno de máquina, el entorno específico del servicio y el perfil de su cuenta. Valida las llaves, muestra solo su origen y una huella abreviada, y las deja disponibles en el PowerShell actual. No cierre esa consola antes de ejecutar el instalador.
 
 ## Migración transparente desde la publicación del 26/10/2026
 
@@ -86,6 +97,8 @@ Si la instalación anterior está en otra carpeta, indique el archivo de forma e
 ```
 
 Use `-GeneratePathEncryptionKeyForEmptyDatabase` solo si se verificó técnicamente que la base FileXfer no contiene ninguna ruta cifrada previa. No es un atajo de instalación.
+
+Use `-AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog` solo si una consulta comprobó que `Transfer_ArchivosLocales` no contiene ninguna ruta sin prefijo `v2:`. El inventario del 27/10/2026 encontró 8,435 rutas heredadas, por lo que este interruptor está prohibido para el servidor actual.
 
 ## Instalación limpia
 

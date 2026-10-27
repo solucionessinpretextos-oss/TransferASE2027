@@ -38,6 +38,15 @@ Los valores secretos no se documentan en este informe.
 10. La llave JWT legada tiene menos de 32 caracteres. El migrador la rota por una llave aleatoria robusta; las sesiones activas deberán autenticarse nuevamente una vez.
 11. Las conexiones `FileXferDev` y `Budi_Dev` desactivan cifrado y confían en certificados no validados. El runtime endurecido las rechaza en producción; la migración incorpora una excepción temporal limitada a esas dos bases y a IPv4 privadas.
 
+## Inventario de cifrado de rutas del 27/10/2026
+
+Una consulta de solo lectura sobre `Budi_Dev.dbo.Transfer_ArchivosLocales`, sin extraer rutas, confirmó 8,490 registros: 55 con formato AES-GCM `v2:` y 8,435 con formato heredado sin prefijo. En consecuencia, esta instalación exige recuperar **ambas** llaves antes del cambio:
+
+- `Security__PathEncryptionKey`, Base64 de exactamente 32 bytes, para las 55 rutas v2;
+- `Security__LegacyPathEncryptionKey`, con al menos 8 caracteres, para las 8,435 rutas DES históricas.
+
+No use `-GeneratePathEncryptionKeyForEmptyDatabase` ni `-AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog` en este servidor. Cualquiera de esas excepciones contradice el inventario real y dejaría documentos inaccesibles.
+
 ## Decisiones aplicadas a la liberación nueva
 
 - Migrador explícito de `appsettings.json` a `appsettings.Production.json`.
