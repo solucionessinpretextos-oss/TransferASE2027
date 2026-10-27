@@ -41,6 +41,13 @@ No use `CER.cer` del paquete anterior como raíz SAT: es el certificado personal
 
 En el servidor, abra PowerShell 7 como administrador:
 
+Compruebe primero el motor. La instalación requiere versión 7 o superior; la utilidad de recuperación de llaves sí es compatible con Windows PowerShell 5.1.
+
+```powershell
+$PSVersionTable.PSVersion
+Get-Command pwsh.exe -ErrorAction Stop
+```
+
 ```powershell
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 Copy-Item 'C:\Servicios\FileXfer' "D:\Respaldos\FileXfer-$stamp" -Recurse

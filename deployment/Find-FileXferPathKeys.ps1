@@ -42,12 +42,14 @@ function Get-Fingerprint {
     param([string]$Value)
 
     $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
     try {
-        $hash = [Security.Cryptography.SHA256]::HashData($bytes)
-        return [Convert]::ToHexString($hash).Substring(0, 12)
+        $hash = $sha256.ComputeHash($bytes)
+        return ([BitConverter]::ToString($hash).Replace('-', '').Substring(0, 12))
     }
     finally {
-        [Security.Cryptography.CryptographicOperations]::ZeroMemory($bytes)
+        $sha256.Dispose()
+        [Array]::Clear($bytes, 0, $bytes.Length)
     }
 }
 
@@ -107,10 +109,12 @@ foreach ($root in $configurationRoots) {
             Write-Warning "Se omitió JSON inválido: $($file.FullName)"
             continue
         }
-        $security = $json.PSObject.Properties['Security']?.Value
-        if ($null -eq $security) { continue }
+        $securityProperty = $json.PSObject.Properties['Security']
+        if ($null -eq $securityProperty) { continue }
+        $security = $securityProperty.Value
         foreach ($definition in $settingDefinitions) {
-            $value = $security.PSObject.Properties[$definition.JsonName]?.Value
+            $valueProperty = $security.PSObject.Properties[$definition.JsonName]
+            $value = if ($null -eq $valueProperty) { $null } else { $valueProperty.Value }
             Add-KeyCandidate $definition.EnvironmentName ([string]$value) $file.FullName
         }
     }
@@ -138,7 +142,7 @@ foreach ($definition in $settingDefinitions) {
         try { $decoded = [Convert]::FromBase64String($value) }
         catch { throw 'La llave AES v2 encontrada no contiene Base64 válido.' }
         if ($decoded.Length -ne 32) { throw 'La llave AES v2 encontrada no decodifica exactamente 32 bytes.' }
-        [Security.Cryptography.CryptographicOperations]::ZeroMemory($decoded)
+        [Array]::Clear($decoded, 0, $decoded.Length)
     }
     elseif ($value.Length -lt 8) {
         throw 'La llave DES heredada encontrada contiene menos de 8 caracteres.'
