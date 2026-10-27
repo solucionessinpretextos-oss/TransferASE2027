@@ -75,12 +75,13 @@ No conceda ejecución a usuarios generales sobre el volumen de documentos. El se
 | `Storage__ResumeRetentionHours` | Vida del parcial | Recomendado 72; rango permitido 1–168 |
 | `AllowedHosts` | Hosts HTTP válidos | Lista explícita en producción, nunca `*` |
 | `Security__Jwt__SigningKey` | Firma JWT | Secreto aleatorio de al menos 32 bytes |
-| `Security__PathEncryptionKey` | Protección de rutas | Base64 de exactamente 32 bytes |
+| `Security__PathEncryptionKey` | Lectura/escritura AES v2 | Opcional con `LegacyDes` cuando el catálogo no contiene rutas `v2:` |
 | `Security__LegacyPathEncryptionKey` | Compatibilidad de rutas BuDi | Conserve la llave histórica; DES utiliza sus primeros ocho caracteres |
 | `Security__PathWriteFormat` | Formato de rutas nuevas | `LegacyDes` mientras otros sistemas compartan la columna cifrada |
 | `Security__Receipts__PrivateKeyPemPath` | Firma de recibos | RSA persistente de 3072 bits o más |
 | `Security__SAT__TrustedRootCertificatePaths__N` | Raíces SAT | Archivos de confianza explícitos |
-| `Security__SAT__AllowedRevocationHosts__N` | OCSP/CRL | Allowlist estricta |
+| `Security__SAT__RequireOcsp` | Revocación | `false` valida la cadena local; `true` activa consulta en línea |
+| `Security__SAT__AllowedRevocationHosts__N` | OCSP/CRL | Obligatorio y estricto solo cuando `RequireOcsp=true` |
 
 ### Ejemplo sin secretos
 
@@ -116,7 +117,7 @@ No conceda ejecución a usuarios generales sobre el volumen de documentos. El se
 
 - Cliente y Dashboard autentican exclusivamente con e.firma.
 - No existen rutas runtime de MFA/TOTP.
-- Producción exige cadena SAT, revocación y hosts OCSP/CRL autorizados.
+- Producción exige cadena SAT confiable. La configuración actual valida localmente AC5/AC6/AC7 con `RequireOcsp=false`; no confirma revocación en tiempo real.
 - `AllowDevelopmentUntrustedChain` solo puede existir en Development.
 - Cambios de rol, dispositivo o `SecurityVersion` invalidan sesiones anteriores.
 

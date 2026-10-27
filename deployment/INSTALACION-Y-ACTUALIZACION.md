@@ -28,12 +28,12 @@ El paquete nuevo no debe contener PFX, llaves privadas, instaladores históricos
 
 ## Datos que deben recuperarse antes de tocar el servidor
 
-1. `Security__PathEncryptionKey` o `Security:PathEncryptionKey` de la instalación actual. Debe ser Base64 de 32 bytes. Si se sustituye, las rutas AES v2 ya cifradas quedan ilegibles.
+1. `Security__PathEncryptionKey` o `Security:PathEncryptionKey` solo si el catálogo contiene rutas AES `v2:`. El saneamiento del 27/10/2026 dejó cero rutas `v2:`; con `PathWriteFormat=LegacyDes` puede permanecer vacío.
 2. `Security__LegacyPathEncryptionKey` o `Security:LegacyPathEncryptionKey` de la instalación actual. Debe tener al menos 8 caracteres y permite abrir las rutas DES históricas.
    Esta misma llave permite escribir nuevas rutas en el formato que siguen consumiendo los demás sistemas BuDi. `Security:PathWriteFormat` debe ser `LegacyDes` en la configuración del servidor compartido; el migrador y la plantilla ya lo establecen. No cambie la llave cada quince días mientras existan registros cifrados con ella. El formato DES histórico usa únicamente sus primeros ocho caracteres.
-3. Llave privada RSA histórica de actualización. Debe corresponder a `update-public.pem` instalado en los clientes anteriores.
+3. Medio de distribución manual/corporativo para una versión puente. El actualizador anterior no verificaba firmas y no existe una llave RSA histórica que recuperar.
 4. Certificado TLS confiable con SAN para el nombre DNS público recomendado o, si se insiste en usar la IP, SAN IP `187.141.128.194`.
-5. Raíces/intermedios SAT autorizados y lista exacta de hosts OCSP/CRL del SAT.
+5. Raíces/intermedios SAT autorizados. El paquete incluye ARC5/ARC6 y AC5/AC6/AC7 para validación local. Los hosts OCSP/CRL solo son necesarios si después se activa `RequireOcsp=true`.
 6. Cuenta de servicio con lectura y escritura en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`, el storage del entorno Budi_Dev. El storage 192.168.2.19 pertenece al servicio BUZONDIGITAL actualmente instalado.
 
 No use `CER.cer` del paquete anterior como raíz SAT: es el certificado personal de una e.firma, no una autoridad de confianza.
@@ -71,7 +71,7 @@ La herramienta inspecciona únicamente las configuraciones conocidas, el entorno
 
 ## Preparación de la migración desde la publicación del 26/10/2026
 
-La instalación de pruebas usa `appsettings.json` con FileXferDev/Budi_Dev y storage 192.168.2.21. Prepare fuera de Git un `appsettings.Production.json` basado en la plantilla, conservando esas conexiones, el storage y ambas llaves verificadas. Indique ese archivo mediante `-ProductionConfigPath`. El instalador abortará antes de detener el servicio si las bases, el storage o las llaves no coinciden con el catálogo.
+La instalación de pruebas usa `appsettings.json` con FileXferDev/Budi_Dev y storage 192.168.2.21. Prepare fuera de Git un `appsettings.Production.json` basado en la plantilla, conservando esas conexiones, el storage y la llave DES compartida. La llave AES puede quedar vacía porque el saneamiento dejó cero rutas `v2:`. Indique ese archivo mediante `-ProductionConfigPath`. El instalador abortará antes de detener el servicio si las bases, el storage o las llaves necesarias no coinciden con el catálogo.
 
 Por omisión, el instalador deja `client-update.settings.json` como `client-update.settings.pending.json`. Así los clientes anteriores reciben `404` silencioso y continúan trabajando, en vez de intentar un paquete firmado con una llave que todavía no conocen. No agregue `-EnableClientUpdates` durante esta primera migración.
 
@@ -86,9 +86,6 @@ pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
   -ServiceName 'FileXferPruebas.Server' `
   -TlsCertificateSubject 'CN=transfer-pruebas.ase-sinaloa.local' `
   -AllowedHosts @('transfer-pruebas.ase-sinaloa.local','SERVERDIG1','187.141.128.194','192.168.2.243','localhost','127.0.0.1') `
-  -SatTrustedRootCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-root.cer') `
-  -SatIntermediateCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-intermediate.cer') `
-  -SatAllowedRevocationHosts @('ocsp.sat.gob.mx','crl.sat.gob.mx') `
   -AllowLegacyDevelopmentSqlTransport `
   -ServiceAccount 'Ase-sinaloa\juan.carrillo' `
   -HttpsPort 51136 `
@@ -97,7 +94,7 @@ pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
   -OpenWindowsFirewall
 ```
 
-El DNS, el certificado TLS y los nombres SAT del ejemplo deben sustituirse por los autorizados. La cuenta mostrada es la que actualmente ejecuta `FileXferPruebas.Server`; el instalador conserva su identidad y la contraseña almacenada por Windows, y aborta si se intenta cambiarla durante el corte. Confirme sus permisos sobre la ruta UNC. El archivo de configuración debe fijar Kestrel en 51136. El instalador se detiene si faltan las raíces y hosts SAT; no habilita bypass.
+El DNS y el certificado TLS del ejemplo deben sustituirse por los autorizados. La cuenta mostrada es la que actualmente ejecuta `FileXferPruebas.Server`; el instalador conserva su identidad y la contraseña almacenada por Windows, y aborta si se intenta cambiarla durante el corte. Confirme sus permisos sobre la ruta UNC. El archivo de configuración debe fijar Kestrel en 51136. El paquete incorpora las autoridades SAT locales y el instalador se detiene si faltan; no habilita bypass. Con `RequireOcsp=false` no exige hosts de revocación.
 
 `-AllowLegacyDevelopmentSqlTransport` existe para FileXferDev en 192.168.2.3\SQL2014 y Budi_Dev en 192.168.2.8, con el transporte SQL de pruebas informado. El instalador valida ambos servidores, ambas bases y el storage 192.168.2.21 antes de detener un servicio. Retire la excepción cuando SQL Server tenga TLS 1.2+, certificado confiable, `Encrypt=True` y `TrustServerCertificate=False`.
 
@@ -107,11 +104,11 @@ Use como referencia la configuración actual de `FileXferPruebas.Server`; el ins
 -LegacyConfigPath 'D:\PublicacionAnterior\appsettings.json'
 ```
 
-No use `-GeneratePathEncryptionKeyForEmptyDatabase` para Budi_Dev: el inventario contiene 55 rutas AES v2 y generar otra llave impediría abrirlas.
+No use `-GeneratePathEncryptionKeyForEmptyDatabase` por costumbre. El catálogo quedó sin rutas AES v2 y no necesita una llave AES nueva mientras escriba `LegacyDes`.
 
 La llave DES compartida es obligatoria aun cuando se migre a un catálogo nuevo, porque el formato de escritura debe seguir siendo legible para los demás sistemas BuDi.
 
-El servicio lee tanto las rutas DES históricas como las 55 rutas AES `v2:` existentes. Aunque escriba rutas nuevas con el formato compartido DES, todavía necesita la llave AES original para leer las 55 anteriores. El instalador no acepta otra llave ni sustituye esos registros automáticamente. Verifique la disponibilidad de ambas llaves y de las rutas antes del cambio de servicio.
+El servicio lee rutas DES históricas y puede leer AES `v2:` cuando se configura la llave correspondiente. Actualmente no existen rutas `v2:` activas. Si otro sistema vuelve a escribir una, el preflight detendrá el despliegue hasta configurar la llave AES correcta; nunca generará una sustituta silenciosa.
 
 ## Instalación limpia
 
@@ -172,7 +169,7 @@ Después:
 3. Cliente y updater validan hash y firma antes de instalar.
 4. El updater usa staging, respaldo y rollback local.
 
-La liberación productiva debe construirse con la llave histórica:
+La liberación endurecida se construye con la nueva llave de firma protegida:
 
 ```powershell
 pwsh -NoProfile -File .\build\Build-Release.ps1 `
@@ -187,7 +184,7 @@ pwsh -NoProfile -File .\build\Build-Release.ps1 `
   -IsCritical $true
 ```
 
-Si no aparece la llave privada histórica, la única salida segura es una actualización puente distribuida manualmente/corporativamente que instale la nueva llave pública. No se debe reactivar el instalador HTTP sin hash ni aceptar firmas omitidas.
+No existe una llave privada histórica: el canal anterior no verificaba firmas. La primera versión endurecida debe distribuirse manualmente/corporativamente como puente para instalar la nueva llave pública. No se debe reactivar el instalador HTTP sin hash ni aceptar firmas omitidas.
 
 Cuando los clientes ya confíen en la nueva llave pública, active el manifiesto pendiente:
 
@@ -198,7 +195,7 @@ Copy-Item `
 Restart-Service FileXferPruebas.Server
 ```
 
-También puede usar `-EnableClientUpdates` en instalaciones futuras, pero solo si el paquete está firmado con la llave histórica o la versión puente ya fue desplegada.
+También puede usar `-EnableClientUpdates` en instalaciones futuras, pero solo cuando la versión puente ya esté desplegada y los clientes confíen en la nueva llave pública.
 
 ## Despliegue por anillos
 

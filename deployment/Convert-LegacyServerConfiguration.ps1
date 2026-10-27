@@ -191,15 +191,15 @@ if ([string]::IsNullOrWhiteSpace($pathKey)) {
     $pathKey = [Environment]::GetEnvironmentVariable($PathEncryptionKeyEnvironmentVariable)
 }
 if ([string]::IsNullOrWhiteSpace($pathKey)) {
-    if (-not $GeneratePathEncryptionKeyForEmptyDatabase) {
-        throw "No se encontró Security:PathEncryptionKey. Recupere la llave histórica; generar otra impediría leer rutas existentes. Use -GeneratePathEncryptionKeyForEmptyDatabase únicamente si la base no contiene rutas cifradas."
+    if ($GeneratePathEncryptionKeyForEmptyDatabase) {
+        $keyBytes = [byte[]]::new(32)
+        [Security.Cryptography.RandomNumberGenerator]::Fill($keyBytes)
+        $pathKey = [Convert]::ToBase64String($keyBytes)
     }
-    $keyBytes = [byte[]]::new(32)
-    [Security.Cryptography.RandomNumberGenerator]::Fill($keyBytes)
-    $pathKey = [Convert]::ToBase64String($keyBytes)
-    Set-Value $security 'PathEncryptionKey' $pathKey
 }
-Assert-Base64Key32 $pathKey 'Security:PathEncryptionKey'
+if (-not [string]::IsNullOrWhiteSpace($pathKey)) {
+    Assert-Base64Key32 $pathKey 'Security:PathEncryptionKey'
+}
 Set-Value $security 'PathEncryptionKey' $pathKey
 $legacyPathKey = [string](Get-PropertyValue $security 'LegacyPathEncryptionKey')
 if ([string]::IsNullOrWhiteSpace($legacyPathKey)) {
@@ -233,15 +233,28 @@ Set-Value $receipts 'AllowEphemeralDevelopmentKey' $false
 $sat = Ensure-Object $security 'SAT'
 Set-Value $sat 'AllowDevelopmentBypass' $false
 Set-Value $sat 'AllowDevelopmentUntrustedChain' $false
-Set-Default $sat 'RequireOcsp' $true
+Set-Value $sat 'RequireOcsp' ($SatAllowedRevocationHosts.Count -gt 0)
 Set-Default $sat 'AcceptClockSkewMinutes' 10
 Set-Default $sat 'FailOnUnknownRevocation' $true
 Set-Default $sat 'OnlineTimeoutMs' 4000
 if ($SatTrustedRootCertificatePaths.Count -gt 0) {
     Set-Value $sat 'TrustedRootCertificatePaths' @($SatTrustedRootCertificatePaths)
 }
+elseif (@(@(Get-PropertyValue $sat 'TrustedRootCertificatePaths') |
+    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }).Count -eq 0) {
+    Set-Value $sat 'TrustedRootCertificatePaths' @(
+        'certificates/sat/ARC5_IES.cer',
+        'certificates/sat/ARC6_IES.cer')
+}
 if ($SatIntermediateCertificatePaths.Count -gt 0) {
     Set-Value $sat 'IntermediateCertificatePaths' @($SatIntermediateCertificatePaths)
+}
+elseif (@(@(Get-PropertyValue $sat 'IntermediateCertificatePaths') |
+    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }).Count -eq 0) {
+    Set-Value $sat 'IntermediateCertificatePaths' @(
+        'certificates/sat/AC5_SAT.cer',
+        'certificates/sat/AC6_SAT.cer',
+        'certificates/sat/AC7_SAT.cer')
 }
 if ($SatAllowedRevocationHosts.Count -gt 0) {
     Set-Value $sat 'AllowedRevocationHosts' @($SatAllowedRevocationHosts)
@@ -250,8 +263,11 @@ $trustedRootPaths = @(@(Get-PropertyValue $sat 'TrustedRootCertificatePaths') |
     Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 $allowedRevocationHosts = @(@(Get-PropertyValue $sat 'AllowedRevocationHosts') |
     Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-if ($trustedRootPaths.Count -eq 0 -or $allowedRevocationHosts.Count -eq 0) {
-    throw 'La migración requiere raíces SAT confiables y hosts OCSP/CRL permitidos. No se habilitará bypass productivo.'
+if ($trustedRootPaths.Count -eq 0) {
+    throw 'La migración requiere raíces SAT confiables. No se habilitará bypass productivo.'
+}
+if ([bool](Get-PropertyValue $sat 'RequireOcsp') -and $allowedRevocationHosts.Count -eq 0) {
+    throw 'RequireOcsp=true exige hosts OCSP/CRL permitidos.'
 }
 
 $rateLimit = Ensure-Object $security 'AuthRateLimit'

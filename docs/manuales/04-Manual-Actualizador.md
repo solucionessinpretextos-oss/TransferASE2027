@@ -32,6 +32,10 @@ La llave privada de liberación permanece fuera del repositorio. La llave públi
 
 > **IMPORTANTE:** cambiar silenciosamente `update-public.pem` rompe la cadena de confianza. La rotación requiere una versión puente firmada con la llave anterior y un periodo de solapamiento.
 
+### Migración desde el actualizador anterior
+
+El actualizador anterior solo comparaba versión y descargaba el instalador; no tenía una llave pública embebida ni verificaba firma RSA. Por tanto, no existe una “llave privada histórica” que recuperar. La primera transición debe distribuirse manualmente o mediante software corporativo: esa versión puente instala el cliente endurecido y su nueva llave pública. A partir de entonces, todas las actualizaciones se verifican con hash y RSA-PSS-SHA256. No reactive el canal HTTP ni permita firmas vacías para evitar el puente.
+
 ## Requisitos de liberación
 
 - PowerShell 7, .NET 8 SDK, Node.js/npm y qpdf.

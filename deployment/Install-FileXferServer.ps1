@@ -241,11 +241,6 @@ function Assert-ProductionConfiguration {
         throw 'Security:Jwt:SigningKey debe ser un secreto real de al menos 32 caracteres.'
     }
 
-    $pathKey = [string](Get-Setting $config @('Security', 'PathEncryptionKey') 'Security__PathEncryptionKey')
-    try { $pathKeyBytes = [Convert]::FromBase64String($pathKey) }
-    catch { throw 'Security:PathEncryptionKey no contiene Base64 válido.' }
-    if ($pathKeyBytes.Length -ne 32) { throw 'Security:PathEncryptionKey debe decodificar exactamente 32 bytes.' }
-
     $legacyPathKey = [string](Get-Setting $config @('Security', 'LegacyPathEncryptionKey') 'Security__LegacyPathEncryptionKey')
     if ([string]::IsNullOrWhiteSpace($legacyPathKey)) {
         throw 'Falta Security:LegacyPathEncryptionKey. La instalación exige la llave compartida con BuDi para leer y escribir rutas.'
@@ -260,6 +255,13 @@ function Assert-ProductionConfiguration {
     }
     if ($pathWriteFormat -ne 'LegacyDes') {
         throw 'Security:PathWriteFormat debe ser LegacyDes para conservar el formato de rutas compartido con BuDi.'
+    }
+
+    $pathKey = [string](Get-Setting $config @('Security', 'PathEncryptionKey') 'Security__PathEncryptionKey')
+    if (-not [string]::IsNullOrWhiteSpace($pathKey)) {
+        try { $pathKeyBytes = [Convert]::FromBase64String($pathKey) }
+        catch { throw 'Security:PathEncryptionKey no contiene Base64 válido.' }
+        if ($pathKeyBytes.Length -ne 32) { throw 'Security:PathEncryptionKey debe decodificar exactamente 32 bytes.' }
     }
 
     $allowEphemeral = Get-NestedValue $config @('Security', 'Receipts', 'AllowEphemeralDevelopmentKey')
@@ -277,14 +279,26 @@ function Assert-ProductionConfiguration {
 
     $trustedRoots = @(@(Get-NestedValue $config @('Security', 'SAT', 'TrustedRootCertificatePaths')) |
         Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $intermediates = @(@(Get-NestedValue $config @('Security', 'SAT', 'IntermediateCertificatePaths')) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
     $revocationHosts = @(@(Get-NestedValue $config @('Security', 'SAT', 'AllowedRevocationHosts')) |
         Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    if ($trustedRoots.Count -eq 0 -or $revocationHosts.Count -eq 0) {
-        throw 'Faltan raíces SAT confiables o hosts OCSP/CRL permitidos.'
+    if ($trustedRoots.Count -eq 0) {
+        throw 'Faltan raíces SAT confiables para validar localmente la e.firma.'
     }
-    foreach ($certificatePath in $trustedRoots) {
-        if (-not (Test-Path -LiteralPath ([string]$certificatePath) -PathType Leaf)) {
-            throw "No existe la raíz SAT configurada: $certificatePath"
+    $requireOcsp = [bool](Get-NestedValue $config @('Security', 'SAT', 'RequireOcsp'))
+    if ($requireOcsp -and $revocationHosts.Count -eq 0) {
+        throw 'RequireOcsp=true exige declarar hosts OCSP/CRL permitidos.'
+    }
+    $configDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($Path))
+    foreach ($certificatePath in @($trustedRoots + $intermediates)) {
+        $resolvedSatCertificatePath = if ([IO.Path]::IsPathRooted([string]$certificatePath)) {
+            [string]$certificatePath
+        } else {
+            Join-Path $configDirectory ([string]$certificatePath)
+        }
+        if (-not (Test-Path -LiteralPath $resolvedSatCertificatePath -PathType Leaf)) {
+            throw "No existe la autoridad SAT configurada: $resolvedSatCertificatePath"
         }
     }
     if ([bool](Get-NestedValue $config @('Security', 'SAT', 'AllowDevelopmentBypass')) -or
@@ -326,7 +340,11 @@ function Assert-PathKeysMatchCatalog {
     $connectionString = [string](Get-Setting $Configuration @('ConnectionStrings', 'BudiDev') 'ConnectionStrings__BudiDev')
     $encodedAesKey = [string](Get-Setting $Configuration @('Security', 'PathEncryptionKey') 'Security__PathEncryptionKey')
     $legacyKey = [string](Get-Setting $Configuration @('Security', 'LegacyPathEncryptionKey') 'Security__LegacyPathEncryptionKey')
-    $aesKey = [Convert]::FromBase64String($encodedAesKey)
+    $aesKey = if ([string]::IsNullOrWhiteSpace($encodedAesKey)) {
+        $null
+    } else {
+        [Convert]::FromBase64String($encodedAesKey)
+    }
     $legacyBytes = [Text.Encoding]::UTF8.GetBytes($legacyKey.Substring(0, 8))
     if ($legacyBytes.Length -ne 8) {
         throw 'Los primeros ocho caracteres de Security:LegacyPathEncryptionKey deben ocupar ocho bytes UTF-8 para DES.'
@@ -346,6 +364,9 @@ WHERE [Ruta_ARchivo_Fisico] LIKE 'v2:%';
         $v2Reader = $v2Command.ExecuteReader()
         try {
             while ($v2Reader.Read()) {
+                if ($null -eq $aesKey) {
+                    throw 'El catálogo todavía contiene rutas AES v2 y exige Security:PathEncryptionKey.'
+                }
                 $protectedPath = $v2Reader.GetString(0)
                 $payload = [Convert]::FromBase64String($protectedPath.Substring(3))
                 if ($payload.Length -le 28) {
@@ -419,11 +440,13 @@ ORDER BY [Id] DESC;
         Write-Host "PASS: llaves verificadas contra $v2Count rutas AES v2 y $legacyCount rutas DES recientes."
     }
     catch {
-        throw 'No se pudieron verificar ambas llaves contra las rutas de Budi_Dev. Compruebe la llave AES original, la llave DES compartida y la conexión SQL antes de instalar.'
+        throw 'No se pudieron verificar las llaves contra las rutas de Budi_Dev. La llave AES solo es opcional cuando no queda ninguna ruta v2; la llave DES compartida siempre es obligatoria.'
     }
     finally {
         $connection.Dispose()
-        [Security.Cryptography.CryptographicOperations]::ZeroMemory($aesKey)
+        if ($null -ne $aesKey) {
+            [Security.Cryptography.CryptographicOperations]::ZeroMemory($aesKey)
+        }
         [Security.Cryptography.CryptographicOperations]::ZeroMemory($legacyBytes)
     }
 }

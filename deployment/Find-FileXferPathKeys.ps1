@@ -185,8 +185,12 @@ foreach ($definition in $settingDefinitions) {
 
 $results | Format-Table -AutoSize
 
-if ($results.Estado -contains 'NO ENCONTRADA') {
-    throw 'No se recuperaron ambas llaves. No continúe con la instalación ni genere reemplazos.'
+if (($results | Where-Object Llave -EQ 'DES heredada').Estado -eq 'NO ENCONTRADA') {
+    throw 'No se recuperó la llave DES compartida con BuDi. No continúe con la instalación ni genere un reemplazo.'
 }
 
-Write-Host 'PASS: ambas llaves quedaron disponibles solo en el proceso actual de PowerShell; sus valores no fueron impresos.'
+if (($results | Where-Object Llave -EQ 'AES v2').Estado -eq 'NO ENCONTRADA') {
+    Write-Warning 'No se recuperó la llave AES v2. Es válido únicamente si el catálogo no contiene rutas v2; el instalador lo comprobará contra Budi_Dev.'
+}
+
+Write-Host 'PASS: las llaves encontradas quedaron disponibles solo en el proceso actual de PowerShell; sus valores no fueron impresos.'

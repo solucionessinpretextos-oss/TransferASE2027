@@ -19,33 +19,12 @@ public sealed class AesGcmPathProtector : IPathProtector
     private const int TagSize = 16;
     private static readonly byte[] AssociatedData = Encoding.UTF8.GetBytes("FileXfer.Path.v2");
 
-    private readonly byte[] _key;
+    private readonly byte[]? _key;
     private readonly string? _legacyKey;
     private readonly bool _writeLegacyDes;
 
     public AesGcmPathProtector(IConfiguration configuration)
     {
-        var encodedKey = configuration["Security:PathEncryptionKey"];
-        if (string.IsNullOrWhiteSpace(encodedKey))
-        {
-            throw new InvalidOperationException(
-                "Security:PathEncryptionKey es obligatoria y debe suministrarse como secreto externo.");
-        }
-
-        try
-        {
-            _key = Convert.FromBase64String(encodedKey);
-        }
-        catch (FormatException ex)
-        {
-            throw new InvalidOperationException(
-                "Security:PathEncryptionKey debe ser Base64 válido.",
-                ex);
-        }
-
-        if (_key.Length != 32)
-            throw new InvalidOperationException("Security:PathEncryptionKey debe decodificar exactamente 32 bytes.");
-
         _legacyKey = configuration["Security:LegacyPathEncryptionKey"];
         var writeFormat = configuration["Security:PathWriteFormat"] ?? AesGcmV2WriteFormat;
         _writeLegacyDes = writeFormat switch
@@ -58,6 +37,29 @@ public sealed class AesGcmPathProtector : IPathProtector
         if (_writeLegacyDes && (_legacyKey is null || _legacyKey.Length < 8))
             throw new InvalidOperationException(
                 "Security:LegacyPathEncryptionKey es obligatoria para escribir rutas compatibles con BuDi.");
+
+        var encodedKey = configuration["Security:PathEncryptionKey"];
+        if (!string.IsNullOrWhiteSpace(encodedKey))
+        {
+            try
+            {
+                _key = Convert.FromBase64String(encodedKey);
+            }
+            catch (FormatException ex)
+            {
+                throw new InvalidOperationException(
+                    "Security:PathEncryptionKey debe ser Base64 válido.",
+                    ex);
+            }
+
+            if (_key.Length != 32)
+                throw new InvalidOperationException("Security:PathEncryptionKey debe decodificar exactamente 32 bytes.");
+        }
+        else if (!_writeLegacyDes)
+        {
+            throw new InvalidOperationException(
+                "Security:PathEncryptionKey es obligatoria para escribir rutas AES-GCM v2.");
+        }
     }
 
     public string Protect(string plainPath)
@@ -75,7 +77,7 @@ public sealed class AesGcmPathProtector : IPathProtector
         var ciphertext = payload.AsSpan(NonceSize + TagSize);
         RandomNumberGenerator.Fill(nonce);
 
-        using var aes = new AesGcm(_key, TagSize);
+        using var aes = new AesGcm(_key!, TagSize);
         aes.Encrypt(nonce, plaintext, ciphertext, tag, AssociatedData);
         CryptographicOperations.ZeroMemory(plaintext);
 
@@ -96,6 +98,12 @@ public sealed class AesGcmPathProtector : IPathProtector
             }
 
             return LegacyDesPathCipher.Decrypt(protectedPath, _legacyKey);
+        }
+
+        if (_key is null)
+        {
+            throw new InvalidOperationException(
+                "Se encontró una ruta AES-GCM v2, pero Security:PathEncryptionKey no está configurada.");
         }
 
         byte[] payload;

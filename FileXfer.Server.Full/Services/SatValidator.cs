@@ -66,8 +66,8 @@ public sealed class SatCertificateValidator : ISatCertificateValidator
         _opt = opt.Value;
         _log = log;
         _environment = environment;
-        LoadCertificates(_opt.TrustedRootCertificatePaths, _trustedRoots);
-        LoadCertificates(_opt.IntermediateCertificatePaths, _intermediates);
+        LoadCertificates(_opt.TrustedRootCertificatePaths, _trustedRoots, environment.ContentRootPath);
+        LoadCertificates(_opt.IntermediateCertificatePaths, _intermediates, environment.ContentRootPath);
     }
 
     public ISatCertificateValidator.ValidationResult ValidateSignedLogin(
@@ -334,14 +334,19 @@ public sealed class SatCertificateValidator : ISatCertificateValidator
 
     private static void LoadCertificates(
         IEnumerable<string>? paths,
-        X509Certificate2Collection destination)
+        X509Certificate2Collection destination,
+        string contentRootPath)
     {
         foreach (var configuredPath in paths ?? Array.Empty<string>())
         {
             if (string.IsNullOrWhiteSpace(configuredPath))
                 continue;
 
-            var fullPath = Path.GetFullPath(configuredPath.Trim().Trim('"'));
+            var normalizedPath = configuredPath.Trim().Trim('"');
+            var fullPath = Path.GetFullPath(
+                Path.IsPathRooted(normalizedPath)
+                    ? normalizedPath
+                    : Path.Combine(contentRootPath, normalizedPath));
             if (!File.Exists(fullPath))
                 throw new InvalidOperationException($"No se encontró el certificado SAT configurado: {fullPath}");
 

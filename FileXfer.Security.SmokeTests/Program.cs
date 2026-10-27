@@ -481,6 +481,21 @@ static void TestPathProtection()
     Require(sharedProtector.Unprotect(encrypted1) == original,
         "El modo compartido dejó de leer las rutas AES v2 existentes.");
 
+    var legacyOnlyConfiguration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:LegacyPathEncryptionKey"] = "DevKey12-rotating-suffix",
+            ["Security:PathWriteFormat"] = AesGcmPathProtector.LegacyDesWriteFormat
+        })
+        .Build();
+    var legacyOnlyProtector = new AesGcmPathProtector(legacyOnlyConfiguration);
+    Require(legacyOnlyProtector.Protect(original) == expectedLegacy,
+        "El modo compatible con BuDi exigió innecesariamente una llave AES sin rutas v2.");
+    Require(legacyOnlyProtector.Unprotect(expectedLegacy) == original,
+        "El modo compatible con BuDi no pudo leer una ruta DES sin llave AES.");
+    Expect<InvalidOperationException>(() => legacyOnlyProtector.Unprotect(encrypted1),
+        "Una ruta AES v2 fue aceptada sin su llave AES.");
+
     var missingLegacyConfiguration = new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?>
         {

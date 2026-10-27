@@ -290,6 +290,15 @@ try {
     Invoke-Checked dotnet (@('publish', 'TransferClienteASE/TransferClienteASE.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--no-build', '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:IncludeAllContentForSelfExtract=true', '-p:EnableCompressionInSingleFile=true', '-p:DebugType=None', '-p:DebugSymbols=false', '-o', $clientPublish) + $versionProperties + $embeddedAssetProperties)
     Invoke-Checked dotnet (@('publish', 'FileXfer.Server.Full/FileXfer.Server.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=false', '-o', $serverPublish) + $versionProperties)
 
+    $satCertificateSource = Join-Path $repoRoot 'deployment\certificates\sat'
+    if (-not (Test-Path -LiteralPath $satCertificateSource -PathType Container)) {
+        throw 'Falta el paquete local de autoridades SAT AC5/AC6/AC7.'
+    }
+    $satCertificateDestination = Join-Path $serverPublish 'certificates\sat'
+    New-Item -ItemType Directory -Path $satCertificateDestination -Force | Out-Null
+    Get-ChildItem -LiteralPath $satCertificateSource -File |
+        Copy-Item -Destination $satCertificateDestination -Force
+
     $clientExe = Join-Path $clientPublish 'TransferClienteASE.exe'
     $serverExe = Join-Path $serverPublish 'FileXfer.Server.exe'
     foreach ($required in @($updaterExe, $clientExe, $serverExe)) {

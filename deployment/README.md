@@ -75,14 +75,14 @@ La cuenta sembrada en una base vacía inicia sesión con e.firma y recibe sus pe
 - `Storage__BasePath` con ACL exclusiva de la cuenta de servicio
 - `AllowedHosts` con DNS explícitos, nunca `*`
 - `Security__Jwt__SigningKey` con al menos 32 bytes aleatorios
-- `Security__PathEncryptionKey` Base64 de exactamente 32 bytes
+- `Security__PathEncryptionKey` Base64 de exactamente 32 bytes solo si el catálogo contiene rutas AES `v2:` o se elige escritura AES
 - `Security__LegacyPathEncryptionKey` con la llave DES histórica que utilizan los demás sistemas BuDi; conserve sus primeros ocho caracteres y manténgala mientras existan rutas históricas
-- `Security__PathWriteFormat=LegacyDes` para que las rutas nuevas sigan el formato compartido; el servidor continúa leyendo las rutas AES `v2:` existentes con su llave original
+- `Security__PathWriteFormat=LegacyDes` para que las rutas nuevas sigan el formato compartido; si aparece una ruta AES `v2:`, deberá configurarse su llave original
 - `Security__Receipts__PrivateKeyPemPath` apuntando a una llave RSA persistente de 3072 bits o más, protegida con ACL de la cuenta de servicio
 - `Security__Receipts__PrivateKeyPassword` cuando la llave PEM esté cifrada; suministrarla desde un almacén secreto, nunca en el repositorio
 - `Security__SAT__TrustedRootCertificatePaths__N`
 - `Security__SAT__IntermediateCertificatePaths__N` cuando aplique
-- `Security__SAT__AllowedRevocationHosts__N`
+- `Security__SAT__RequireOcsp=false` para validación local; si se cambia a `true`, `Security__SAT__AllowedRevocationHosts__N` se vuelve obligatorio
 - certificado TLS de Kestrel o terminación TLS corporativa
 - `FILEXFER_QPDF_PATH` si qpdf no se despliega junto al servicio
 
