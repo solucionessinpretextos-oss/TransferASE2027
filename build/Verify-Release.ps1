@@ -196,6 +196,9 @@ try {
         if ($null -ne $baseSettings.PSObject.Properties['Actualizaciones']) {
             throw 'appsettings.json conserva el contrato de actualización HTTP legado.'
         }
+        if ($baseSettings.Security.PathWriteFormat -ne 'LegacyDes') {
+            throw 'El paquete de servidor no escribe rutas en el formato compartido con BuDi.'
+        }
         foreach ($value in @(
             $baseSettings.ConnectionStrings.FileXferDb,
             $baseSettings.ConnectionStrings.BudiDev,

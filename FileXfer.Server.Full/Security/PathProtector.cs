@@ -13,12 +13,15 @@ public interface IPathProtector
 public sealed class AesGcmPathProtector : IPathProtector
 {
     private const string VersionPrefix = "v2:";
+    public const string AesGcmV2WriteFormat = "AesGcmV2";
+    public const string LegacyDesWriteFormat = "LegacyDes";
     private const int NonceSize = 12;
     private const int TagSize = 16;
     private static readonly byte[] AssociatedData = Encoding.UTF8.GetBytes("FileXfer.Path.v2");
 
     private readonly byte[] _key;
     private readonly string? _legacyKey;
+    private readonly bool _writeLegacyDes;
 
     public AesGcmPathProtector(IConfiguration configuration)
     {
@@ -44,12 +47,26 @@ public sealed class AesGcmPathProtector : IPathProtector
             throw new InvalidOperationException("Security:PathEncryptionKey debe decodificar exactamente 32 bytes.");
 
         _legacyKey = configuration["Security:LegacyPathEncryptionKey"];
+        var writeFormat = configuration["Security:PathWriteFormat"] ?? AesGcmV2WriteFormat;
+        _writeLegacyDes = writeFormat switch
+        {
+            LegacyDesWriteFormat => true,
+            AesGcmV2WriteFormat => false,
+            _ => throw new InvalidOperationException(
+                "Security:PathWriteFormat debe ser AesGcmV2 o LegacyDes.")
+        };
+        if (_writeLegacyDes && (_legacyKey is null || _legacyKey.Length < 8))
+            throw new InvalidOperationException(
+                "Security:LegacyPathEncryptionKey es obligatoria para escribir rutas compatibles con BuDi.");
     }
 
     public string Protect(string plainPath)
     {
         if (string.IsNullOrWhiteSpace(plainPath))
             throw new ArgumentException("La ruta no puede ser vacía.", nameof(plainPath));
+
+        if (_writeLegacyDes)
+            return LegacyDesPathCipher.Encrypt(plainPath, _legacyKey!);
 
         var plaintext = Encoding.UTF8.GetBytes(plainPath);
         var payload = new byte[NonceSize + TagSize + plaintext.Length];
@@ -78,7 +95,7 @@ public sealed class AesGcmPathProtector : IPathProtector
                     "Se encontró una ruta con cifrado legado, pero Security:LegacyPathEncryptionKey no está configurada.");
             }
 
-            return LegacyDesPathDecryptor.Decrypt(protectedPath, _legacyKey);
+            return LegacyDesPathCipher.Decrypt(protectedPath, _legacyKey);
         }
 
         byte[] payload;

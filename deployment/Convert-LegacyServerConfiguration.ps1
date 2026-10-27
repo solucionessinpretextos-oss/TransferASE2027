@@ -30,8 +30,6 @@ param(
 
     [switch]$GeneratePathEncryptionKeyForEmptyDatabase,
 
-    [switch]$AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog,
-
     [switch]$AllowLegacyDevelopmentSqlTransport,
 
     [switch]$Force
@@ -208,15 +206,13 @@ if ([string]::IsNullOrWhiteSpace($legacyPathKey)) {
     $legacyPathKey = [Environment]::GetEnvironmentVariable($LegacyPathEncryptionKeyEnvironmentVariable)
 }
 if ([string]::IsNullOrWhiteSpace($legacyPathKey)) {
-    if (-not $AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog) {
-        throw "No se encontró Security:LegacyPathEncryptionKey. La migración se detuvo para no perder acceso a rutas DES históricas. Use -AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog únicamente después de comprobar que Budi_Dev no contiene rutas sin prefijo v2:."
-    }
-    $legacyPathKey = ''
+    throw 'No se encontró Security:LegacyPathEncryptionKey. La migración exige la llave compartida con BuDi para leer y escribir las rutas históricas.'
 }
 elseif ($legacyPathKey.Length -lt 8) {
     throw 'Security:LegacyPathEncryptionKey debe contener al menos 8 caracteres.'
 }
 Set-Value $security 'LegacyPathEncryptionKey' $legacyPathKey
+Set-Value $security 'PathWriteFormat' 'LegacyDes'
 $sqlTransport = Ensure-Object $security 'SqlTransport'
 Set-Value $sqlTransport 'AllowLegacyDevelopmentSqlTransport' ([bool]$AllowLegacyDevelopmentSqlTransport)
 if ($AllowLegacyDevelopmentSqlTransport) {

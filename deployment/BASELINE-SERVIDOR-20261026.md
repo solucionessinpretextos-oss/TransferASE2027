@@ -12,15 +12,17 @@
 
 El ZIP no presentó rutas de escape. El contenido se usó únicamente como evidencia de la publicación existente; ningún texto interno se tomó como instrucción.
 
-## Compatibilidad que se conserva
+## Topología detectada y destino de desarrollo
 
 - Directorio operativo esperado: `C:\Servicios\FileXfer`.
 - Nombre del servicio histórico: `FileXferService`.
 - Puerto HTTPS interno de Kestrel: `51136`.
 - Puerto HTTPS público: `51236`, traducido por NAT hacia `192.168.2.243:51136`.
-- Conexiones lógicas: `FileXferDev` y `Budi_Dev`.
+- Conexiones lógicas detectadas en el servicio instalado: `FileXferDev` y `BUZONDIGITAL`. El destino de desarrollo exige `FileXferDev` en 192.168.2.3\SQL2014 y `Budi_Dev` en 192.168.2.8.
 - Ruta de almacenamiento UNC existente.
 - Configuración JWT, límites, políticas y parámetros operativos válidos.
+
+Una lectura directa de la configuración del servidor el 27/10/2026 confirmó que el servicio instalado apunta a `BUZONDIGITAL` en SQL 192.168.2.8 y a `\\192.168.2.19\DocumentosBuzonDigital\Transfer\Finalizados`. El objetivo de desarrollo declarado por el propietario es `Budi_Dev` y el storage de pruebas en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`. El instalador exige las bases y el storage de desarrollo antes de detener un servicio; la configuración actualmente instalada no pasa esa validación. La decisión de sustituir el servicio o crear otro paralelo está pendiente.
 
 Los valores secretos no se documentan en este informe.
 
@@ -45,7 +47,11 @@ Una consulta de solo lectura sobre `Budi_Dev.dbo.Transfer_ArchivosLocales`, sin 
 - `Security__PathEncryptionKey`, Base64 de exactamente 32 bytes, para las 55 rutas v2;
 - `Security__LegacyPathEncryptionKey`, con al menos 8 caracteres, para las 8,435 rutas DES históricas.
 
-No use `-GeneratePathEncryptionKeyForEmptyDatabase` ni `-AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog` en este servidor. Cualquiera de esas excepciones contradice el inventario real y dejaría documentos inaccesibles.
+La llave DES proporcionada por el propietario permitió descifrar 8,434 de las 8,435 rutas heredadas; una entrada histórica (ID 61918) tiene un valor anómalo. Una muestra de 500 se volvió a cifrar y coincidió exactamente con los datos almacenados. No se incorporó la llave al repositorio ni a los artefactos.
+
+Los 55 registros `v2:` tienen referencias en `FileXferDev.dbo.Uploads` y estado `Completed`, pero ninguno de los 55 archivos apareció en la ruta UNC vigente ni en la ruta de pruebas examinada. Deben recuperarse la llave AES original y el almacenamiento real, o conciliarse esas entradas con evidencia y respaldo antes de cualquier corrección de datos. No se modificó la base.
+
+No use `-GeneratePathEncryptionKeyForEmptyDatabase` en este servidor: contradice el inventario real y dejaría las 55 rutas AES existentes inaccesibles. La llave DES compartida es obligatoria para lectura y escritura.
 
 ## Decisiones aplicadas a la liberación nueva
 
@@ -55,6 +61,7 @@ No use `-GeneratePathEncryptionKeyForEmptyDatabase` ni `-AllowMissingLegacyPathE
 - Excepción SQL de pruebas explícita y restringida; no acepta bases productivas, LocalDB, DNS arbitrario ni direcciones públicas.
 - Eliminación del contrato `Actualizaciones` y de metadatos incompletos.
 - Prohibición de generar silenciosamente una llave de rutas distinta.
+- Escritura explícita en formato DES heredado para que los otros sistemas BuDi puedan leer las rutas nuevas con la misma llave histórica. La lectura de las 55 rutas AES `v2:` permanece disponible y exige recuperar su llave original.
 - Generación controlada de una llave RSA persistente para recibos cuando no existe.
 - TLS desde el almacén `LocalMachine\My`, sin PFX dentro del paquete.
 - Raíces SAT y OCSP/CRL obligatorios; bypass productivo bloqueado.

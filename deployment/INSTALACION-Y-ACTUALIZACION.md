@@ -2,19 +2,19 @@
 
 ## Resultado esperado
 
-La actualización sustituye la versión anterior sin cambiar las bases de datos, la ruta UNC ni el puerto interno. El instalador trabaja en staging, conserva la versión anterior, valida el servicio nuevo y revierte automáticamente si `/healthz` no responde correctamente.
+El objetivo declarado para esta liberación es FileXferDev + Budi_Dev y el storage de pruebas en 192.168.2.21. El servicio hoy instalado en 192.168.2.243 usa BUZONDIGITAL y el storage 192.168.2.19. No ejecute el instalador contra ese servicio hasta decidir si el entorno de desarrollo irá en paralelo o lo sustituirá. El instalador compara bases y storage antes de detener cualquier servicio.
 
-Topología confirmada:
+Topología actual del servicio instalado, que no debe confundirse con el destino de desarrollo:
 
 ```text
 Cliente de Internet
   -> https://187.141.128.194:51236
   -> NAT/firewall: 187.141.128.194:51236 -> 192.168.2.243:51136
   -> FileXferService en C:\Servicios\FileXfer
-  -> SQL FileXferDev + SQL Budi_Dev + almacenamiento UNC
+  -> SQL FileXferDev + SQL BUZONDIGITAL + storage 192.168.2.19
 ```
 
-`51236` es el puerto público. Kestrel y el Firewall de Windows del servidor usan `51136`. Cambiar ambos a `51236` rompería la traducción actual o exigiría modificar el NAT.
+`51236` es el puerto público actual y se traduce a `51136`. Un servicio paralelo necesita otro puerto interno, otra regla de firewall y, si se usará desde Internet, otra publicación NAT/TLS. El instalador puede configurar nombre de servicio, directorio y puerto independientes.
 
 ## Contenido de la liberación
 
@@ -30,10 +30,11 @@ El paquete nuevo no debe contener PFX, llaves privadas, instaladores históricos
 
 1. `Security__PathEncryptionKey` o `Security:PathEncryptionKey` de la instalación actual. Debe ser Base64 de 32 bytes. Si se sustituye, las rutas AES v2 ya cifradas quedan ilegibles.
 2. `Security__LegacyPathEncryptionKey` o `Security:LegacyPathEncryptionKey` de la instalación actual. Debe tener al menos 8 caracteres y permite abrir las rutas DES históricas.
+   Esta misma llave permite escribir nuevas rutas en el formato que siguen consumiendo los demás sistemas BuDi. `Security:PathWriteFormat` debe ser `LegacyDes` en la configuración del servidor compartido; el migrador y la plantilla ya lo establecen. No cambie la llave cada quince días mientras existan registros cifrados con ella. El formato DES histórico usa únicamente sus primeros ocho caracteres.
 3. Llave privada RSA histórica de actualización. Debe corresponder a `update-public.pem` instalado en los clientes anteriores.
 4. Certificado TLS confiable con SAN para el nombre DNS público recomendado o, si se insiste en usar la IP, SAN IP `187.141.128.194`.
 5. Raíces/intermedios SAT autorizados y lista exacta de hosts OCSP/CRL del SAT.
-6. Cuenta de servicio con lectura y escritura en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`.
+6. Cuenta de servicio con lectura y escritura en `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados`, el storage del entorno Budi_Dev. El storage 192.168.2.19 pertenece al servicio BUZONDIGITAL actualmente instalado.
 
 No use `CER.cer` del paquete anterior como raíz SAT: es el certificado personal de una e.firma, no una autoridad de confianza.
 
@@ -68,44 +69,48 @@ Si alguna llave no aparece a nivel de máquina, ejecute desde el paquete de desp
 
 La herramienta inspecciona únicamente las configuraciones conocidas, el entorno de máquina, el entorno específico del servicio y el perfil de su cuenta. Valida las llaves, muestra solo su origen y una huella abreviada, y las deja disponibles en el PowerShell actual. No cierre esa consola antes de ejecutar el instalador.
 
-## Migración transparente desde la publicación del 26/10/2026
+## Preparación de la migración desde la publicación del 26/10/2026
 
-La instalación anterior usa `appsettings.json`. El instalador detecta ese archivo, lo convierte en `appsettings.Production.json`, conserva conexiones, almacenamiento y puerto, elimina `Actualizaciones` HTTP y obliga a configurar seguridad faltante. Como la llave JWT encontrada es demasiado corta, la rota de forma automática; esto solo obliga a iniciar sesión otra vez y no modifica archivos ni rutas cifradas.
+La instalación anterior usa `appsettings.json`, pero sus conexiones y storage pertenecen a BUZONDIGITAL. No use su conversión automática para instalar el objetivo Budi_Dev. Prepare fuera de Git un `appsettings.Production.json` basado en la plantilla, con las conexiones FileXferDev/Budi_Dev, storage 192.168.2.21 y las llaves históricas recuperadas. Indique ese archivo mediante `-ProductionConfigPath`. El instalador abortará antes de detener el servicio si las bases o el storage no coinciden.
 
 Por omisión, el instalador deja `client-update.settings.json` como `client-update.settings.pending.json`. Así los clientes anteriores reciben `404` silencioso y continúan trabajando, en vez de intentar un paquete firmado con una llave que todavía no conocen. No agregue `-EnableClientUpdates` durante esta primera migración.
 
-Ejemplo:
+Ejemplo de parámetros del entorno de desarrollo. No ejecute este comando contra FileXferService mientras siga atendiendo BUZONDIGITAL; primero resuelva la decisión de servicio paralelo o sustitución:
 
 ```powershell
 pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
   -ServerPackagePath 'D:\Releases\2.2.1.0\server\FileXfer.Server-2.2.1.0-win-x64.zip' `
   -ExpectedSha256 '<SHA256 DE checksums.sha256>' `
-  -InstallDirectory 'C:\Servicios\FileXfer' `
-  -ServiceName 'FileXferService' `
-  -TlsCertificateSubject 'CN=transfer.ase-sinaloa.gob.mx' `
-  -AllowedHosts @('transfer.ase-sinaloa.gob.mx','187.141.128.194','192.168.2.243','localhost','127.0.0.1') `
+  -ProductionConfigPath 'D:\Configuracion\FileXferDev\appsettings.Production.json' `
+  -InstallDirectory 'C:\Servicios\FileXferDev' `
+  -ServiceName 'FileXferServiceDev' `
+  -TlsCertificateSubject 'CN=transfer-dev.ase-sinaloa.gob.mx' `
+  -AllowedHosts @('transfer-dev.ase-sinaloa.gob.mx','192.168.2.243','localhost','127.0.0.1') `
   -SatTrustedRootCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-root.cer') `
   -SatIntermediateCertificatePaths @('C:\ProgramData\ASE\FileXfer\certs\sat-intermediate.cer') `
   -SatAllowedRevocationHosts @('ocsp.sat.gob.mx','crl.sat.gob.mx') `
   -AllowLegacyDevelopmentSqlTransport `
-  -ServiceAccount 'DOMINIO\gmsa-filexfer$' `
-  -HealthUri 'https://transfer.ase-sinaloa.gob.mx:51236/healthz' `
+  -ServiceAccount 'DOMINIO\gmsa-filexfer-dev$' `
+  -HttpsPort 51137 `
+  -HealthUri 'https://transfer-dev.ase-sinaloa.gob.mx:51137/healthz' `
   -OpenWindowsFirewall
 ```
 
-Los nombres SAT del ejemplo son ilustrativos: use únicamente rutas y hosts confirmados por la documentación/cadena real del SAT. El instalador se detiene si faltan; no habilita bypass.
+El DNS, el certificado TLS, la cuenta de servicio y los nombres SAT del ejemplo son ilustrativos. El archivo de configuración debe fijar Kestrel en 51137 para que coincida con el parámetro del servicio paralelo. Defina el DNS y la publicación de red antes de usar ese ejemplo. El instalador se detiene si faltan las raíces y hosts SAT; no habilita bypass.
 
-`-AllowLegacyDevelopmentSqlTransport` existe exclusivamente porque este servidor apunta a `FileXferDev` y `Budi_Dev` sobre IPv4 privadas con el TLS legado informado. El runtime rechaza esa excepción si cambia la base o el destino deja de ser privado. Retire el interruptor cuando SQL Server tenga TLS 1.2+, certificado confiable, `Encrypt=True` y `TrustServerCertificate=False`.
+`-AllowLegacyDevelopmentSqlTransport` existe para FileXferDev en 192.168.2.3\SQL2014 y Budi_Dev en 192.168.2.8, con el transporte SQL de pruebas informado. El instalador valida ambos servidores, ambas bases y el storage 192.168.2.21 antes de detener un servicio. Retire la excepción cuando SQL Server tenga TLS 1.2+, certificado confiable, `Encrypt=True` y `TrustServerCertificate=False`.
 
-Si la instalación anterior está en otra carpeta, indique el archivo de forma explícita:
+Si posteriormente se decide sustituir el servicio actual, respáldelo y use el nombre y directorio originales junto con `-ReplaceExistingService` solo después de verificar que el cambio de BUZONDIGITAL a Budi_Dev está autorizado. La configuración anterior en otra carpeta sirve como referencia, pero el instalador la rechazará si apunta a BUZONDIGITAL:
 
 ```powershell
 -LegacyConfigPath 'D:\PublicacionAnterior\appsettings.json'
 ```
 
-Use `-GeneratePathEncryptionKeyForEmptyDatabase` solo si se verificó técnicamente que la base FileXfer no contiene ninguna ruta cifrada previa. No es un atajo de instalación.
+No use `-GeneratePathEncryptionKeyForEmptyDatabase` para Budi_Dev: el inventario contiene 55 rutas AES v2 y generar otra llave impediría abrirlas.
 
-Use `-AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog` solo si una consulta comprobó que `Transfer_ArchivosLocales` no contiene ninguna ruta sin prefijo `v2:`. El inventario del 27/10/2026 encontró 8,435 rutas heredadas, por lo que este interruptor está prohibido para el servidor actual.
+La llave DES compartida es obligatoria aun cuando se migre a un catálogo nuevo, porque el formato de escritura debe seguir siendo legible para los demás sistemas BuDi.
+
+El servicio lee tanto las rutas DES históricas como las 55 rutas AES `v2:` existentes. Aunque escriba rutas nuevas con el formato compartido DES, todavía necesita la llave AES original para leer las 55 anteriores. El instalador no acepta otra llave ni sustituye esos registros automáticamente. Verifique la disponibilidad de ambas llaves y de las rutas antes del cambio de servicio.
 
 ## Instalación limpia
 

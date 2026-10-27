@@ -31,7 +31,8 @@ _Figura 1. El servidor coordina identidad, catálogo, almacenamiento y evidencia
 | Readiness | `/readyz` | Dependencias y esquema disponibles |
 | BuDi | `192.168.2.8` / `Budi_Dev` | Credencial externa al repositorio |
 | FileXfer | `192.168.2.3\SQL2014` / `FileXferDev` | Credencial externa al repositorio |
-| Storage de pruebas | `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados` | La cuenta de servicio necesita ACL mínima |
+| Storage del servicio instalado | `\\192.168.2.19\DocumentosBuzonDigital\Transfer\Finalizados` | Corresponde a BUZONDIGITAL; no usarlo para Budi_Dev |
+| Storage de desarrollo | `\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados` | Corresponde al entorno Budi_Dev declarado |
 
 Estos valores no autorizan producción. Usuario y contraseña de SQL deben obtenerse desde el mecanismo aprobado del entorno.
 
@@ -75,6 +76,8 @@ No conceda ejecución a usuarios generales sobre el volumen de documentos. El se
 | `AllowedHosts` | Hosts HTTP válidos | Lista explícita en producción, nunca `*` |
 | `Security__Jwt__SigningKey` | Firma JWT | Secreto aleatorio de al menos 32 bytes |
 | `Security__PathEncryptionKey` | Protección de rutas | Base64 de exactamente 32 bytes |
+| `Security__LegacyPathEncryptionKey` | Compatibilidad de rutas BuDi | Conserve la llave histórica; DES utiliza sus primeros ocho caracteres |
+| `Security__PathWriteFormat` | Formato de rutas nuevas | `LegacyDes` mientras otros sistemas compartan la columna cifrada |
 | `Security__Receipts__PrivateKeyPemPath` | Firma de recibos | RSA persistente de 3072 bits o más |
 | `Security__SAT__TrustedRootCertificatePaths__N` | Raíces SAT | Archivos de confianza explícitos |
 | `Security__SAT__AllowedRevocationHosts__N` | OCSP/CRL | Allowlist estricta |

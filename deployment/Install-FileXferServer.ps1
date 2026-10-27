@@ -21,6 +21,16 @@ param(
 
     [string[]]$AllowedHosts = @('localhost', '127.0.0.1', '192.168.2.243', '187.141.128.194'),
 
+    [string]$ExpectedBudiDatabase = 'Budi_Dev',
+
+    [string]$ExpectedBudiServer = '192.168.2.8',
+
+    [string]$ExpectedFileXferDatabase = 'FileXferDev',
+
+    [string]$ExpectedFileXferServer = '192.168.2.3\SQL2014',
+
+    [string]$ExpectedStorageBasePath = '\\192.168.2.21\DocumentosBuzonDigital_Pruebas\Transfer\Finalizados',
+
     [string[]]$SatTrustedRootCertificatePaths = @(),
 
     [string[]]$SatIntermediateCertificatePaths = @(),
@@ -33,11 +43,11 @@ param(
 
     [switch]$GeneratePathEncryptionKeyForEmptyDatabase,
 
-    [switch]$AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog,
-
     [switch]$AllowLegacyDevelopmentSqlTransport,
 
     [switch]$EnableClientUpdates,
+
+    [switch]$ReplaceExistingService,
 
     [Parameter(Mandatory)]
     [ValidatePattern('^https://')]
@@ -193,6 +203,25 @@ function Assert-ProductionConfiguration {
 
     $fileXferConnection = [string](Get-Setting $config @('ConnectionStrings', 'FileXferDb') 'ConnectionStrings__FileXferDb')
     $budiConnection = [string](Get-Setting $config @('ConnectionStrings', 'BudiDev') 'ConnectionStrings__BudiDev')
+    try {
+        $fileXferSql = [Data.SqlClient.SqlConnectionStringBuilder]::new($fileXferConnection)
+        $budiSql = [Data.SqlClient.SqlConnectionStringBuilder]::new($budiConnection)
+    }
+    catch {
+        throw 'Las cadenas SQL de la configuración no tienen un formato válido.'
+    }
+    if (-not $fileXferSql.InitialCatalog.Equals($ExpectedFileXferDatabase, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $budiSql.InitialCatalog.Equals($ExpectedBudiDatabase, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $fileXferSql.DataSource.Equals($ExpectedFileXferServer, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $budiSql.DataSource.Equals($ExpectedBudiServer, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Las conexiones SQL no coinciden con los servidores y bases del entorno de desarrollo. Proporcione -ProductionConfigPath correcto antes de tocar el servicio.'
+    }
+    $storagePath = [string](Get-Setting $config @('Storage', 'BasePath') 'Storage__BasePath')
+    if (-not $storagePath.TrimEnd('\', '/').Equals(
+        $ExpectedStorageBasePath.TrimEnd('\', '/'),
+        [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Storage:BasePath no coincide con la ruta esperada del entorno de desarrollo. Proporcione -ProductionConfigPath y revise -ExpectedStorageBasePath."
+    }
     $allowLegacySql = [bool](Get-NestedValue $config @('Security', 'SqlTransport', 'AllowLegacyDevelopmentSqlTransport'))
     $hasInsecureSql = $fileXferConnection -match '(?i)(^|;)\s*Encrypt\s*=\s*(False|Optional)\s*(;|$)' -or
         $fileXferConnection -match '(?i)(^|;)\s*TrustServerCertificate\s*=\s*True\s*(;|$)' -or
@@ -219,12 +248,18 @@ function Assert-ProductionConfiguration {
 
     $legacyPathKey = [string](Get-Setting $config @('Security', 'LegacyPathEncryptionKey') 'Security__LegacyPathEncryptionKey')
     if ([string]::IsNullOrWhiteSpace($legacyPathKey)) {
-        if (-not $AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog) {
-            throw 'Falta Security:LegacyPathEncryptionKey. La instalación se detuvo para proteger el acceso a rutas históricas.'
-        }
+        throw 'Falta Security:LegacyPathEncryptionKey. La instalación exige la llave compartida con BuDi para leer y escribir rutas.'
     }
     elseif ($legacyPathKey.Length -lt 8) {
         throw 'Security:LegacyPathEncryptionKey debe contener al menos 8 caracteres.'
+    }
+
+    $pathWriteFormat = [string](Get-Setting $config @('Security', 'PathWriteFormat') 'Security__PathWriteFormat')
+    if ([string]::IsNullOrWhiteSpace($pathWriteFormat)) {
+        $pathWriteFormat = 'LegacyDes'
+    }
+    if ($pathWriteFormat -ne 'LegacyDes') {
+        throw 'Security:PathWriteFormat debe ser LegacyDes para conservar el formato de rutas compartido con BuDi.'
     }
 
     $allowEphemeral = Get-NestedValue $config @('Security', 'Receipts', 'AllowEphemeralDevelopmentKey')
@@ -285,6 +320,114 @@ function Assert-ProductionConfiguration {
     }
 }
 
+function Assert-PathKeysMatchCatalog {
+    param([pscustomobject]$Configuration)
+
+    $connectionString = [string](Get-Setting $Configuration @('ConnectionStrings', 'BudiDev') 'ConnectionStrings__BudiDev')
+    $encodedAesKey = [string](Get-Setting $Configuration @('Security', 'PathEncryptionKey') 'Security__PathEncryptionKey')
+    $legacyKey = [string](Get-Setting $Configuration @('Security', 'LegacyPathEncryptionKey') 'Security__LegacyPathEncryptionKey')
+    $aesKey = [Convert]::FromBase64String($encodedAesKey)
+    $legacyBytes = [Text.Encoding]::UTF8.GetBytes($legacyKey.Substring(0, 8))
+    if ($legacyBytes.Length -ne 8) {
+        throw 'Los primeros ocho caracteres de Security:LegacyPathEncryptionKey deben ocupar ocho bytes UTF-8 para DES.'
+    }
+
+    $connection = [Data.SqlClient.SqlConnection]::new($connectionString)
+    try {
+        $connection.Open()
+        $v2Command = $connection.CreateCommand()
+        $v2Command.CommandTimeout = 15
+        $v2Command.CommandText = @'
+SELECT [Ruta_ARchivo_Fisico]
+FROM [dbo].[Transfer_ArchivosLocales]
+WHERE [Ruta_ARchivo_Fisico] LIKE 'v2:%';
+'@
+        $v2Count = 0
+        $v2Reader = $v2Command.ExecuteReader()
+        try {
+            while ($v2Reader.Read()) {
+                $protectedPath = $v2Reader.GetString(0)
+                $payload = [Convert]::FromBase64String($protectedPath.Substring(3))
+                if ($payload.Length -le 28) {
+                    throw 'Una ruta AES v2 del catálogo está incompleta.'
+                }
+                $nonce = [byte[]]::new(12)
+                $tag = [byte[]]::new(16)
+                $ciphertext = [byte[]]::new($payload.Length - 28)
+                [Array]::Copy($payload, 0, $nonce, 0, 12)
+                [Array]::Copy($payload, 12, $tag, 0, 16)
+                [Array]::Copy($payload, 28, $ciphertext, 0, $ciphertext.Length)
+                $plaintext = [byte[]]::new($ciphertext.Length)
+                $aes = [Security.Cryptography.AesGcm]::new($aesKey, 16)
+                try {
+                    $aes.Decrypt(
+                        $nonce,
+                        $ciphertext,
+                        $tag,
+                        $plaintext,
+                        [Text.Encoding]::UTF8.GetBytes('FileXfer.Path.v2'))
+                    if ([string]::IsNullOrWhiteSpace([Text.Encoding]::UTF8.GetString($plaintext))) {
+                        throw 'Una ruta AES v2 descifrada está vacía.'
+                    }
+                }
+                finally {
+                    $aes.Dispose()
+                    [Security.Cryptography.CryptographicOperations]::ZeroMemory($plaintext)
+                }
+                $v2Count++
+            }
+        }
+        finally { $v2Reader.Dispose() }
+
+        $legacyCommand = $connection.CreateCommand()
+        $legacyCommand.CommandTimeout = 15
+        $legacyCommand.CommandText = @'
+SELECT TOP (10) [Ruta_ARchivo_Fisico]
+FROM [dbo].[Transfer_ArchivosLocales]
+WHERE NULLIF(LTRIM(RTRIM([Ruta_ARchivo_Fisico])), '') IS NOT NULL
+  AND [Ruta_ARchivo_Fisico] NOT LIKE 'v2:%'
+ORDER BY [Id] DESC;
+'@
+        $legacyCount = 0
+        $legacyReader = $legacyCommand.ExecuteReader()
+        try {
+            while ($legacyReader.Read()) {
+                $ciphertext = [Convert]::FromBase64String($legacyReader.GetString(0))
+                $des = [Security.Cryptography.DES]::Create()
+                try {
+                    $des.Mode = [Security.Cryptography.CipherMode]::CBC
+                    $des.Padding = [Security.Cryptography.PaddingMode]::PKCS7
+                    $iv = [byte[]](0x12, 0x24, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF)
+                    $decryptor = $des.CreateDecryptor($legacyBytes, $iv)
+                    try {
+                        $plaintext = $decryptor.TransformFinalBlock($ciphertext, 0, $ciphertext.Length)
+                        if ([string]::IsNullOrWhiteSpace([Text.Encoding]::UTF8.GetString($plaintext))) {
+                            throw 'Una ruta DES descifrada está vacía.'
+                        }
+                    }
+                    finally { $decryptor.Dispose() }
+                }
+                finally { $des.Dispose() }
+                $legacyCount++
+            }
+        }
+        finally { $legacyReader.Dispose() }
+
+        if ($v2Count -eq 0 -and $legacyCount -eq 0) {
+            throw 'El catálogo no tiene rutas con las que verificar las llaves. Detenga el despliegue y revise el destino SQL.'
+        }
+        Write-Host "PASS: llaves verificadas contra $v2Count rutas AES v2 y $legacyCount rutas DES recientes."
+    }
+    catch {
+        throw 'No se pudieron verificar ambas llaves contra las rutas de Budi_Dev. Compruebe la llave AES original, la llave DES compartida y la conexión SQL antes de instalar.'
+    }
+    finally {
+        $connection.Dispose()
+        [Security.Cryptography.CryptographicOperations]::ZeroMemory($aesKey)
+        [Security.Cryptography.CryptographicOperations]::ZeroMemory($legacyBytes)
+    }
+}
+
 function Convert-LegacyConfiguration {
     param([string]$Source, [string]$Destination)
 
@@ -309,9 +452,6 @@ function Convert-LegacyConfiguration {
     }
     if ($GeneratePathEncryptionKeyForEmptyDatabase) {
         $arguments.GeneratePathEncryptionKeyForEmptyDatabase = $true
-    }
-    if ($AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog) {
-        $arguments.AllowMissingLegacyPathEncryptionKeyForVerifiedEmptyCatalog = $true
     }
     if ($AllowLegacyDevelopmentSqlTransport) {
         $arguments.AllowLegacyDevelopmentSqlTransport = $true
@@ -372,6 +512,10 @@ Assert-Administrator
 $package = [IO.Path]::GetFullPath($ServerPackagePath)
 $install = Assert-SafeInstallPath $InstallDirectory
 Assert-Package $package $ExpectedSha256
+if ($install.Equals('C:\Servicios\FileXfer', [StringComparison]::OrdinalIgnoreCase) -and
+    -not $ServiceName.Equals('FileXferService', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Un servicio paralelo no puede instalarse en C:\Servicios\FileXfer, que corresponde a FileXferService.'
+}
 
 $parent = Split-Path -Parent $install
 $leaf = Split-Path -Leaf $install
@@ -381,6 +525,9 @@ $backup = Join-Path $parent ($leaf + '.backup.' + (Get-Date -Format 'yyyyMMdd-HH
 $failed = Join-Path $parent ($leaf + '.failed.' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $hadPreviousInstall = Test-Path -LiteralPath $install -PathType Container
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($null -ne $service -and -not $ReplaceExistingService) {
+    throw "El servicio $ServiceName ya existe. Use un nombre/directorio/puerto independientes para desarrollo o indique -ReplaceExistingService cuando el reemplazo esté decidido."
+}
 $createdService = $false
 $newInstallActivated = $false
 $previousServiceWasRunning = $null -ne $service -and $service.Status -ne 'Stopped'
@@ -432,6 +579,7 @@ try {
         throw 'La primera instalación exige -ProductionConfigPath o -LegacyConfigPath.'
     }
     Assert-ProductionConfiguration $stagedConfig $HttpsPort
+    Assert-PathKeysMatchCatalog (Get-Content -LiteralPath $stagedConfig -Raw | ConvertFrom-Json -ErrorAction Stop)
 
     if ($null -ne $service -and $service.Status -ne 'Stopped') {
         Stop-Service -Name $ServiceName -Force

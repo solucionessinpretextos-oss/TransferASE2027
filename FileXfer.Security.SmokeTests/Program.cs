@@ -49,7 +49,7 @@ await TestResumableAssemblerAsync();
 await TestSecureDownloadAsync();
 await TestUpdaterAsync(updaterPath);
 
-Console.WriteLine("PASS path-protection=roundtrip randomized tamper-rejected");
+Console.WriteLine("PASS path-protection=aes-roundtrip tamper-rejected shared-legacy-format dual-read");
 Console.WriteLine("PASS sql-transport=encrypted certificate-validated non-localdb");
 Console.WriteLine("PASS alert-configuration=https tls complete-channels bounded-timeouts");
 Console.WriteLine("PASS alert-delivery=sql-durable restart-recovered lease-recovered deduplicated retried observable");
@@ -463,6 +463,44 @@ static void TestPathProtection()
     var tampered = "v2:" + Convert.ToBase64String(payload);
     Expect<CryptographicException>(() => protector.Unprotect(tampered),
         "Una ruta AES-GCM alterada fue aceptada.");
+
+    var sharedConfiguration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:PathEncryptionKey"] = Convert.ToBase64String(key),
+            ["Security:LegacyPathEncryptionKey"] = "DevKey12-rotating-suffix",
+            ["Security:PathWriteFormat"] = AesGcmPathProtector.LegacyDesWriteFormat
+        })
+        .Build();
+    var sharedProtector = new AesGcmPathProtector(sharedConfiguration);
+    const string expectedLegacy = "/oqRWq1qRsk0+EyqBSKl5dE16hwRE6pR2bjguxL+hpYVLS3boH6k9A==";
+    Require(sharedProtector.Protect(original) == expectedLegacy,
+        "La escritura compartida dejó de coincidir con el formato DES heredado.");
+    Require(sharedProtector.Unprotect(expectedLegacy) == original,
+        "La ruta DES compartida no se pudo descifrar.");
+    Require(sharedProtector.Unprotect(encrypted1) == original,
+        "El modo compartido dejó de leer las rutas AES v2 existentes.");
+
+    var missingLegacyConfiguration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:PathEncryptionKey"] = Convert.ToBase64String(key),
+            ["Security:PathWriteFormat"] = AesGcmPathProtector.LegacyDesWriteFormat
+        })
+        .Build();
+    Expect<InvalidOperationException>(() => new AesGcmPathProtector(missingLegacyConfiguration),
+        "La escritura compartida se habilitó sin la llave histórica.");
+
+    var invalidFormatConfiguration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:PathEncryptionKey"] = Convert.ToBase64String(key),
+            ["Security:LegacyPathEncryptionKey"] = "DevKey12",
+            ["Security:PathWriteFormat"] = "Inesperado"
+        })
+        .Build();
+    Expect<InvalidOperationException>(() => new AesGcmPathProtector(invalidFormatConfiguration),
+        "La configuración aceptó un formato de escritura desconocido.");
 }
 
 static void TestUploadFileNamePolicy()
