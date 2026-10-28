@@ -321,6 +321,15 @@ try {
     $powerShellExecutable = (Get-Process -Id $PID).Path
     Invoke-Checked $powerShellExecutable @('-NoProfile', '-NonInteractive', '-File', 'deployment/Test-StagingReadiness.Smoke.ps1')
 
+    $installerPath = Join-Path $repoRoot 'deployment\Install-FileXferServer.ps1'
+    $packedScArguments = @(Get-Content -LiteralPath $installerPath | Where-Object {
+        $_ -notmatch '^\s*#' -and
+        $_ -match '[''"](?:binPath|start|DisplayName|obj|reset|actions)=\s+'
+    })
+    if ($packedScArguments.Count -gt 0) {
+        throw 'Install-FileXferServer.ps1 contiene opciones sc.exe empaquetadas en un solo argumento; PowerShell 7.3+ exige separar opción y valor.'
+    }
+
     $productionReady = -not $isDirty
     if (-not [string]::IsNullOrWhiteSpace($CodeSigningCertificateThumbprint)) {
         foreach ($binary in @($clientExe, $serverExe)) {

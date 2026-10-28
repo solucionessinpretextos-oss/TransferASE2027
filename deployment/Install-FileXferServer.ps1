@@ -642,16 +642,28 @@ try {
 
     $binaryPath = '"' + (Join-Path $install 'FileXfer.Server.exe') + '"'
     if ($null -eq $service) {
-        Invoke-ServiceControl @('create', $ServiceName, "binPath= $binaryPath", 'start= auto', "DisplayName= $ServiceDisplayName", "obj= $ServiceAccount")
+        Invoke-ServiceControl @(
+            'create', $ServiceName,
+            'binPath=', $binaryPath,
+            'start=', 'auto',
+            'DisplayName=', $ServiceDisplayName,
+            'obj=', $ServiceAccount)
         $createdService = $true
     }
     else {
         # Conservar la identidad y la contraseña administradas por Windows. Volver a enviar
         # obj= sin password= puede invalidar el inicio de sesión de una cuenta de dominio.
-        Invoke-ServiceControl @('config', $ServiceName, "binPath= $binaryPath", 'start= auto', "DisplayName= $ServiceDisplayName")
+        Invoke-ServiceControl @(
+            'config', $ServiceName,
+            'binPath=', $binaryPath,
+            'start=', 'auto',
+            'DisplayName=', $ServiceDisplayName)
     }
     Invoke-ServiceControl @('description', $ServiceName, 'Servicio seguro de transferencia de archivos de la ASE Sinaloa')
-    Invoke-ServiceControl @('failure', $ServiceName, 'reset= 86400', 'actions= restart/5000/restart/15000/restart/60000')
+    Invoke-ServiceControl @(
+        'failure', $ServiceName,
+        'reset=', '86400',
+        'actions=', 'restart/5000/restart/15000/restart/60000')
 
     if ($OpenWindowsFirewall) {
         $ruleName = "ASE FileXfer HTTPS interno $HttpsPort"
