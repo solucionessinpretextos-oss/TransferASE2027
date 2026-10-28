@@ -31,12 +31,65 @@ namespace TransferClienteASE.Servicios
 
         private const string ClientId = "transfer-cliente-ase";
 
+        private const string ExecutableNameInUpdatePackage = "TransferClienteASE.exe";
+
         private const string MensajeSoporte =
             "Si el problema persiste, contacte a Soporte ASE (juan.carrillo@ase-sinaloa.gob.mx, ext. 229).";
 
         public ServicioVersion(ServicioConfiguracionCliente configuracion)
         {
             _configuracion = configuracion ?? throw new ArgumentNullException(nameof(configuracion));
+        }
+
+        internal sealed record DestinoActualizacion(
+            string DirectorioInstalacion,
+            string EjecutableInstalado,
+            string EjecutableEnPaquete);
+
+        internal static DestinoActualizacion ResolverDestinoActualizacion(string? processPath)
+        {
+            if (string.IsNullOrWhiteSpace(processPath))
+                throw new InvalidOperationException("No se pudo identificar el ejecutable del cliente en ejecución.");
+
+            string fullProcessPath;
+            try
+            {
+                fullProcessPath = Path.GetFullPath(processPath);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                throw new InvalidOperationException("La ruta del ejecutable del cliente no es válida.", ex);
+            }
+
+            var installedExecutable = Path.GetFileName(fullProcessPath);
+            var installationDirectory = Path.GetDirectoryName(fullProcessPath);
+            if (string.IsNullOrWhiteSpace(installedExecutable) ||
+                !string.Equals(installedExecutable, Path.GetFileName(installedExecutable), StringComparison.Ordinal) ||
+                !Path.GetExtension(installedExecutable).Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(installationDirectory))
+            {
+                throw new InvalidOperationException("No se pudo identificar el ejecutable principal instalado.");
+            }
+
+            installationDirectory = Path.GetFullPath(installationDirectory);
+            if (!File.Exists(fullProcessPath) || !Directory.Exists(installationDirectory))
+                throw new InvalidOperationException("El ejecutable del cliente ya no existe en su ubicación original.");
+
+            var root = Path.GetPathRoot(installationDirectory)?.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            if (string.Equals(
+                    installationDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    root,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("La raíz de una unidad no puede utilizarse como instalación del cliente.");
+            }
+
+            return new DestinoActualizacion(
+                installationDirectory,
+                installedExecutable,
+                ExecutableNameInUpdatePackage);
         }
 
         public sealed record ResultadoVersion(
@@ -361,32 +414,37 @@ namespace TransferClienteASE.Servicios
                         }
                         else
                         {
-                            var destination = Path.GetFullPath(AppContext.BaseDirectory);
-                            var processPath = Environment.ProcessPath;
-                            var executableName = string.IsNullOrWhiteSpace(processPath)
-                                ? "TransferClienteASE.exe"
-                                : Path.GetFileName(processPath);
-                            if (string.IsNullOrWhiteSpace(executableName) ||
-                                !Path.GetExtension(executableName).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+                            DestinoActualizacion? updateDestination = null;
+                            try
                             {
-                                verificationFailure = "No se pudo identificar el ejecutable principal instalado. ";
+                                // En una publicación single-file, AppContext.BaseDirectory puede apuntar
+                                // al directorio temporal de extracción de .NET. Environment.ProcessPath
+                                // conserva la ruta exacta del EXE que inició el usuario y es la única
+                                // ubicación que el updater debe reemplazar y volver a ejecutar.
+                                updateDestination = ResolverDestinoActualizacion(Environment.ProcessPath);
                             }
-                            else
+                            catch (InvalidOperationException ex)
+                            {
+                                verificationFailure = ex.Message + " ";
+                            }
+
+                            if (updateDestination is not null)
                             {
                                 var startInfo = new ProcessStartInfo
                                 {
                                     FileName = updaterPath,
                                     UseShellExecute = false,
                                     CreateNoWindow = true,
-                                    WorkingDirectory = destination
+                                    WorkingDirectory = updateDestination.DirectorioInstalacion
                                 };
                                 startInfo.ArgumentList.Add(rutaDestino);
-                                startInfo.ArgumentList.Add(destination);
-                                startInfo.ArgumentList.Add(executableName);
+                                startInfo.ArgumentList.Add(updateDestination.DirectorioInstalacion);
+                                startInfo.ArgumentList.Add(updateDestination.EjecutableEnPaquete);
                                 startInfo.ArgumentList.Add(update.VersionDisponible);
                                 startInfo.ArgumentList.Add(update.Sha256.ToLowerInvariant());
                                 startInfo.ArgumentList.Add(update.SignatureBase64);
                                 startInfo.ArgumentList.Add(publicKeyPath);
+                                startInfo.ArgumentList.Add(updateDestination.EjecutableInstalado);
                                 startInfo.ArgumentList.Add(
                                     Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 

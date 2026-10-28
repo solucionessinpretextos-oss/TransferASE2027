@@ -1094,6 +1094,33 @@ static async Task TestUpdaterAsync(string updaterPath)
         Require(await File.ReadAllTextAsync(Path.Combine(validDestination, "config.txt")) == "new",
             "El updater no aplicó el contenido del paquete validado.");
 
+        var renamedDestination = Path.Combine(root, "renamed-destination");
+        Directory.CreateDirectory(renamedDestination);
+        const string renamedInstalledExe = "TransferClienteASE-2.2.1.5-standalone-win-x64.exe";
+        var renamedInstalledPath = Path.Combine(renamedDestination, renamedInstalledExe);
+        await File.WriteAllTextAsync(renamedInstalledPath, "old-client");
+
+        var renamedResult = await RunUpdaterAsync(
+            updaterPath,
+            validZip,
+            renamedDestination,
+            "SmokeClient.exe",
+            version,
+            validManifest.Hash,
+            validManifest.Signature,
+            publicKeyPath,
+            renamedInstalledExe);
+        Require(renamedResult.ExitCode == 0,
+            $"El updater no pudo reemplazar un EXE instalado con nombre distinto: {renamedResult.Output}");
+        Require(File.Exists(renamedInstalledPath),
+            "El updater no conservó el nombre del ejecutable que inició la actualización.");
+        Require(!File.Exists(Path.Combine(renamedDestination, "SmokeClient.exe")),
+            "El updater dejó el EXE canónico junto al instalado en vez de reemplazar el original.");
+        Require(
+            SHA256.HashData(await File.ReadAllBytesAsync(renamedInstalledPath))
+                .SequenceEqual(SHA256.HashData(File.ReadAllBytes(GetHarmlessWindowsExecutable()))),
+            "El ejecutable instalado no fue sustituido por el contenido firmado del paquete.");
+
         var incompleteZip = Path.Combine(root, "incomplete.zip");
         CreateZip(incompleteZip, archive =>
         {

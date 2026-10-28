@@ -17,16 +17,17 @@ internal static class Program
 
         try
         {
-            if (args.Length is not 7 and not 8)
+            if (args.Length is < 7 or > 9)
             {
                 Console.WriteLine(
-                    "Uso: TransferClienteASE.Updater <zip> <destino> <exe> <version> <sha256> <firmaBase64> <clavePublicaPem> [pidCliente|--verify-only]");
+                    "Uso: TransferClienteASE.Updater <zip> <destino> <exePaquete> <version> <sha256> <firmaBase64> <clavePublicaPem> [exeInstalado|pidCliente|--verify-only] [pidCliente]");
                 return 1;
             }
 
             var zipPath = Path.GetFullPath(args[0]);
             var destPath = Path.GetFullPath(args[1]);
-            var exeName = args[2];
+            var packageExeName = args[2];
+            var installedExeName = packageExeName;
             var version = args[3];
             var expectedSha256 = args[4];
             var signatureBase64 = args[5];
@@ -41,13 +42,33 @@ internal static class Program
                 }
                 else
                 {
-                    if (!int.TryParse(args[7], out var parsedProcessId) || parsedProcessId <= 0)
-                        throw new InvalidOperationException("El PID del cliente no es válido.");
-                    clientProcessId = parsedProcessId;
+                    if (int.TryParse(args[7], out var parsedProcessId))
+                    {
+                        if (parsedProcessId <= 0)
+                            throw new InvalidOperationException("El PID del cliente no es válido.");
+                        clientProcessId = parsedProcessId;
+                    }
+                    else
+                    {
+                        installedExeName = args[7];
+                    }
                 }
             }
+            else if (args.Length == 9)
+            {
+                installedExeName = args[7];
+                if (!int.TryParse(args[8], out var parsedProcessId) || parsedProcessId <= 0)
+                    throw new InvalidOperationException("El PID del cliente no es válido.");
+                clientProcessId = parsedProcessId;
+            }
 
-            ValidateInputs(zipPath, destPath, exeName, version, publicKeyPath);
+            ValidateInputs(
+                zipPath,
+                destPath,
+                packageExeName,
+                installedExeName,
+                version,
+                publicKeyPath);
             using var verifiedPackage = VerifyPackageAndOpen(
                 zipPath,
                 version,
@@ -57,7 +78,7 @@ internal static class Program
 
             if (verifyOnly)
             {
-                VerifyPackageContents(verifiedPackage, exeName);
+                VerifyPackageContents(verifiedPackage, packageExeName);
                 Console.WriteLine("Paquete firmado y contenido verificados correctamente.");
                 return 0;
             }
@@ -67,7 +88,8 @@ internal static class Program
                 return RelaunchFromTemp(
                     zipPath,
                     destPath,
-                    exeName,
+                    packageExeName,
+                    installedExeName,
                     version,
                     expectedSha256,
                     signatureBase64,
@@ -92,7 +114,7 @@ internal static class Program
             L($"Destino: {destPath}");
             L("SHA-256 y firma RSA-PSS verificados.");
 
-            WaitForClientExit(exeName, clientProcessId, L);
+            WaitForClientExit(installedExeName, clientProcessId, L);
 
             var operationRoot = Path.Combine(
                 Path.GetTempPath(),
@@ -109,12 +131,18 @@ internal static class Program
                 L("Validando y extrayendo el ZIP en staging...");
                 ExtractSafely(verifiedPackage, stagingRoot);
                 var source = DetectExtractionSource(stagingRoot, L);
-                ValidateExtractedPackageContents(source, exeName);
+                ValidateExtractedPackageContents(source, packageExeName, installedExeName);
 
                 L("Aplicando actualización con respaldo transaccional...");
-                ApplyWithRollback(source, destPath, backupRoot, L);
+                ApplyWithRollback(
+                    source,
+                    destPath,
+                    backupRoot,
+                    packageExeName,
+                    installedExeName,
+                    L);
 
-                var exePath = Path.Combine(destPath, exeName);
+                var exePath = Path.Combine(destPath, installedExeName);
                 if (!File.Exists(exePath))
                     throw new FileNotFoundException("El paquete no dejó disponible el ejecutable principal.", exePath);
 
@@ -156,7 +184,8 @@ internal static class Program
     private static void ValidateInputs(
         string zipPath,
         string destPath,
-        string exeName,
+        string packageExeName,
+        string installedExeName,
         string version,
         string publicKeyPath)
     {
@@ -169,14 +198,23 @@ internal static class Program
         if (string.Equals(destPath.TrimEnd(Path.DirectorySeparatorChar), Path.GetPathRoot(destPath)?.TrimEnd(Path.DirectorySeparatorChar),
                 StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("La raíz de una unidad no puede ser destino de actualización.");
-        if (!string.Equals(exeName, Path.GetFileName(exeName), StringComparison.Ordinal) ||
-            !Path.GetExtension(exeName).Equals(".exe", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("El nombre del ejecutable principal no es válido.");
+        ValidateExecutableName(packageExeName, "contenido en el paquete");
+        ValidateExecutableName(installedExeName, "instalado");
         if (!Version.TryParse(version, out _) || version.Contains('\n') || version.Contains('\r'))
             throw new InvalidOperationException("La versión del paquete no es válida.");
         RejectReparsePoint(new DirectoryInfo(destPath));
         if (!File.Exists(publicKeyPath))
             throw new FileNotFoundException("No se encontró la clave pública de actualización.", publicKeyPath);
+    }
+
+    private static void ValidateExecutableName(string executableName, string description)
+    {
+        if (string.IsNullOrWhiteSpace(executableName) ||
+            !string.Equals(executableName, Path.GetFileName(executableName), StringComparison.Ordinal) ||
+            !Path.GetExtension(executableName).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"El nombre del ejecutable {description} no es válido.");
+        }
     }
 
     private static FileStream VerifyPackageAndOpen(
@@ -314,7 +352,7 @@ internal static class Program
         {
             ExtractSafely(verifiedPackage, stagingRoot);
             var source = DetectExtractionSource(stagingRoot, _ => { });
-            ValidateExtractedPackageContents(source, exeName);
+            ValidateExtractedPackageContents(source, exeName, exeName);
         }
         finally
         {
@@ -322,11 +360,21 @@ internal static class Program
         }
     }
 
-    private static void ValidateExtractedPackageContents(string source, string exeName)
+    private static void ValidateExtractedPackageContents(
+        string source,
+        string packageExeName,
+        string installedExeName)
     {
-        var executable = Path.Combine(source, exeName);
+        var executable = Path.Combine(source, packageExeName);
         if (!File.Exists(executable))
             throw new InvalidDataException("El paquete no contiene el ejecutable principal esperado.");
+
+        if (!string.Equals(packageExeName, installedExeName, StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(Path.Combine(source, installedExeName)))
+        {
+            throw new InvalidDataException(
+                "El paquete contiene un archivo que colisiona con el nombre del ejecutable instalado.");
+        }
 
         var updater = Path.Combine(source, "TransferClienteASE.Updater.exe");
         if (!File.Exists(updater))
@@ -341,6 +389,8 @@ internal static class Program
         string sourceDir,
         string destinationDir,
         string backupRoot,
+        string packageExeName,
+        string installedExeName,
         Action<string> log)
     {
         var destinationRoot = WithTrailingSeparator(Path.GetFullPath(destinationDir));
@@ -354,7 +404,13 @@ internal static class Program
             foreach (var sourceFile in sourceFiles)
             {
                 var relative = Path.GetRelativePath(sourceDir, sourceFile);
-                var destination = Path.GetFullPath(Path.Combine(destinationDir, relative));
+                var destinationRelative = string.Equals(
+                    relative,
+                    packageExeName,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? installedExeName
+                    : relative;
+                var destination = Path.GetFullPath(Path.Combine(destinationDir, destinationRelative));
                 if (!WithTrailingSeparator(destination).StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("El paquete intenta escribir fuera de la instalación.");
 
@@ -369,7 +425,7 @@ internal static class Program
                 string? backup = null;
                 if (destinationExists)
                 {
-                    backup = Path.Combine(backupRoot, relative);
+                    backup = Path.Combine(backupRoot, destinationRelative);
                     Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
                     File.Copy(destination, backup, overwrite: false);
                 }
@@ -379,7 +435,9 @@ internal static class Program
                     backups.Add((backup, destination));
                 else
                     created.Add(destination);
-                log($"Actualizado: {relative}");
+                log(string.Equals(relative, destinationRelative, StringComparison.OrdinalIgnoreCase)
+                    ? $"Actualizado: {relative}"
+                    : $"Actualizado: {relative} -> {destinationRelative}");
             }
         }
         catch (Exception applyError)
@@ -521,7 +579,15 @@ internal static class Program
 
     private static bool IsRunningInsideDestination(string destination)
     {
-        var baseDirectory = WithTrailingSeparator(Path.GetFullPath(AppContext.BaseDirectory));
+        var currentExecutable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(currentExecutable))
+            return false;
+
+        var currentDirectory = Path.GetDirectoryName(Path.GetFullPath(currentExecutable));
+        if (string.IsNullOrWhiteSpace(currentDirectory))
+            return false;
+
+        var baseDirectory = WithTrailingSeparator(currentDirectory);
         var destinationRoot = WithTrailingSeparator(Path.GetFullPath(destination));
         return baseDirectory.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase);
     }
@@ -529,7 +595,8 @@ internal static class Program
     private static int RelaunchFromTemp(
         string zipPath,
         string destination,
-        string exeName,
+        string packageExeName,
+        string installedExeName,
         string version,
         string sha256,
         string signatureBase64,
@@ -547,8 +614,9 @@ internal static class Program
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
+        var currentDirectory = Path.GetDirectoryName(Path.GetFullPath(currentExe))!;
         var updaterBaseName = Path.GetFileNameWithoutExtension(currentExe);
-        foreach (var source in Directory.GetFiles(AppContext.BaseDirectory, "*", SearchOption.TopDirectoryOnly))
+        foreach (var source in Directory.GetFiles(currentDirectory, "*", SearchOption.TopDirectoryOnly))
         {
             var name = Path.GetFileName(source);
             if (string.Equals(source, currentExe, StringComparison.OrdinalIgnoreCase) ||
@@ -570,11 +638,12 @@ internal static class Program
         };
         startInfo.ArgumentList.Add(zipPath);
         startInfo.ArgumentList.Add(destination);
-        startInfo.ArgumentList.Add(exeName);
+        startInfo.ArgumentList.Add(packageExeName);
         startInfo.ArgumentList.Add(version);
         startInfo.ArgumentList.Add(sha256);
         startInfo.ArgumentList.Add(signatureBase64);
         startInfo.ArgumentList.Add(publicKeyPath);
+        startInfo.ArgumentList.Add(installedExeName);
         if (clientProcessId.HasValue)
             startInfo.ArgumentList.Add(clientProcessId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
 

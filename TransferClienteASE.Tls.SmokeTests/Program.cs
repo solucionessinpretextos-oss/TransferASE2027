@@ -67,8 +67,39 @@ Require(
         DateTimeOffset.UtcNow),
     "La PKI normal aceptó una cadena no confiable sin pin.");
 
+var updateTestRoot = Path.Combine(
+    Path.GetTempPath(),
+    "TransferClienteASE.Tls.SmokeTests",
+    Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(updateTestRoot);
+try
+{
+    var installedExecutable = Path.Combine(
+        updateTestRoot,
+        "TransferClienteASE-2.2.1.5-standalone-win-x64.exe");
+    File.WriteAllText(installedExecutable, "synthetic-client");
+
+    var updateDestination = ServicioVersion.ResolverDestinoActualizacion(installedExecutable);
+    Require(
+        string.Equals(
+            updateDestination.DirectorioInstalacion,
+            Path.GetFullPath(updateTestRoot),
+            StringComparison.OrdinalIgnoreCase),
+        "La actualización no conservó el directorio del ejecutable que inició el usuario.");
+    Require(
+        updateDestination.EjecutableInstalado == Path.GetFileName(installedExecutable),
+        "La actualización no conservó el nombre exacto del ejecutable instalado.");
+    Require(
+        updateDestination.EjecutableEnPaquete == "TransferClienteASE.exe",
+        "La actualización no distinguió el EXE canónico del paquete.");
+}
+finally
+{
+    Directory.Delete(updateTestRoot, recursive: true);
+}
+
 Console.WriteLine(
-    "PASS tls-server-certificate=pinned-self-signed wrong-pin-name-expiry-and-unpinned-chain-rejected");
+    "PASS tls-server-certificate=pinned-self-signed wrong-pin-name-expiry-and-unpinned-chain-rejected update-target=process-path");
 return 0;
 
 static X509Certificate2 CrearCertificado(DateTimeOffset noAntes, DateTimeOffset noDespues)
