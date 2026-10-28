@@ -8,13 +8,13 @@ Topología actual del servicio instalado, que no debe confundirse con el destino
 
 ```text
 Cliente de Internet
-  -> https://187.141.128.194:51237
-  -> NAT/firewall: 187.141.128.194:51237 -> 192.168.2.243:51136
+  -> https://187.141.128.194:51136
+  -> NAT/firewall: 187.141.128.194:51136 -> 192.168.2.243:51136
   -> FileXferPruebas.Server en C:\Servicios\FileXferPruebas
   -> SQL FileXferDev + SQL Budi_Dev + storage 192.168.2.21
 ```
 
-`51237` es el puerto público autorizado para el servicio de pruebas y debe traducirse a `51136`. `51236` pertenece a la instalación separada `FileXferService` y no debe reutilizarse ni modificarse. El despliegue valida que el proceso que ocupa `51136` sea el servicio de pruebas que se está sustituyendo.
+`51136` es el puerto único del servicio de pruebas: se conserva tanto en el origen público como en el destino interno. `51236` pertenece a la instalación separada `FileXferService` y no debe reutilizarse ni modificarse. El despliegue valida que el proceso que ocupa `51136` sea el servicio de pruebas que se está sustituyendo.
 
 ## Contenido de la liberación
 
@@ -151,7 +151,7 @@ Si el puerto sigue ocupado, determine si la publicación actual corre en IIS. No
 ```powershell
 Get-Service FileXferPruebas.Server
 Get-NetTCPConnection -LocalPort 51136 -State Listen
-Invoke-WebRequest 'https://187.141.128.194:51237/healthz'
+Invoke-WebRequest 'https://187.141.128.194:51136/healthz'
 ```
 
 Después:
@@ -175,12 +175,12 @@ La liberación endurecida se construye con la nueva llave de firma protegida:
 pwsh -NoProfile -File .\build\Build-Release.ps1 `
   -Version 2.2.1.4 `
   -MinSupportedVersion 2.1.0.0 `
-  -DownloadUrl 'https://187.141.128.194:51237/updates/TransferClienteASE-2.2.1.4-win-x64.zip' `
+  -DownloadUrl 'https://187.141.128.194:51136/updates/TransferClienteASE-2.2.1.4-win-x64.zip' `
   -SigningKeyPath 'D:\Secretos\TransferASE\update-private.pem' `
   -TrustedPublicKeyPath 'D:\Configuracion\TransferASE\update-public.pem' `
   -CodeSigningCertificateThumbprint '<HUELLA AUTHENTICODE>' `
   -TimestampServer '<URL RFC3161 AUTORIZADA>' `
-  -ReleaseNotes 'Endpoint público aislado, instalación endurecida, reanudación durable y actualización segura.' `
+  -ReleaseNotes 'Puerto único 51136, instalación endurecida, reanudación durable y actualización segura.' `
   -IsCritical $true
 ```
 
