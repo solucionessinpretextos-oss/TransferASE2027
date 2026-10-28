@@ -1,5 +1,7 @@
 # Baseline de servidor recibido el 26/10/2026
 
+> **Corrección operativa del 28/10/2026:** la atribución original del puerto público `51236` al servicio de pruebas era incorrecta. Ese puerto conduce a la instalación separada `FileXferService`. Para `FileXferPruebas.Server` se autorizó `187.141.128.194:51237 -> 192.168.2.243:51136`. Esta nota prevalece sobre la observación histórica incluida abajo.
+
 ## Identificación
 
 - Archivo analizado: `FileXferPruebas - 20261026.zip`
@@ -17,7 +19,7 @@ El ZIP no presentó rutas de escape. El contenido se usó únicamente como evide
 - Directorio operativo confirmado: `C:\Servicios\FileXferPruebas`.
 - Nombre del servicio confirmado: `FileXferPruebas.Server`.
 - Puerto HTTPS interno de Kestrel: `51136`.
-- Puerto HTTPS público: `51236`, traducido por NAT hacia `192.168.2.243:51136`.
+- Puerto HTTPS público autorizado posteriormente: `51237`, traducido por NAT hacia `192.168.2.243:51136`; `51236` pertenece a `FileXferService`.
 - Conexiones confirmadas en el servicio de pruebas: `FileXferDev` en 192.168.2.3\SQL2014 y `Budi_Dev` en 192.168.2.8.
 - Ruta de almacenamiento UNC existente.
 - Configuración JWT, límites, políticas y parámetros operativos válidos.

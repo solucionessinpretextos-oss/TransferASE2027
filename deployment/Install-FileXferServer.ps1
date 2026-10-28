@@ -332,6 +332,39 @@ function Assert-ProductionConfiguration {
             throw "No existe el certificado TLS configurado: $resolvedCertificatePath"
         }
     }
+    elseif ($certificateSubject -match '^\s*CN\s*=') {
+        throw 'Kestrel:Endpoints:Https:Certificate:Subject debe contener el nombre simple sin el prefijo CN=.'
+    }
+    else {
+        $certificateStore = [string](Get-Setting $config @('Kestrel', 'Endpoints', 'Https', 'Certificate', 'Store') 'Kestrel__Endpoints__Https__Certificate__Store')
+        $certificateLocation = [string](Get-Setting $config @('Kestrel', 'Endpoints', 'Https', 'Certificate', 'Location') 'Kestrel__Endpoints__Https__Certificate__Location')
+        if ([string]::IsNullOrWhiteSpace($certificateStore)) { $certificateStore = 'My' }
+        if ([string]::IsNullOrWhiteSpace($certificateLocation)) { $certificateLocation = 'LocalMachine' }
+        $store = $null
+        try {
+            $storeLocation = [Security.Cryptography.X509Certificates.StoreLocation]([Enum]::Parse(
+                [Security.Cryptography.X509Certificates.StoreLocation],
+                $certificateLocation,
+                $true))
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new($certificateStore, $storeLocation)
+            try {
+                $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+                $matchingCertificates = $store.Certificates.Find(
+                    [Security.Cryptography.X509Certificates.X509FindType]::FindBySubjectName,
+                    $certificateSubject,
+                    $true) | Where-Object HasPrivateKey
+                if (@($matchingCertificates).Count -eq 0) {
+                    throw "No se encontró un certificado TLS vigente con llave privada para '$certificateSubject' en $certificateLocation/$certificateStore."
+                }
+            }
+            finally {
+                if ($null -ne $store) { $store.Close() }
+            }
+        }
+        catch {
+            throw "La validación previa del certificado TLS falló: $($_.Exception.Message)"
+        }
+    }
 }
 
 function Assert-PathKeysMatchCatalog {
@@ -514,8 +547,8 @@ function Protect-ConfigurationFile {
     }
 }
 
-function Wait-Healthy {
-    param([Uri]$Uri, [int]$TimeoutSeconds)
+function Wait-EndpointReady {
+    param([Uri]$Uri, [int]$TimeoutSeconds, [string]$Description)
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastError = $null
@@ -528,7 +561,47 @@ function Wait-Healthy {
         catch { $lastError = $_.Exception.Message }
         Start-Sleep -Seconds 2
     }
-    throw "El servicio no quedó saludable en $Uri. Último resultado: $lastError"
+    throw "El servicio no superó $Description en $Uri. Último resultado: $lastError"
+}
+
+function Set-ServiceProductionEnvironment {
+    param([string]$Name)
+
+    $registryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    if (-not (Test-Path -LiteralPath $registryPath)) {
+        throw "No existe el registro del servicio $Name."
+    }
+
+    New-ItemProperty `
+        -LiteralPath $registryPath `
+        -Name 'Environment' `
+        -PropertyType MultiString `
+        -Value ([string[]]@(
+            'DOTNET_ENVIRONMENT=Production',
+            'ASPNETCORE_ENVIRONMENT=Production')) `
+        -Force | Out-Null
+}
+
+function Restore-ServiceEnvironment {
+    param(
+        [string]$Name,
+        [bool]$Existed,
+        [string[]]$Value)
+
+    $registryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    if (-not (Test-Path -LiteralPath $registryPath)) { return }
+
+    if ($Existed) {
+        New-ItemProperty `
+            -LiteralPath $registryPath `
+            -Name 'Environment' `
+            -PropertyType MultiString `
+            -Value $Value `
+            -Force | Out-Null
+    }
+    else {
+        Remove-ItemProperty -LiteralPath $registryPath -Name 'Environment' -ErrorAction SilentlyContinue
+    }
 }
 
 Assert-Administrator
@@ -574,6 +647,16 @@ if ($null -ne $service -and -not $ReplaceExistingService) {
 $createdService = $false
 $newInstallActivated = $false
 $previousServiceWasRunning = $null -ne $service -and $service.Status -ne 'Stopped'
+$serviceRegistryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+$previousServiceEnvironmentExisted = $false
+$previousServiceEnvironment = [string[]]@()
+if (Test-Path -LiteralPath $serviceRegistryPath) {
+    $serviceRegistryProperties = Get-ItemProperty -LiteralPath $serviceRegistryPath
+    $previousServiceEnvironmentExisted = $serviceRegistryProperties.PSObject.Properties.Name -contains 'Environment'
+    if ($previousServiceEnvironmentExisted) {
+        $previousServiceEnvironment = [string[]]$serviceRegistryProperties.Environment
+    }
+}
 
 if (-not $PSCmdlet.ShouldProcess($install, 'Instalar o actualizar FileXfer.Server con rollback')) { return }
 
@@ -664,6 +747,7 @@ try {
         'failure', $ServiceName,
         'reset=', '86400',
         'actions=', 'restart/5000/restart/15000/restart/60000')
+    Set-ServiceProductionEnvironment $ServiceName
 
     if ($OpenWindowsFirewall) {
         $ruleName = "ASE FileXfer HTTPS interno $HttpsPort"
@@ -673,7 +757,13 @@ try {
     }
 
     Start-Service -Name $ServiceName
-    Wait-Healthy ([Uri]$HealthUri) $HealthTimeoutSeconds
+    $healthEndpoint = [Uri]$HealthUri
+    $readinessBuilder = [UriBuilder]::new($healthEndpoint)
+    $readinessBuilder.Path = '/readyz'
+    $readinessBuilder.Query = ''
+    $readinessBuilder.Fragment = ''
+    Wait-EndpointReady $healthEndpoint $HealthTimeoutSeconds 'la comprobación de vida'
+    Wait-EndpointReady $readinessBuilder.Uri $HealthTimeoutSeconds 'la comprobación de dependencias'
 
     Write-Host "PASS: $ServiceDisplayName instalado y saludable."
     Write-Host "Instalación: $install"
@@ -692,6 +782,15 @@ catch {
     }
     if ($createdService) {
         try { & sc.exe delete $ServiceName | Out-Null } catch { }
+    }
+    elseif ($null -ne $service) {
+        try {
+            Restore-ServiceEnvironment `
+                -Name $ServiceName `
+                -Existed $previousServiceEnvironmentExisted `
+                -Value $previousServiceEnvironment
+        }
+        catch { }
     }
     if (Test-Path -LiteralPath $backup -PathType Container) {
         Move-Item -LiteralPath $backup -Destination $install

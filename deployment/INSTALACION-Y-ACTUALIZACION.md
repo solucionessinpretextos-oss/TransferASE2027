@@ -8,13 +8,13 @@ Topología actual del servicio instalado, que no debe confundirse con el destino
 
 ```text
 Cliente de Internet
-  -> https://187.141.128.194:51236
-  -> NAT/firewall: 187.141.128.194:51236 -> 192.168.2.243:51136
+  -> https://187.141.128.194:51237
+  -> NAT/firewall: 187.141.128.194:51237 -> 192.168.2.243:51136
   -> FileXferPruebas.Server en C:\Servicios\FileXferPruebas
   -> SQL FileXferDev + SQL Budi_Dev + storage 192.168.2.21
 ```
 
-`51236` es el puerto público actual y se traduce a `51136`. El despliegue conserva esa topología y valida que el proceso que ocupa `51136` sea el servicio de pruebas que se está sustituyendo.
+`51237` es el puerto público autorizado para el servicio de pruebas y debe traducirse a `51136`. `51236` pertenece a la instalación separada `FileXferService` y no debe reutilizarse ni modificarse. El despliegue valida que el proceso que ocupa `51136` sea el servicio de pruebas que se está sustituyendo.
 
 ## Contenido de la liberación
 
@@ -84,7 +84,7 @@ pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
   -ProductionConfigPath 'D:\Configuracion\FileXferDev\appsettings.Production.json' `
   -InstallDirectory 'C:\Servicios\FileXferPruebas' `
   -ServiceName 'FileXferPruebas.Server' `
-  -TlsCertificateSubject 'CN=transfer-pruebas.ase-sinaloa.local' `
+  -TlsCertificateSubject 'transfer-pruebas.ase-sinaloa.local' `
   -AllowedHosts @('transfer-pruebas.ase-sinaloa.local','SERVERDIG1','187.141.128.194','192.168.2.243','localhost','127.0.0.1') `
   -AllowLegacyDevelopmentSqlTransport `
   -ServiceAccount 'Ase-sinaloa\juan.carrillo' `
@@ -94,7 +94,7 @@ pwsh -NoProfile -File .\Install-FileXferServer.ps1 `
   -OpenWindowsFirewall
 ```
 
-El DNS y el certificado TLS del ejemplo deben sustituirse por los autorizados. La cuenta mostrada es la que actualmente ejecuta `FileXferPruebas.Server`; el instalador conserva su identidad y la contraseña almacenada por Windows, y aborta si se intenta cambiarla durante el corte. Confirme sus permisos sobre la ruta UNC. El archivo de configuración debe fijar Kestrel en 51136. El paquete incorpora las autoridades SAT locales y el instalador se detiene si faltan; no habilita bypass. Con `RequireOcsp=false` no exige hosts de revocación.
+El DNS y el certificado TLS del ejemplo deben sustituirse por los autorizados. `TlsCertificateSubject` recibe el nombre simple que Kestrel busca mediante `FindBySubjectName`; no debe llevar el prefijo `CN=`. La cuenta mostrada es la que actualmente ejecuta `FileXferPruebas.Server`; el instalador conserva su identidad y la contraseña almacenada por Windows, y aborta si se intenta cambiarla durante el corte. Confirme sus permisos sobre la ruta UNC. El archivo de configuración debe fijar Kestrel en 51136. El paquete incorpora las autoridades SAT locales y el instalador se detiene si faltan; no habilita bypass. Con `RequireOcsp=false` no exige hosts de revocación.
 
 `-AllowLegacyDevelopmentSqlTransport` existe para FileXferDev en 192.168.2.3\SQL2014 y Budi_Dev en 192.168.2.8, con el transporte SQL de pruebas informado. El instalador valida ambos servidores, ambas bases y el storage 192.168.2.21 antes de detener un servicio. Retire la excepción cuando SQL Server tenga TLS 1.2+, certificado confiable, `Encrypt=True` y `TrustServerCertificate=False`.
 
@@ -151,7 +151,7 @@ Si el puerto sigue ocupado, determine si la publicación actual corre en IIS. No
 ```powershell
 Get-Service FileXferPruebas.Server
 Get-NetTCPConnection -LocalPort 51136 -State Listen
-Invoke-WebRequest 'https://transfer.ase-sinaloa.gob.mx:51236/healthz'
+Invoke-WebRequest 'https://187.141.128.194:51237/healthz'
 ```
 
 Después:
@@ -173,14 +173,14 @@ La liberación endurecida se construye con la nueva llave de firma protegida:
 
 ```powershell
 pwsh -NoProfile -File .\build\Build-Release.ps1 `
-  -Version 2.2.1.1 `
-  -MinSupportedVersion 2.0.1.2 `
-  -DownloadUrl 'https://transfer.ase-sinaloa.gob.mx:51236/updates/TransferClienteASE-2.2.1.1-win-x64.zip' `
+  -Version 2.2.1.4 `
+  -MinSupportedVersion 2.1.0.0 `
+  -DownloadUrl 'https://187.141.128.194:51237/updates/TransferClienteASE-2.2.1.4-win-x64.zip' `
   -SigningKeyPath 'D:\Secretos\TransferASE\update-private.pem' `
   -TrustedPublicKeyPath 'D:\Configuracion\TransferASE\update-public.pem' `
   -CodeSigningCertificateThumbprint '<HUELLA AUTHENTICODE>' `
   -TimestampServer '<URL RFC3161 AUTORIZADA>' `
-  -ReleaseNotes 'Cliente autónomo, reanudación durable y actualización segura.' `
+  -ReleaseNotes 'Endpoint público aislado, instalación endurecida, reanudación durable y actualización segura.' `
   -IsCritical $true
 ```
 

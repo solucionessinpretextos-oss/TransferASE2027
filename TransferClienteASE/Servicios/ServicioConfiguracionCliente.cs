@@ -15,7 +15,10 @@ namespace TransferClienteASE.Servicios
 {
     public sealed class ServicioConfiguracionCliente
     {
-        private const string UrlProduccionPredeterminada = "https://187.141.128.194:51236";
+        // 51236 pertenece a FileXferService y queda fuera del entorno de pruebas.
+        // El NAT autorizado para Transfer ASE dirige 51237 al listener interno 51136
+        // de FileXferPruebas.Server.
+        private const string UrlProduccionPredeterminada = "https://187.141.128.194:51237";
         private readonly IReadOnlyList<byte[]> _huellasCertificadoSha256;
 
         public ServicioConfiguracionCliente()

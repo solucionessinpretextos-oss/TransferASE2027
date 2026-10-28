@@ -81,6 +81,24 @@ function Assert-Base64Key32 {
     if ($bytes.Length -ne 32) { throw "$Description debe decodificar exactamente 32 bytes." }
 }
 
+function Normalize-KestrelCertificateSubjectName {
+    param([string]$Value)
+
+    $subjectName = $Value.Trim()
+    if ($subjectName -match '^CN\s*=\s*([^,]+)$') {
+        $subjectName = $Matches[1].Trim()
+    }
+    elseif ($subjectName.Contains('=')) {
+        throw 'TlsCertificateSubject debe ser el nombre simple del certificado (por ejemplo, transfer-pruebas.ase-sinaloa.local), no un nombre distinguido compuesto.'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($subjectName)) {
+        throw 'TlsCertificateSubject no puede quedar vacío después de normalizarlo.'
+    }
+
+    return $subjectName
+}
+
 function Write-Utf8NoBomAtomic {
     param([string]$Path, [string]$Content)
     $directory = Split-Path -Parent $Path
@@ -150,8 +168,11 @@ $https = Ensure-Object $endpoints 'Https'
 Set-Default $https 'Url' 'https://0.0.0.0:51136'
 Set-Default $https 'Protocols' 'Http1AndHttp2'
 if (-not [string]::IsNullOrWhiteSpace($TlsCertificateSubject)) {
+    $certificateSubjectName = Normalize-KestrelCertificateSubjectName $TlsCertificateSubject
     Set-Value $https 'Certificate' ([pscustomobject][ordered]@{
-        Subject = $TlsCertificateSubject.Trim()
+        # Kestrel usa X509FindType.FindBySubjectName: espera el nombre simple,
+        # no el nombre distinguido con prefijo "CN=".
+        Subject = $certificateSubjectName
         Store = 'My'
         Location = 'LocalMachine'
         AllowInvalid = $false
