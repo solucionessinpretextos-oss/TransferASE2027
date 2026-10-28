@@ -144,6 +144,10 @@
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TransferClienteASE.Tls.SmokeTests" />
+  </ItemGroup>
+
   <!-- En la liberación autónoma estos tres recursos se incrustan dentro del EXE.
        Sus rutas son proporcionadas por build/Build-Release.ps1; una compilación
        normal de desarrollo conserva el comportamiento multiarchivo existente. -->

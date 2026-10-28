@@ -19,6 +19,13 @@ namespace TransferClienteASE.Servicios
         // FileXferPruebas.Server usa el mismo puerto 51136 tanto en el origen
         // público como en su listener interno, para REST, gRPC, Dashboard y updater.
         private const string UrlProduccionPredeterminada = "https://187.141.128.194:51136";
+        // Certificado TLS autofirmado del entorno de pruebas, válido hasta 2027-11-21.
+        // Se fija por SHA-256 para que un equipo no administrado pueda autenticar al
+        // servidor sin instalar una raíz local. La política conserva la validación de
+        // nombre/IP y vigencia, y solo tolera errores de cadena propios de una raíz
+        // autofirmada cuando la huella coincide exactamente.
+        private const string HuellaServidorPruebasSha256 =
+            "1FE5CCC72544F88183F88555127FB0E18E283E7E493A4B4038CB4897B4E9122D";
         private readonly IReadOnlyList<byte[]> _huellasCertificadoSha256;
 
         public ServicioConfiguracionCliente()
@@ -67,31 +74,15 @@ namespace TransferClienteASE.Servicios
         private bool ValidarCertificadoServidor(
             HttpRequestMessage _,
             X509Certificate2? certificado,
-            X509Chain? __,
+            X509Chain? cadena,
             SslPolicyErrors errores)
         {
-            if (certificado is null)
-                return false;
-
-            // El pin complementa la PKI del sistema operativo; nunca la sustituye. Esto evita
-            // aceptar un certificado fijado pero expirado, revocado o emitido para otro nombre.
-            if (errores != SslPolicyErrors.None)
-                return false;
-
-            if (_huellasCertificadoSha256.Count > 0)
-            {
-                var huellaPresentada = certificado.GetCertHash(HashAlgorithmName.SHA256);
-                var coincide = false;
-                foreach (var huellaPermitida in _huellasCertificadoSha256)
-                {
-                    coincide |= CryptographicOperations.FixedTimeEquals(
-                        huellaPresentada,
-                        huellaPermitida);
-                }
-                return coincide;
-            }
-
-            return true;
+            return PoliticaCertificadoServidor.Validar(
+                certificado,
+                cadena,
+                errores,
+                _huellasCertificadoSha256,
+                DateTimeOffset.UtcNow);
         }
 
         private static string LeerEndpoint(string variable, string valorPredeterminado)
@@ -121,17 +112,22 @@ namespace TransferClienteASE.Servicios
 
         private static IReadOnlyList<byte[]> LeerHuellasCertificado()
         {
+            var huellas = new List<byte[]>
+            {
+                Convert.FromHexString(HuellaServidorPruebasSha256)
+            };
+
             var valor = Environment.GetEnvironmentVariable("TRANSFER_SERVER_CERT_SHA256");
             if (string.IsNullOrWhiteSpace(valor))
-                return Array.Empty<byte[]>();
+                return huellas;
 
             var entradas = valor.Split(
                 new[] { ',', ';' },
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (entradas.Length is < 1 or > 4)
-                throw new InvalidOperationException("TRANSFER_SERVER_CERT_SHA256 admite entre una y cuatro huellas.");
+            if (entradas.Length is < 1 or > 3)
+                throw new InvalidOperationException(
+                    "TRANSFER_SERVER_CERT_SHA256 admite hasta tres huellas adicionales.");
 
-            var huellas = new List<byte[]>(entradas.Length);
             foreach (var entrada in entradas)
             {
                 var normalizada = entrada
@@ -155,6 +151,65 @@ namespace TransferClienteASE.Servicios
             }
 
             return huellas;
+        }
+    }
+
+    internal static class PoliticaCertificadoServidor
+    {
+        private const X509ChainStatusFlags ErroresCadenaPermitidosConPin =
+            X509ChainStatusFlags.UntrustedRoot |
+            X509ChainStatusFlags.PartialChain |
+            X509ChainStatusFlags.RevocationStatusUnknown |
+            X509ChainStatusFlags.OfflineRevocation;
+
+        internal static bool Validar(
+            X509Certificate2? certificado,
+            X509Chain? cadena,
+            SslPolicyErrors errores,
+            IReadOnlyList<byte[]> huellasPermitidas,
+            DateTimeOffset ahoraUtc)
+        {
+            if (certificado is null)
+                return false;
+
+            // Ni siquiera un certificado fijado puede suplir una identidad distinta.
+            if ((errores & (SslPolicyErrors.RemoteCertificateNotAvailable |
+                            SslPolicyErrors.RemoteCertificateNameMismatch)) != 0)
+                return false;
+
+            var noAntesUtc = new DateTimeOffset(certificado.NotBefore.ToUniversalTime());
+            var noDespuesUtc = new DateTimeOffset(certificado.NotAfter.ToUniversalTime());
+            if (ahoraUtc < noAntesUtc || ahoraUtc > noDespuesUtc)
+                return false;
+
+            if (huellasPermitidas.Count == 0)
+                return errores == SslPolicyErrors.None;
+
+            var huellaPresentada = certificado.GetCertHash(HashAlgorithmName.SHA256);
+            var coincide = false;
+            foreach (var huellaPermitida in huellasPermitidas)
+            {
+                coincide |= CryptographicOperations.FixedTimeEquals(
+                    huellaPresentada,
+                    huellaPermitida);
+            }
+            if (!coincide)
+                return false;
+
+            if (errores == SslPolicyErrors.None)
+                return true;
+
+            if (errores != SslPolicyErrors.RemoteCertificateChainErrors ||
+                cadena is null || cadena.ChainStatus.Length == 0)
+                return false;
+
+            foreach (var estado in cadena.ChainStatus)
+            {
+                if ((estado.Status & ~ErroresCadenaPermitidosConPin) != X509ChainStatusFlags.NoError)
+                    return false;
+            }
+
+            return true;
         }
     }
 }

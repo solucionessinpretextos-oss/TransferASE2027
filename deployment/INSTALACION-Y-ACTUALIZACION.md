@@ -173,14 +173,14 @@ La liberación endurecida se construye con la nueva llave de firma protegida:
 
 ```powershell
 pwsh -NoProfile -File .\build\Build-Release.ps1 `
-  -Version 2.2.1.4 `
+  -Version 2.2.1.5 `
   -MinSupportedVersion 2.1.0.0 `
-  -DownloadUrl 'https://187.141.128.194:51136/updates/TransferClienteASE-2.2.1.4-win-x64.zip' `
+  -DownloadUrl 'https://187.141.128.194:51136/updates/TransferClienteASE-2.2.1.5-win-x64.zip' `
   -SigningKeyPath 'D:\Secretos\TransferASE\update-private.pem' `
   -TrustedPublicKeyPath 'D:\Configuracion\TransferASE\update-public.pem' `
   -CodeSigningCertificateThumbprint '<HUELLA AUTHENTICODE>' `
   -TimestampServer '<URL RFC3161 AUTORIZADA>' `
-  -ReleaseNotes 'Puerto único 51136, instalación endurecida, reanudación durable y actualización segura.' `
+  -ReleaseNotes 'Compatibilidad TLS segura para equipos nuevos, puerto único 51136, reanudación durable y actualización firmada.' `
   -IsCritical $true
 ```
 
