@@ -21,7 +21,7 @@ public sealed class ResumableUploadCleanupService : BackgroundService
             try
             {
                 var result = await _maintenance.CleanupExpiredAsync("system", null, stoppingToken);
-                if (result.Removed > 0 || result.Failed > 0)
+                if (result.Removed > 0 || result.RetiredPreservingFile > 0 || result.Failed > 0)
                     _logger.LogInformation("Limpieza automática de pendientes: {Message}", result.Message);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

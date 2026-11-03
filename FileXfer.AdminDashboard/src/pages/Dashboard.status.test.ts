@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildExecutiveObservations, panelExplanation, statusKind } from "./Dashboard";
-import { SummaryResponse } from "../types/admin";
+import { buildExecutiveObservations, diskUsageDisplay, panelExplanation, statusKind } from "./Dashboard";
+import { ServerHealthDto, SummaryResponse } from "../types/admin";
 
 describe("semántica visual de estados del Dashboard", () => {
   it.each([
@@ -20,6 +20,11 @@ describe("semántica visual de estados del Dashboard", () => {
 
   it("no confunde una falla de catálogo con un estado completado", () => {
     expect(statusKind("CatalogFailed")).not.toBe("completed");
+  });
+
+  it("no convierte capacidad de disco desconocida en cero por ciento", () => {
+    expect(diskUsageDisplay({ diskUsagePercent: 0, diskCapacityAvailable: false } as ServerHealthDto)).toBe("Sin medición");
+    expect(diskUsageDisplay({ diskUsagePercent: 25, diskCapacityAvailable: true } as ServerHealthDto)).toContain("25");
   });
 
   it.each([

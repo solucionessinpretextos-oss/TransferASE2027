@@ -23,12 +23,13 @@ namespace FileXfer.Server.Services
     public interface ISystemHealthService
     {
         Task<ServerHealthDto> GetSnapshotAsync(CancellationToken ct);
+        Task<ServerHealthDto> RecheckAsync(CancellationToken ct) => GetSnapshotAsync(ct);
     }
 
     public sealed class SystemHealthService : ISystemHealthService
     {
         private readonly IDbContextFactory<FileXferDbContext> _dbFactory;
-        private readonly StorageOptions _storageOptions;
+        private readonly StorageHealthProbe _storageProbe;
         private readonly IAlertDeliveryState _alertDeliveryState;
         private readonly ILogger<SystemHealthService> _log;
 
@@ -36,15 +37,21 @@ namespace FileXfer.Server.Services
             IDbContextFactory<FileXferDbContext> dbFactory,
             StorageOptions storageOptions,
             IAlertDeliveryState alertDeliveryState,
-            ILogger<SystemHealthService> log)
+            ILogger<SystemHealthService> log,
+            StorageHealthProbe? storageProbe = null)
         {
             _dbFactory = dbFactory;
-            _storageOptions = storageOptions;
+            _storageProbe = storageProbe ?? new StorageHealthProbe(
+                storageOptions, Microsoft.Extensions.Logging.Abstractions.NullLogger<StorageHealthProbe>.Instance);
             _alertDeliveryState = alertDeliveryState;
             _log = log;
         }
 
-        public async Task<ServerHealthDto> GetSnapshotAsync(CancellationToken ct)
+        public Task<ServerHealthDto> GetSnapshotAsync(CancellationToken ct) => GetSnapshotCoreAsync(false, ct);
+
+        public Task<ServerHealthDto> RecheckAsync(CancellationToken ct) => GetSnapshotCoreAsync(true, ct);
+
+        private async Task<ServerHealthDto> GetSnapshotCoreAsync(bool forceRefresh, CancellationToken ct)
         {
             bool databaseOk = true;
             bool storageOk = true;
@@ -112,44 +119,12 @@ namespace FileXfer.Server.Services
                 memoryUsagePercent = 0;
             }
 
-            try
-            {
-                var basePath = _storageOptions.BasePath;
-
-                if (string.IsNullOrWhiteSpace(basePath))
-                {
-                    storageOk = false;
-                    _log.LogWarning("StorageOptions.BasePath está vacío; no se puede calcular uso de disco.");
-                }
-                else
-                {
-                    var root = Path.GetPathRoot(basePath);
-                    if (!string.IsNullOrWhiteSpace(root))
-                    {
-                        var drive = new DriveInfo(root);
-                        var total = drive.TotalSize;
-                        var free = drive.AvailableFreeSpace;
-                        if (total > 0)
-                        {
-                            var used = total - free;
-                            diskUsagePercent = (double)used * 100.0 / total;
-                        }
-                    }
-                    else
-                    {
-                        storageOk = false;
-                        _log.LogWarning("No se pudo obtener la raíz del path de almacenamiento: {Path}", basePath);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                storageOk = false;
-                _log.LogWarning(ex,
-                    "Error calculando uso de disco para StoragePath={Path}",
-                    _storageOptions.BasePath);
-                diskUsagePercent = 0;
-            }
+            var storageDiagnostic = await _storageProbe.GetSnapshotAsync(forceRefresh, ct);
+            storageOk = storageDiagnostic.CanRead && storageDiagnostic.CanWrite && storageDiagnostic.CanDelete;
+            if (storageDiagnostic.CapacityAvailable && storageDiagnostic.TotalBytes is > 0 && storageDiagnostic.FreeBytes is >= 0)
+                diskUsagePercent = Math.Clamp(
+                    (storageDiagnostic.TotalBytes.Value - storageDiagnostic.FreeBytes.Value) * 100.0 / storageDiagnostic.TotalBytes.Value,
+                    0, 100);
 
             if (!databaseOk || !storageOk || !messageBusOk || !alertingOk)
             {
@@ -158,6 +133,7 @@ namespace FileXfer.Server.Services
                           (storageOk ? "" : "[Storage] ") +
                           (messageBusOk ? "" : "[Bus] ") +
                           (alertingOk ? "" : "[Alertas] ");
+                if (!storageOk) message += storageDiagnostic.Message;
             }
 
             var dto = new ServerHealthDto
@@ -169,6 +145,8 @@ namespace FileXfer.Server.Services
                 DiskUsagePercent = Math.Round(diskUsagePercent, 1),
                 DatabaseOk = databaseOk,
                 StorageOk = storageOk,
+                DiskCapacityAvailable = storageDiagnostic.CapacityAvailable,
+                StorageDiagnostic = storageDiagnostic,
                 MessageBusOk = messageBusOk,
                 AlertingOk = alertingOk,
                 AlertingEnabled = alertDelivery.Enabled,

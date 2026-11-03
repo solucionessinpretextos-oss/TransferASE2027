@@ -12,6 +12,8 @@ export interface ServerHealthDto {
   cpuUsagePercent: number;
   memoryUsagePercent: number;
   diskUsagePercent: number;
+  diskCapacityAvailable?: boolean;
+  storageDiagnostic?: StorageDiagnosticDto | null;
   databaseOk: boolean;
   storageOk: boolean;
   messageBusOk: boolean;
@@ -29,6 +31,21 @@ export interface ServerHealthDto {
   alertTerminalFailureTotal: number;
   alertLastDeliveredUtc?: string | null;
   alertLastFailureUtc?: string | null;
+}
+
+export interface StorageDiagnosticDto {
+  code: string;
+  message: string;
+  remediation: string;
+  path: string;
+  serviceIdentity: string;
+  checkedUtc: string;
+  canRead: boolean;
+  canWrite: boolean;
+  canDelete: boolean;
+  capacityAvailable: boolean;
+  totalBytes?: number | null;
+  freeBytes?: number | null;
 }
 
 export interface TransferSummaryDto {
@@ -110,6 +127,8 @@ export interface PendingTransferDto {
   resumeExpiresUtc: string;
   isActive: boolean;
   isExpired: boolean;
+  protectionReason?: string | null;
+  canReconcile?: boolean;
 }
 
 export interface PendingTransfersResponse {
@@ -125,6 +144,17 @@ export interface PendingCleanupResponse {
   failed: number;
   bytesReclaimed: number;
   message: string;
+  retiredPreservingFile?: number;
+  items?: PendingCleanupItemDto[];
+}
+
+export interface PendingCleanupItemDto {
+  uploadId: string;
+  fileName: string;
+  outcome: "Removed" | "RetiredPreservingFile" | "Skipped" | "Failed";
+  code: string;
+  message: string;
+  bytesReclaimed: number;
 }
 
 export interface RecentTransferDto {

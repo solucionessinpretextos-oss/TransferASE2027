@@ -31,17 +31,20 @@ namespace FileXfer.Server.Controllers.Admin
         private readonly ISystemHealthService _systemHealth;
         private readonly UploadSessionStore _sessions;
         private readonly StorageOptions _storage;
+        private readonly PendingTransferMaintenanceService? _maintenance;
 
         public MonitoringController(
             IDbContextFactory<FileXferDbContext> dbFactory,
             ISystemHealthService systemHealth,
             UploadSessionStore sessions,
-            StorageOptions storage)
+            StorageOptions storage,
+            PendingTransferMaintenanceService? maintenance = null)
         {
             _dbFactory = dbFactory;
             _systemHealth = systemHealth;
             _sessions = sessions;
             _storage = storage;
+            _maintenance = maintenance;
         }
 
         [HttpGet("summary")]
@@ -246,6 +249,22 @@ namespace FileXfer.Server.Controllers.Admin
                 u.CompletedUtc >= hourWindowStart, ct);
             var healthBreakdown = OperationalHealthCalculator.Explain(
                 server, CalculateRate(healthFailed, healthCompleted + healthFailed), stalePendingTransfers, expiredPendingTransfers);
+            if (_maintenance is not null && expiredPendingTransfers > 0)
+            {
+                var diagnosis = await _maintenance.GetDiagnosticsAsync(ct);
+                var expiryComponent = healthBreakdown.Single(component => component.Key == "expired");
+                expiryComponent.Detail =
+                    $"{expiredPendingTransfers} transferencias inactivas alcanzaron su plazo. " +
+                    $"Diagnóstico de {diagnosis.Examined} registros: {diagnosis.EligibleForCleanup} parciales aptos para limpiar, " +
+                    $"{diagnosis.SharedPaths} con ruta compartida, {diagnosis.ContextMismatches} con ruta inconsistente, " +
+                    $"{diagnosis.Active} activos/protegidos por otra transmisión y {diagnosis.ProtectedEvidence} con evidencia protegida. " +
+                    (diagnosis.IsSampled ? $"Se muestra una muestra del total de {diagnosis.TotalExpired}; revise la lista paginada. " : "") +
+                    "3 puntos por archivo vencido, hasta 15 puntos.";
+                expiryComponent.Remediation =
+                    "Use Limpiar vencidas ahora: elimina parciales aptos y cierra registros vencidos con rutas compartidas conservando sus archivos. " +
+                    "Si se indica ruta inconsistente, revise el detalle por archivo y use Conciliar seleccionadas para cerrar solo el registro pendiente, sin borrar el archivo físico. " +
+                    "Las transmisiones activas y los registros con recibos se conservan; se informa el motivo de cada omisión.";
+            }
 
             var kpis = new OperationalKpisDto
             {
@@ -273,7 +292,8 @@ namespace FileXfer.Server.Controllers.Admin
                 OldestPendingAgeHours = oldestPendingUtc == null ? 0 : Math.Max(0, (now - oldestPendingUtc.Value).TotalHours),
                 NearExpiryBytes = await nearExpiry.SumAsync(u => u.BytesReceived, ct),
                 AdministrativelyCancelledToday = await uploads.CountAsync(u => u.Status == "Cancelled" &&
-                    u.CompletedUtc >= todayStart && u.LastError != null && u.LastError.StartsWith("Eliminación manual"), ct),
+                    u.CompletedUtc >= todayStart && u.LastError != null &&
+                    (u.LastError.StartsWith("Eliminación manual") || u.LastError.StartsWith("Conciliación manual")), ct),
                 ExpiredToday = await uploads.CountAsync(u => u.Status == "Expired" && u.CompletedUtc >= todayStart, ct),
                 LastCompletedUtc = lastCompletedUtc,
                 LastFailedUtc = lastFailedUtc

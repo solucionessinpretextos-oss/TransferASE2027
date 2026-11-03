@@ -118,15 +118,36 @@ Solo el rol **admin**, autenticado con e.firma, puede realizar estas operaciones
 5. Escriba un motivo de entre 5 y 500 caracteres y confirme.
 6. Revise el resultado: eliminados, omitidos y errores. Un archivo que terminó o volvió a activarse durante la operación se omite.
 
-Se elimina la copia parcial del servidor y la transferencia deja de estar pendiente. Se conservan el registro terminal `Cancelled`, su responsable, el motivo y la auditoría. No se eliminan documentos completados ni sus recibos. Para enviar otra vez un archivo retirado, el usuario debe iniciar una transferencia nueva.
+Se elimina una copia parcial exclusiva y la transferencia deja de estar pendiente. Si el archivo tiene referencias compartidas, se cierra únicamente el pendiente y se conserva el archivo físico. Se conserva el estado terminal, su responsable, el motivo y la auditoría. No se eliminan documentos completados ni sus recibos. Para enviar otra vez un archivo retirado, el usuario debe iniciar una transferencia nueva.
+
+El resultado permanece visible después de cerrar la confirmación: cada archivo informa si se eliminó su copia, se cerró el registro conservando el archivo, se omitió o falló. Una operación sin cambios se muestra como advertencia con la causa por archivo; no debe interpretarse como una limpieza exitosa.
 
 ### Expiración automática y Limpiar vencidos
 
 El servicio revisa al iniciar y **cada minuto** el plazo individual `ResumeExpiresUtc`. Para registros antiguos sin esa fecha, calcula el límite como última actividad + `Storage:ResumeRetentionHours` (24 horas por defecto; se respeta la configuración instalada). Si tampoco existe actividad válida, utiliza la creación.
 
-Una copia parcial vencida e inactiva se elimina y queda marcada `Expired` con auditoría. El botón **Limpiar vencidos** adelanta el mismo proceso. Cada pase trabaja hasta 1000 candidatos; una cola mayor se vacía en ciclos sucesivos. Los archivos activos o protegidos se omiten. Si falla el borrado, se conserva el pendiente para poder reintentar y consultar el error en los logs.
+Una copia parcial exclusiva, vencida e inactiva se elimina y queda marcada `Expired` con auditoría. Si su ruta está compartida con otros registros, se marca la transferencia como vencida conservando el archivo; los bytes liberados son cero y el resultado lo indica. Se comprueba también que ninguna transferencia que referencia el archivo esté activa. El botón **Limpiar vencidas ahora** adelanta el mismo proceso. Cada pase trabaja hasta 1000 candidatos; una cola mayor se vacía en ciclos sucesivos. Los archivos activos y los registros con evidencia protegida se omiten. Si falla el borrado, se conserva el pendiente para poder reintentar y consultar el motivo en el resultado.
 
 El plazo se comprueba también al solicitar la reanudación: un archivo vencido no se revive durante el intervalo anterior al siguiente ciclo de limpieza.
+
+### Conciliar pendientes protegidos
+
+Una ruta registrada que no corresponde al contexto actual requiere una decisión explícita. El sistema muestra la causa junto al archivo y habilita **Conciliar seleccionadas** cuando se puede cerrar el registro de forma segura.
+
+1. Desde el diagnóstico de salud, presione la acción para revisar los pendientes protegidos.
+2. Revise la causa específica de cada fila y seleccione los registros abandonados.
+3. Presione **Conciliar seleccionadas**, indique el motivo y confirme el alcance: se cerrará el pendiente conservando el archivo físico.
+4. Compruebe los resultados individuales y el siguiente corte de salud.
+
+Conciliar no cambia rutas, no declara un documento recibido y no sustituye un recibo. Las transferencias activas y la evidencia de recepción permanecen protegidas. El historial conserva el cierre y la decisión del administrador.
+
+### Comprobar el almacenamiento desde el Dashboard
+
+El indicador de almacenamiento realiza una prueba de **escritura, lectura y eliminación** bajo la cuenta del servicio, usando únicamente un archivo propio aleatorio de 32 bytes. El panel muestra ruta, cuenta, fecha de comprobación, operación que falló, código y recomendación específica.
+
+Use **Comprobar almacenamiento ahora** para repetir la prueba después de corregir red, ruta o permisos. Esta acción no concede permisos, no cambia credenciales y no modifica documentos del usuario.
+
+La capacidad de una carpeta de red se consulta con la operación de Windows apropiada para rutas UNC. Si no se puede medir el espacio pero la prueba funcional es correcta, el panel indica **Sin medición**: la falta de telemetría de capacidad no debe marcar como caído un almacenamiento que sí funciona.
 
 ### Reiniciar estadísticas
 

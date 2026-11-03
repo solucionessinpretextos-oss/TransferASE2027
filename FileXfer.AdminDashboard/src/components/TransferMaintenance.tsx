@@ -2,15 +2,26 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { PendingCleanupResponse, PendingTransferDto, PendingTransfersResponse } from "../types/admin";
 
-type MaintenanceAction = "remove" | "expire" | "reset";
+type MaintenanceAction = "remove" | "expire" | "reconcile" | "reset";
+export interface MaintenanceRequest { kind: "expire" | "review"; nonce: number }
 
 export function canRemovePending(item: PendingTransferDto): boolean {
-  return !item.isActive && (item.status === "Pending" || item.status === "Paused");
+  return !item.isActive && !item.protectionReason && (item.status === "Pending" || item.status === "Paused");
 }
 
-export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
+export function canReconcilePending(item: PendingTransferDto): boolean {
+  return !item.isActive && item.canReconcile === true && (item.status === "Pending" || item.status === "Paused");
+}
+
+export function cleanupResultTone(result: PendingCleanupResponse): "success" | "warning" | "error" {
+  if (result.failed > 0 && result.removed + (result.retiredPreservingFile ?? 0) === 0) return "error";
+  return result.skipped > 0 || result.failed > 0 || result.removed + (result.retiredPreservingFile ?? 0) === 0 ? "warning" : "success";
+}
+
+export function TransferMaintenance({ statisticsStartedUtc, onChanged, requestAction }: {
   statisticsStartedUtc?: string | null;
   onChanged: () => void;
+  requestAction?: MaintenanceRequest | null;
 }) {
   const { authorizedFetch, session } = useAuth();
   const canManage = session?.roles.some(role => role.toLowerCase() === "admin") ?? false;
@@ -22,12 +33,28 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [operationResult, setOperationResult] = useState<PendingCleanupResponse | null>(null);
   const [revision, setRevision] = useState(0);
   const [action, setAction] = useState<MaintenanceAction | null>(null);
   const [reason, setReason] = useState("");
   const reasonInput = useRef<HTMLTextAreaElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const section = useRef<HTMLElement>(null);
+  const resultPanel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!requestAction) return;
+    section.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    section.current?.focus({ preventScroll: true });
+    if (requestAction.kind === "expire" && canManage && !busy) {
+      setReason(""); setError(null); setAction("expire");
+    }
+  }, [requestAction?.nonce]);
+
+  useEffect(() => {
+    if (operationResult) resultPanel.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  }, [operationResult]);
 
   useEffect(() => {
     if (!action) return;
@@ -53,7 +80,7 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
         const lastPage = Math.max(1, Math.ceil(data.totalCount / pageSize));
         if (page > lastPage) { setPage(lastPage); return; }
         setPending(data);
-        setSelected(ids => ids.filter(id => data.items.some(item => item.uploadId === id && canRemovePending(item))));
+        setSelected(ids => ids.filter(id => data.items.some(item => item.uploadId === id && (canRemovePending(item) || canReconcilePending(item)))));
         setError(null);
       } catch (cause) {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "No se pudo consultar la cola.");
@@ -67,30 +94,39 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [authorizedFetch, page, pageSize, revision, busy, action]);
 
-  const selectable = pending?.items.filter(canRemovePending) ?? [];
+  const selectable = pending?.items.filter(item => canRemovePending(item) || canReconcilePending(item)) ?? [];
+  const removableIds = pending?.items.filter(item => selected.includes(item.uploadId) && canRemovePending(item)).map(item => item.uploadId) ?? [];
+  const reconcilableIds = pending?.items.filter(item => selected.includes(item.uploadId) && canReconcilePending(item)).map(item => item.uploadId) ?? [];
   const allSelected = selectable.length > 0 && selectable.every(item => selected.includes(item.uploadId));
   const lastPage = Math.max(1, Math.ceil((pending?.totalCount ?? 0) / pageSize));
   const openAction = (next: MaintenanceAction) => { setReason(""); setError(null); setAction(next); };
 
   const execute = async (event: FormEvent) => {
     event.preventDefault();
-    if (!action || busy || !canManage || reason.trim().length < 5 || reason.trim().length > 500) return;
+    if (!action || busy || !canManage) return;
+    if (reason.trim().length < 5 || reason.trim().length > 500) {
+      setError("Escriba un motivo de entre 5 y 500 caracteres para realizar la operación.");
+      return;
+    }
     setBusy(true);
     setError(null);
     setNotice(null);
+    setOperationResult(null);
     try {
-      const path = action === "reset" ? "statistics/reset" : action === "expire" ? "pending/cleanup-expired" : "pending/remove";
+      const path = action === "reset" ? "statistics/reset" : action === "expire" ? "pending/cleanup-expired" : action === "reconcile" ? "pending/reconcile" : "pending/remove";
       const response = await authorizedFetch(`/admin/monitoring/${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action === "remove" ? { uploadIds: selected, reason: reason.trim() } : { reason: reason.trim() })
+        body: JSON.stringify(action === "remove" || action === "reconcile"
+          ? { uploadIds: action === "remove" ? removableIds : reconcilableIds, reason: reason.trim() }
+          : { reason: reason.trim() })
       });
       if (action === "reset") {
         const result = await readResponse<{ statisticsStartedUtc: string; message: string }>(response);
         setNotice(`${result.message} Nuevo corte: ${dateTime(result.statisticsStartedUtc)}.`);
       } else {
         const result = await readResponse<PendingCleanupResponse>(response);
-        setNotice(`${result.message} Retiradas: ${result.removed}. Omitidas: ${result.skipped}. Con error: ${result.failed}. Espacio liberado: ${bytes(result.bytesReclaimed)}.`);
+        setOperationResult(result);
       }
       setAction(null);
       setSelected([]);
@@ -104,12 +140,12 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
   };
 
   return (
-    <section className="rounded-3xl border border-white/10 bg-[#101319] p-5 sm:p-6" aria-labelledby="maintenance-title">
+    <section ref={section} id="pending-maintenance" tabIndex={-1} className="scroll-mt-5 rounded-3xl border border-white/10 bg-[#101319] p-5 outline-none sm:p-6" aria-labelledby="maintenance-title">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/80">Continuidad y limpieza</p>
           <h3 id="maintenance-title" className="mt-1 text-xl font-semibold text-white">Transferencias pendientes</h3>
-          <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-400">Revise las copias parciales y su plazo de reanudación. Al retirarlas se libera su espacio y se conserva la constancia de cancelación. Una transmisión activa debe terminar o pausarse antes de poder retirarla.</p>
+          <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-400">Revise cada pendiente y la causa que impide limpiarlo. Retirar elimina un parcial propio; conciliar cierra un registro pendiente conservando su archivo físico. Cada operación presenta su resultado por archivo y guarda responsable y motivo.</p>
         </div>
         <button type="button" className={buttonClass} disabled={busy} onClick={() => setRevision(value => value + 1)}>{loading ? "Consultando…" : "Actualizar pendientes"}</button>
       </div>
@@ -119,11 +155,19 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
       </div>
       {!canManage && <p className="mt-3 text-xs text-amber-200">Su rol permite consultar. Para retirar pendientes, limpiar vencidas o reiniciar estadísticas se requiere una sesión con rol administrador.</p>}
       {notice && <p role="status" className="mt-4 rounded-xl border border-emerald-400/25 bg-emerald-400/10 p-3 text-sm text-emerald-100">{notice}</p>}
+      {operationResult && <div ref={resultPanel} role={cleanupResultTone(operationResult) === "error" ? "alert" : "status"} className={`mt-4 rounded-xl border p-4 ${cleanupResultTone(operationResult) === "success" ? "border-emerald-400/30 bg-[#10271f] text-emerald-100" : cleanupResultTone(operationResult) === "error" ? "border-rose-400/30 bg-[#2b151b] text-rose-100" : "border-amber-300/30 bg-[#2a2110] text-amber-100"}`}>
+        <h4 className="text-sm font-semibold">Resultado de la operación</h4>
+        <p className="mt-2 text-sm leading-6">{operationResult.message}</p>
+        <p className="mt-2 text-xs leading-5">Parciales eliminados: {operationResult.removed}. Registros cerrados conservando el archivo: {operationResult.retiredPreservingFile ?? 0}. Omitidos: {operationResult.skipped}. Errores: {operationResult.failed}. Espacio liberado: {bytes(operationResult.bytesReclaimed)}.</p>
+        {operationResult.removed + (operationResult.retiredPreservingFile ?? 0) === 0 && <p className="mt-2 text-xs font-semibold">Ningún pendiente fue retirado. Revise la causa de cada archivo a continuación; la puntuación no cambiará mientras permanezca esa causa.</p>}
+        {!!operationResult.items?.length && <div className="mt-4 max-h-96 overflow-auto rounded-lg border border-white/15 bg-[#11151b]"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-[#202732] text-slate-200"><tr><th className="p-3">Archivo</th><th className="p-3">Resultado</th><th className="p-3">Causa y siguiente paso</th></tr></thead><tbody>{operationResult.items.map((item, index) => <tr key={`${item.uploadId}-${index}`} className="border-t border-white/10 text-slate-200"><td className="max-w-xs break-words p-3">{item.fileName || item.uploadId}</td><td className={`whitespace-nowrap p-3 font-semibold ${item.outcome === "Failed" ? "text-rose-200" : item.outcome === "Skipped" ? "text-amber-200" : "text-emerald-200"}`}>{item.outcome === "Removed" ? "Parcial eliminado" : item.outcome === "RetiredPreservingFile" ? "Archivo conservado · registro cerrado" : item.outcome === "Skipped" ? "Omitido" : "Error"}</td><td className="min-w-64 p-3 leading-5">{item.message}<span className="mt-1 block font-mono text-[10px] text-slate-500">{item.code}</span></td></tr>)}</tbody></table></div>}
+      </div>}
       {error && !action && <p role="alert" className="mt-4 rounded-xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-100">{error}</p>}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button type="button" className={`${buttonClass} border-rose-400/30 text-rose-100`} disabled={!canManage || busy || loading || selected.length === 0} onClick={() => openAction("remove")}>Retirar seleccionadas ({selected.length})</button>
+        <button type="button" className={`${buttonClass} border-rose-400/30 text-rose-100`} disabled={!canManage || busy || loading || removableIds.length === 0} onClick={() => openAction("remove")}>Retirar parciales ({removableIds.length})</button>
         <button type="button" className={buttonClass} disabled={!canManage || busy} onClick={() => openAction("expire")}>Limpiar vencidas ahora</button>
+        <button type="button" className={`${buttonClass} border-violet-400/30 text-violet-100`} disabled={!canManage || busy || loading || reconcilableIds.length === 0} onClick={() => openAction("reconcile")}>Conciliar seleccionadas ({reconcilableIds.length})</button>
         <span className="text-xs text-slate-400">{pending ? `${pending.totalCount} pendientes en total` : "Consultando cola…"}</span>
       </div>
 
@@ -131,12 +175,12 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
         <table className="w-full text-left text-xs">
           <thead className="bg-[#1c222c] text-slate-300"><tr>
             <th className="p-3"><input type="checkbox" aria-label="Seleccionar pendientes retirables de esta página" checked={allSelected} disabled={!canManage || busy || loading || selectable.length === 0} onChange={event => setSelected(event.target.checked ? selectable.map(item => item.uploadId) : [])} /></th>
-            <th className="p-3">Archivo / RFC</th><th className="p-3">Estado</th><th className="p-3">Recibido / esperado</th><th className="p-3">Última actividad</th><th className="p-3">Vence la reanudación</th>
+            <th className="p-3">Archivo / RFC</th><th className="p-3">Estado y causa de protección</th><th className="p-3">Recibido / esperado</th><th className="p-3">Última actividad</th><th className="p-3">Vence la reanudación</th>
           </tr></thead>
           <tbody>{pending?.items.map(item => <tr key={item.uploadId} className="border-t border-white/[0.07] text-slate-300">
-            <td className="p-3"><input type="checkbox" aria-label={`Retirar ${item.fileName}`} checked={selected.includes(item.uploadId)} disabled={!canManage || busy || loading || !canRemovePending(item)} onChange={event => setSelected(ids => event.target.checked ? [...ids, item.uploadId] : ids.filter(id => id !== item.uploadId))} /></td>
+            <td className="p-3"><input type="checkbox" aria-label={`Seleccionar ${item.fileName}`} checked={selected.includes(item.uploadId)} disabled={!canManage || busy || loading || !(canRemovePending(item) || canReconcilePending(item))} onChange={event => setSelected(ids => event.target.checked ? [...ids, item.uploadId] : ids.filter(id => id !== item.uploadId))} /></td>
             <td className="max-w-xs break-words p-3"><span className="font-medium text-white">{item.fileName || "Sin nombre"}</span><span className="mt-1 block font-mono text-[10px] text-slate-500">{item.rfc}</span></td>
-            <td className="p-3"><span className={`inline-flex whitespace-nowrap rounded-full border px-2 py-1 text-[10px] ${item.isActive ? "border-sky-400/30 bg-sky-400/10 text-sky-200" : item.isExpired ? "border-rose-400/30 bg-rose-400/10 text-rose-200" : "border-violet-400/30 bg-violet-400/10 text-violet-200"}`}>{item.isActive ? "En transmisión · protegida" : item.isExpired ? "Plazo vencido" : item.status === "Paused" ? "Pausada · reanudable" : "Pendiente"}</span></td>
+            <td className="min-w-64 p-3"><span className={`inline-flex whitespace-nowrap rounded-full border px-2 py-1 text-[10px] ${item.isActive ? "border-sky-400/30 bg-sky-400/10 text-sky-200" : item.isExpired ? "border-rose-400/30 bg-rose-400/10 text-rose-200" : "border-violet-400/30 bg-violet-400/10 text-violet-200"}`}>{item.isActive ? "En transmisión · protegida" : item.isExpired ? "Plazo vencido" : item.status === "Paused" ? "Pausada · reanudable" : "Pendiente"}</span>{item.protectionReason && <p className="mt-2 max-w-md text-xs leading-5 text-amber-100">{item.protectionReason}</p>}{canReconcilePending(item) && <p className="mt-1 text-[11px] text-violet-200">Seleccione y use Conciliar para cerrar el registro conservando su archivo.</p>}</td>
             <td className="whitespace-nowrap p-3">{bytes(item.bytesReceived)} / {item.expectedLength == null ? "sin dato" : bytes(item.expectedLength)}</td>
             <td className="whitespace-nowrap p-3">{dateTime(item.lastActivityUtc)}</td>
             <td className="whitespace-nowrap p-3">{dateTime(item.resumeExpiresUtc)}</td>
@@ -165,11 +209,12 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged }: {
         }
       }}>
         <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="maintenance-confirm-title" aria-describedby="maintenance-confirm-detail" className="w-full max-w-lg rounded-2xl border border-amber-400/30 bg-[#101319] p-6 shadow-2xl">
-          <h3 id="maintenance-confirm-title" className="text-xl font-semibold text-white">{action === "reset" ? "Confirmar nuevo período de estadísticas" : action === "expire" ? "Confirmar limpieza de vencidas" : `Confirmar retiro de ${selected.length} transferencia(s)`}</h3>
-          <p id="maintenance-confirm-detail" className="mt-3 text-sm leading-6 text-slate-300">{action === "reset" ? "Los resultados de transferencias empezarán a contar desde este momento. Los archivos, recibos y auditoría permanecen. Salud, pendientes, recursos y contadores de alertas conservan el estado real." : action === "expire" ? "Se eliminarán las copias parciales cuyo plazo haya vencido. Las transmisiones activas se omiten y conservan su protección." : "Se eliminarán las copias parciales seleccionadas y ya no podrán reanudarse con esa sesión. Para enviarlas de nuevo deberá iniciarse una nueva carga."}</p>
+          <h3 id="maintenance-confirm-title" className="text-xl font-semibold text-white">{action === "reset" ? "Confirmar nuevo período de estadísticas" : action === "expire" ? "Confirmar limpieza de vencidas" : action === "reconcile" ? `Conciliar ${reconcilableIds.length} registro(s) pendiente(s)` : `Confirmar retiro de ${removableIds.length} transferencia(s)`}</h3>
+          <p id="maintenance-confirm-detail" className="mt-3 text-sm leading-6 text-slate-300">{action === "reset" ? "Los resultados de transferencias empezarán a contar desde este momento. Los archivos, recibos y auditoría permanecen. Salud, pendientes, recursos y contadores de alertas conservan el estado real." : action === "expire" ? "Se retirarán los pendientes cuyo plazo haya vencido. Se eliminan los parciales propios; cuando un archivo esté compartido se conserva el archivo y se cierra únicamente el registro vencido. Las sesiones activas se omiten. Al terminar verá la causa de cada resultado." : action === "reconcile" ? "Se cerrarán únicamente los registros pendientes seleccionados. Sus archivos físicos permanecerán intactos porque su ruta es compartida o necesita revisión. Se registra responsable y motivo; esta transferencia ya no podrá reanudarse y deberá iniciar un envío nuevo si lo necesita." : "Se eliminarán las copias parciales seleccionadas y ya no podrán reanudarse con esa sesión. Para enviarlas de nuevo deberá iniciarse una nueva carga."}</p>
           <form onSubmit={execute}>
             <label htmlFor="maintenance-reason" className="mt-4 block text-xs font-medium text-slate-300">Motivo para la bitácora (5 a 500 caracteres)</label>
-            <textarea ref={reasonInput} id="maintenance-reason" minLength={5} maxLength={500} required rows={3} value={reason} disabled={busy} onChange={event => setReason(event.target.value)} className="mt-2 w-full rounded-xl border border-white/15 bg-[#080b10] p-3 text-sm text-white outline-none focus:border-amber-300/60" />
+            <textarea ref={reasonInput} id="maintenance-reason" aria-describedby="maintenance-reason-help" minLength={5} maxLength={500} required rows={3} value={reason} disabled={busy} onChange={event => setReason(event.target.value)} className="mt-2 w-full rounded-xl border border-white/15 bg-[#080b10] p-3 text-sm text-white outline-none focus:border-amber-300/60" />
+            <p id="maintenance-reason-help" className={`mt-2 text-xs ${reason.trim().length < 5 ? "text-amber-200" : "text-slate-400"}`}>{reason.trim().length} / 500 caracteres útiles.{reason.trim().length < 5 ? ` Escriba al menos ${5 - reason.trim().length} carácter(es) más para habilitar Confirmar operación.` : " Motivo válido: puede confirmar la operación."}</p>
             {error && <p role="alert" className="mt-3 text-sm text-rose-200">{error}</p>}
             <div className="mt-5 flex justify-end gap-3"><button type="button" className={buttonClass} disabled={busy} onClick={() => setAction(null)}>Cancelar</button><button type="submit" className={`${buttonClass} border-amber-300/40 bg-amber-300/15 text-amber-100`} disabled={busy || reason.trim().length < 5}>{busy ? "Procesando, espere…" : "Confirmar operación"}</button></div>
           </form>

@@ -11,8 +11,8 @@ public static class OperationalHealthCalculator
         {
             Key = "dependencies", Label = "Dependencias críticas", MaxPenalty = 25,
             Penalty = server.IsHealthy ? 0 : 25,
-            Detail = server.IsHealthy ? "Las dependencias observadas están disponibles." : server.Message ?? "Hay dependencias degradadas.",
-            Remediation = "Revise /readyz, conectividad y esquema de SQL, acceso de la cuenta de servicio al almacenamiento y entrega de alertas SMTP/outbox. Confirme recuperación antes de reiniciar procesos."
+            Detail = DescribeDependencies(server),
+            Remediation = DescribeRecovery(server)
         },
         new()
         {
@@ -39,4 +39,36 @@ public static class OperationalHealthCalculator
 
     public static double Score(IReadOnlyList<HealthScoreComponentDto> components) =>
         Math.Round(Math.Clamp(100 - components.Sum(component => component.Penalty), 0, 100), 1);
+
+    private static string DescribeDependencies(ServerHealthDto server)
+    {
+        var details = new List<string>();
+        if (!server.DatabaseOk) details.Add("La conexión a FileXferDb no respondió correctamente.");
+        if (!server.StorageOk)
+            details.Add(server.StorageDiagnostic?.Message ?? "El almacenamiento no superó su comprobación funcional.");
+        if (!server.MessageBusOk) details.Add("El canal interno de trabajo reporta una incidencia.");
+        if (!server.AlertingOk)
+            details.Add($"Alertamiento degradado: {server.AlertQueuePending} entregas pendientes, {server.AlertDeadLetter} agotaron sus reintentos.");
+        if (server.IsHealthy)
+        {
+            details.Clear();
+            details.Add("Las dependencias observadas están operativas.");
+            if (server.StorageDiagnostic is not null) details.Add(server.StorageDiagnostic.Message);
+        }
+        else if (details.Count == 0) details.Add(server.Message ?? "Una dependencia reportó degradación.");
+        return string.Join(" ", details);
+    }
+
+    private static string DescribeRecovery(ServerHealthDto server)
+    {
+        if (server.IsHealthy)
+            return "No requiere reparación de dependencias. Puede repetir la comprobación del almacenamiento para confirmar lectura, escritura y eliminación con la identidad del servicio.";
+        var steps = new List<string>();
+        if (!server.DatabaseOk) steps.Add("Compruebe la instancia SQL configurada y la cuenta del servicio; consulte /readyz para distinguir FileXfer de BuDi.");
+        if (!server.StorageOk)
+            steps.Add(server.StorageDiagnostic?.Remediation ?? "Ejecute Comprobar almacenamiento ahora para obtener la operación que falló, la ruta y la cuenta que debe tener permisos.");
+        if (!server.MessageBusOk) steps.Add("Revise la disponibilidad del canal de trabajo configurado.");
+        if (!server.AlertingOk) steps.Add("Revise el error de entrega de SMTP/webhook y los eventos en dead-letter antes de reintentar.");
+        return string.Join(" ", steps);
+    }
 }

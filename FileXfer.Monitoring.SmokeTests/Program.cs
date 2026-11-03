@@ -219,6 +219,21 @@ static void TestHealthExplanations()
         "Un componente no explica la condición y la acción de recuperación.");
     Require(OperationalHealthCalculator.Score(OperationalHealthCalculator.Explain(healthy, 10, 2, 1)) == 81,
         "La deducción proporcional de fallas/inactividad/vencimiento es incorrecta.");
+
+    var storageFailure = OperationalHealthCalculator.Explain(new ServerHealthDto
+    {
+        IsHealthy = false, DatabaseOk = true, MessageBusOk = true, AlertingOk = true,
+        StorageOk = false,
+        StorageDiagnostic = new StorageHealthDiagnosticDto
+        {
+            Code = "StorageAccessDenied", Message = "La eliminación del archivo de prueba fue denegada.",
+            Remediation = "Conceda modificación a la cuenta ASE\\servicio sobre la carpeta compartida."
+        }
+    }, 0, 0, 0).Single(component => component.Key == "dependencies");
+    Require(storageFailure.Detail.Contains("eliminación del archivo de prueba") &&
+            storageFailure.Remediation.Contains("ASE\\servicio") &&
+            !storageFailure.Remediation.Contains("SMTP"),
+        "El diagnóstico de una falla de almacenamiento no conserva causa y reparación específicas.");
 }
 
 static async Task TestAdministrativeContractAsync()
@@ -230,6 +245,12 @@ static async Task TestAdministrativeContractAsync()
     Require(typeof(MonitoringStatisticsController).GetMethod(nameof(MonitoringStatisticsController.Reset))!
             .GetCustomAttributes<AuthorizeAttribute>().Any(x => x.Policy == "AdminEfirma"),
         "La mutación de estadísticas no exige rol administrador.");
+    Require(typeof(MonitoringHealthController).GetCustomAttributes<AuthorizeAttribute>().Any(x => x.Policy == "AdminEfirma"),
+        "La comprobación forzada de salud no exige e.firma de administrador.");
+    var healthController = new MonitoringHealthController(new HealthyServer());
+    var checkedHealth = await healthController.Recheck(default);
+    Require((checkedHealth.Result as OkObjectResult)?.Value is ServerHealthDto { IsHealthy: true },
+        "La acción de revalidar no devuelve la nueva comprobación al Dashboard.");
     var factory = new TestDbFactory(new DbContextOptionsBuilder<FileXferDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
     var controller = new MonitoringStatisticsController(new MonitoringStatisticsService(factory))
     {

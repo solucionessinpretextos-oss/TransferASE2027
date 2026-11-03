@@ -19,6 +19,8 @@ namespace FileXfer.Server.Dtos.Admin
         public double DiskUsagePercent { get; set; }
         public bool DatabaseOk { get; set; }
         public bool StorageOk { get; set; }
+        public bool DiskCapacityAvailable { get; set; }
+        public StorageHealthDiagnosticDto? StorageDiagnostic { get; set; }
         public bool MessageBusOk { get; set; }
         public bool AlertingOk { get; set; }
         public bool AlertingEnabled { get; set; }
@@ -34,6 +36,22 @@ namespace FileXfer.Server.Dtos.Admin
         public long AlertTerminalFailureTotal { get; set; }
         public DateTimeOffset? AlertLastDeliveredUtc { get; set; }
         public DateTimeOffset? AlertLastFailureUtc { get; set; }
+    }
+
+    public sealed class StorageHealthDiagnosticDto
+    {
+        public string Code { get; set; } = string.Empty;
+        public string Message { get; set; } = string.Empty;
+        public string Remediation { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+        public string ServiceIdentity { get; set; } = string.Empty;
+        public DateTimeOffset CheckedUtc { get; set; }
+        public bool CanRead { get; set; }
+        public bool CanWrite { get; set; }
+        public bool CanDelete { get; set; }
+        public bool CapacityAvailable { get; set; }
+        public long? TotalBytes { get; set; }
+        public long? FreeBytes { get; set; }
     }
 
     public sealed class TransferSummaryDto

@@ -4,7 +4,8 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { RecentTransferDto, SummaryResponse } from "../types/admin";
-import { TransferMaintenance } from "../components/TransferMaintenance";
+import { MaintenanceRequest, TransferMaintenance } from "../components/TransferMaintenance";
+import { StorageDiagnostics } from "../components/StorageDiagnostics";
 
 const REFRESH_INTERVAL_MS = 2_000;
 const VIEW_PREFERENCE_KEY = "filexfer.admin.dashboard-view.v1";
@@ -57,6 +58,7 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<ViewMode>(readPreferredView);
   const [revision, setRevision] = useState(0);
+  const [maintenanceRequest, setMaintenanceRequest] = useState<MaintenanceRequest | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -132,9 +134,9 @@ export function Dashboard() {
 
       <KpiCommandDeck summary={summary} />
 
-      <OperationalHealthGuide summary={summary} />
+      <OperationalHealthGuide summary={summary} onChanged={() => setRevision(value => value + 1)} onMaintenanceAction={kind => setMaintenanceRequest({ kind, nonce: Date.now() })} />
 
-      <TransferMaintenance statisticsStartedUtc={summary.statisticsStartedUtc} onChanged={() => setRevision(value => value + 1)} />
+      <TransferMaintenance statisticsStartedUtc={summary.statisticsStartedUtc} onChanged={() => setRevision(value => value + 1)} requestAction={maintenanceRequest} />
 
       {view === "pulse" && <PulseView summary={summary} />}
       {view === "bars" && <BarsView summary={summary} />}
@@ -157,7 +159,9 @@ export function Dashboard() {
   );
 }
 
-function OperationalHealthGuide({ summary }: { summary: SummaryResponse }) {
+function OperationalHealthGuide({ summary, onChanged, onMaintenanceAction }: { summary: SummaryResponse; onChanged: () => void; onMaintenanceAction: (kind: "expire" | "review") => void }) {
+  const { session } = useAuth();
+  const canManage = session?.roles.some(role => role.toLowerCase() === "admin") ?? false;
   const breakdown = summary.healthBreakdown ?? [];
   const totalPenalty = breakdown.reduce((total, item) => total + item.penalty, 0);
   return (
@@ -176,8 +180,13 @@ function OperationalHealthGuide({ summary }: { summary: SummaryResponse }) {
             <div className="flex justify-between gap-4"><h4 className="text-sm font-semibold text-white">{item.label}</h4><span className={`whitespace-nowrap text-xs font-semibold ${item.penalty > 0 ? "text-amber-200" : "text-emerald-200"}`}>−{item.penalty.toFixed(1)} / {item.maxPenalty} puntos</span></div>
             <p className="mt-2 text-xs leading-5 text-slate-300">{item.detail}</p>
             <p className="mt-2 text-xs leading-5 text-slate-400"><span className="font-semibold text-slate-200">Cómo sanearlo: </span>{item.remediation}</p>
+            {(item.key === "expired" || item.key === "idle") && item.penalty > 0 && <div className="mt-3 flex flex-wrap gap-2">
+              {item.key === "expired" && <button type="button" disabled={!canManage} onClick={() => onMaintenanceAction("expire")} className="rounded-lg border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-100 disabled:opacity-40">Limpiar vencidos</button>}
+              <button type="button" onClick={() => onMaintenanceAction("review")} className="rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-slate-200">Revisar y conciliar pendientes protegidos</button>
+            </div>}
           </div>)}
           {breakdown.length === 0 && <p className="rounded-xl border border-white/10 p-4 text-xs text-slate-400">El servidor todavía no proporciona el desglose de puntuación. Actualice el servicio para obtener deducciones y acciones precisas.</p>}
+          <StorageDiagnostics server={summary.server} onChanged={onChanged} />
           <details className="rounded-xl border border-white/10 p-4 text-xs text-slate-300"><summary className="cursor-pointer font-semibold text-white">Guía de intervención: qué revisar primero</summary><ol className="mt-3 list-decimal space-y-2 pl-5 leading-5"><li>Dependencias degradadas: revise conectividad SQL, permisos de la cuenta del servicio sobre storage y salud del bus. En alertas, revise SMTP y las entregas fallidas.</li><li>Fallas recientes: consulte la traza y el error del archivo. Corrija el origen y confirme una nueva carga exitosa. La tasa se recupera al salir las fallas de la ventana móvil de una hora.</li><li>Pendientes sin actividad: contacte al emisor para reanudar; retire manualmente las copias que ya no se necesitan. Los vencidos se limpian automáticamente según su fecha individual.</li><li>CPU, memoria y disco: confirme la tendencia. La limpieza de parciales libera disco; no elimine archivos completados para mejorar un indicador. Escale recursos si la presión continúa.</li></ol></details>
         </div>
       </div>
@@ -279,7 +288,7 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
           <div className="mt-5 grid gap-4 sm:grid-cols-3">
             <ResourceDial label="CPU" value={server.cpuUsagePercent} description="Uso aproximado de procesador del servidor. Verde: menor a 75 %; ámbar: 75–89.9 %; rojo: 90 % o más." />
             <ResourceDial label="Memoria" value={server.memoryUsagePercent} description="Porcentaje de memoria física utilizada. La presión sostenida puede provocar pausas, paginación y menor rendimiento en archivos grandes." />
-            <ResourceDial label="Disco" value={server.diskUsagePercent} description="Porcentaje de ocupación del volumen supervisado. A partir de 75 % requiere vigilancia; 90 % o más compromete continuidad y retención." />
+            <ResourceDial label="Disco" value={server.diskUsagePercent} available={server.diskCapacityAvailable !== false} description="Porcentaje de ocupación del volumen supervisado. Sin medición indica que no se obtuvo la capacidad; no representa 0 % de uso ni una falla de acceso por sí sola." />
           </div>
         </Panel>
 
@@ -318,7 +327,7 @@ function BarsView({ summary }: { summary: SummaryResponse }) {
       <ChartPanel eyebrow="Capacidad" title="Recursos del servidor" footer={buildServicesHelper(server)}>
         <MetricBar label="CPU" value={server.cpuUsagePercent} max={100} display={formatPercent(server.cpuUsagePercent)} tone={usageTone(server.cpuUsagePercent)} />
         <MetricBar label="Memoria" value={server.memoryUsagePercent} max={100} display={formatPercent(server.memoryUsagePercent)} tone={usageTone(server.memoryUsagePercent)} />
-        <MetricBar label="Disco" value={server.diskUsagePercent} max={100} display={formatPercent(server.diskUsagePercent)} tone={usageTone(server.diskUsagePercent)} />
+        <MetricBar label="Disco" value={server.diskCapacityAvailable === false ? 0 : server.diskUsagePercent} max={100} display={diskUsageDisplay(server)} tone={server.diskCapacityAvailable === false ? "slate" : usageTone(server.diskUsagePercent)} />
       </ChartPanel>
 
       <ChartPanel eyebrow="Resultados" title="Completadas contra fallidas" footer={`Éxito global del día: ${formatPercent(kpis.successRateTodayPercent)}`}>
@@ -580,7 +589,7 @@ function KpiInsightCard(props: { label: string; value: string; context: string; 
 
 function RingsView({ summary }: { summary: SummaryResponse }) {
   const { server, transfers, kpis } = summary;
-  const capacity = clamp(100 - Math.max(server.cpuUsagePercent, server.memoryUsagePercent, server.diskUsagePercent), 0, 100);
+  const capacity = resourceHeadroom(server);
   const receiptCoverage = transfers.completedToday === 0 ? 100 : clamp(transfers.receiptsIssuedToday / transfers.completedToday * 100, 0, 100);
   const verifiedRecent = summary.recentTransfers.filter(item => !item.verificationRequired || item.verificationPerformed).length;
   const verificationCoverage = summary.recentTransfers.length === 0 ? 100 : verifiedRecent / summary.recentTransfers.length * 100;
@@ -596,7 +605,7 @@ function RingsView({ summary }: { summary: SummaryResponse }) {
         <RingMetric label="Salud" value={kpis.operationalHealthScore} display={formatPercent(kpis.operationalHealthScore)} />
         <RingMetric label="Éxito" value={kpis.totalTransfersToday === 0 ? 0 : kpis.successRateTodayPercent} display={kpis.totalTransfersToday === 0 ? "Sin actividad" : formatPercent(kpis.successRateTodayPercent)} />
         <RingMetric label="Estabilidad" value={stability} display={formatPercent(stability)} />
-        <RingMetric label="Holgura" value={capacity} display={formatPercent(capacity)} inverse />
+        <RingMetric label={server.diskCapacityAvailable === false ? "Holgura CPU/RAM" : "Holgura"} value={capacity} display={formatPercent(capacity)} inverse />
         <RingMetric label="Recibos" value={receiptCoverage} display={formatPercent(receiptCoverage)} />
         <RingMetric label="Verificación" value={verificationCoverage} display={formatPercent(verificationCoverage)} />
       </div>
@@ -673,7 +682,7 @@ function MosaicView({ summary }: { summary: SummaryResponse }) {
       <MosaicTile eyebrow="Fallidas" value={String(transfers.failedToday)} detail="Resultado del día" tone={transfers.failedToday > 0 ? "red" : "slate"} />
       <MosaicTile className="sm:col-span-2" eyebrow="Volumen confirmado" value={formatBytes(transfers.totalBytesTransferredToday)} detail={`${transfers.completedToday} archivos completados`} tone="blue" />
       <MosaicTile eyebrow="Memoria" value={formatPercent(server.memoryUsagePercent)} detail="Uso del servidor" tone={usageTone(server.memoryUsagePercent)} />
-      <MosaicTile eyebrow="Disco" value={formatPercent(server.diskUsagePercent)} detail="Uso del servidor" tone={usageTone(server.diskUsagePercent)} />
+      <MosaicTile eyebrow="Disco" value={diskUsageDisplay(server)} detail={server.diskCapacityAvailable === false ? "Capacidad aún no disponible" : "Uso del servidor"} tone={server.diskCapacityAvailable === false ? "slate" : usageTone(server.diskUsagePercent)} />
       <MosaicTile eyebrow="Reanudables" value={String(transfers.pausedResumableTransfers)} detail="Parciales vigentes" tone="gold" />
       <MosaicTile eyebrow="Recibos" value={String(transfers.receiptsIssuedToday)} detail="Firmados hoy" tone="green" />
       <MosaicTile className="sm:col-span-2" eyebrow="Actividad institucional" value={`${kpis.distinctRfcsToday} RFC`} detail={`${formatBytes(kpis.averageFileSizeTodayBytes)} por archivo en promedio`} tone="slate" />
@@ -824,7 +833,7 @@ function buildHeatSignals(summary: SummaryResponse): Array<{ label: string; valu
     { label: "Pendientes sin actividad", value: String(kpis.stalePendingTransfers), detail: "Más de 30 minutos sin avance", severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
     { label: "CPU", value: formatPercent(server.cpuUsagePercent), detail: "Utilización actual", severity: inverseSeverity(server.cpuUsagePercent, 75, 90) },
     { label: "Memoria", value: formatPercent(server.memoryUsagePercent), detail: "Utilización actual", severity: inverseSeverity(server.memoryUsagePercent, 75, 90) },
-    { label: "Disco", value: formatPercent(server.diskUsagePercent), detail: "Utilización actual", severity: inverseSeverity(server.diskUsagePercent, 75, 90) },
+    { label: "Disco", value: diskUsageDisplay(server), detail: server.diskCapacityAvailable === false ? "Capacidad no medida; consulte diagnóstico" : "Utilización actual", severity: server.diskCapacityAvailable === false ? "warning" : inverseSeverity(server.diskUsagePercent, 75, 90) },
     { label: "Base de datos", value: server.databaseOk ? "Disponible" : "Error", detail: "Dependencia crítica", severity: server.databaseOk ? "good" : "danger" },
     { label: "Almacenamiento", value: server.storageOk ? "Disponible" : "Error", detail: "Destino de archivos", severity: server.storageOk ? "good" : "danger" },
     { label: "Bus interno", value: server.messageBusOk ? "Disponible" : "Error", detail: "Mensajería operativa", severity: server.messageBusOk ? "good" : "danger" },
@@ -844,7 +853,7 @@ function buildRadarMetrics(summary: SummaryResponse): Array<{ label: string; val
   return [
     { label: "Salud", value: clamp(kpis.operationalHealthScore, 0, 100), detail: "Índice operativo compuesto" },
     { label: "Éxito", value: kpis.totalTransfersToday === 0 ? 100 : clamp(kpis.successRateTodayPercent, 0, 100), detail: "Transferencias cerradas correctamente" },
-    { label: "Holgura", value: clamp(100 - Math.max(server.cpuUsagePercent, server.memoryUsagePercent, server.diskUsagePercent), 0, 100), detail: "Capacidad libre del recurso más presionado" },
+    { label: "Holgura", value: resourceHeadroom(server), detail: server.diskCapacityAvailable === false ? "Holgura de CPU/RAM; disco sin medición" : "Capacidad libre del recurso más presionado" },
     { label: "Estabilidad", value: clamp(100 - kpis.failureRateLastHourPercent, 0, 100), detail: "Ausencia de fallas en la última hora" },
     { label: "Continuidad", value: continuity, detail: "Relación entre reanudadas y parciales vigentes" },
     { label: "Integridad", value: integrity, detail: "Cargas sin omisión de verificación" }
@@ -859,7 +868,7 @@ function buildTrafficSignals(summary: SummaryResponse): Array<{ label: string; d
     { label: "Bus interno", detail: server.messageBusOk ? "Mensajería operativa." : "La mensajería interna reporta falla.", severity: server.messageBusOk ? "good" : "danger" },
     { label: "CPU", detail: `${formatPercent(server.cpuUsagePercent)} de utilización.`, severity: inverseSeverity(server.cpuUsagePercent, 75, 90) },
     { label: "Memoria", detail: `${formatPercent(server.memoryUsagePercent)} de utilización.`, severity: inverseSeverity(server.memoryUsagePercent, 75, 90) },
-    { label: "Disco", detail: `${formatPercent(server.diskUsagePercent)} de utilización.`, severity: inverseSeverity(server.diskUsagePercent, 75, 90) },
+    { label: "Disco", detail: server.diskCapacityAvailable === false ? "Sin medición de capacidad. Compruebe el diagnóstico de almacenamiento." : `${formatPercent(server.diskUsagePercent)} de utilización.`, severity: server.diskCapacityAvailable === false ? "warning" : inverseSeverity(server.diskUsagePercent, 75, 90) },
     { label: "Fallas recientes", detail: `${formatPercent(kpis.failureRateLastHourPercent)} durante la última hora.`, severity: inverseSeverity(kpis.failureRateLastHourPercent, 5, 15) },
     { label: "Pendientes sin actividad", detail: `${kpis.stalePendingTransfers} cargas llevan más de 30 minutos sin actividad.`, severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
     { label: "Alertas no entregadas", detail: `${server.alertDeadLetter} mensajes en dead-letter.`, severity: countSeverity(server.alertDeadLetter, 1, 1) },
@@ -886,9 +895,17 @@ function countSeverity(value: number, warningAt: number, dangerAt: number): Seve
 }
 
 function largestResource(server: SummaryResponse["server"]): string {
-  const values = [{ label: "CPU", value: server.cpuUsagePercent }, { label: "Memoria", value: server.memoryUsagePercent }, { label: "Disco", value: server.diskUsagePercent }];
+  const values = [{ label: "CPU", value: server.cpuUsagePercent }, { label: "Memoria", value: server.memoryUsagePercent }, ...(server.diskCapacityAvailable === false ? [] : [{ label: "Disco", value: server.diskUsagePercent }])];
   const largest = values.sort((left, right) => right.value - left.value)[0];
   return `${largest.label} · ${formatPercent(largest.value)}`;
+}
+
+export function diskUsageDisplay(server: SummaryResponse["server"]): string {
+  return server.diskCapacityAvailable === false ? "Sin medición" : formatPercent(server.diskUsagePercent);
+}
+
+function resourceHeadroom(server: SummaryResponse["server"]): number {
+  return clamp(100 - Math.max(server.cpuUsagePercent, server.memoryUsagePercent, server.diskCapacityAvailable === false ? 0 : server.diskUsagePercent), 0, 100);
 }
 
 function ActivityStatusChip({ transfer }: { transfer: RecentTransferDto }) {
@@ -1000,12 +1017,12 @@ function FlowNode(props: { index: string; label: string; value: number; detail: 
   );
 }
 
-function ResourceDial({ label, value, description }: { label: string; value: number; description: string }) {
+function ResourceDial({ label, value, description, available = true }: { label: string; value: number; description: string; available?: boolean }) {
   const safe = clamp(value, 0, 100);
   return (
     <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4">
-      <div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2 font-semibold text-slate-300">{label}<InfoPopover title={`Uso de ${label}`} description={description} align="left" compact /></span><span className="tabular-nums text-slate-400">{safe.toFixed(1)} %</span></div>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className={`h-full rounded-full ${toneBar(usageTone(safe))}`} style={{ width: `${safe}%` }} /></div>
+      <div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2 font-semibold text-slate-300">{label}<InfoPopover title={`Uso de ${label}`} description={description} align="left" compact /></span><span className="tabular-nums text-slate-400">{available ? `${safe.toFixed(1)} %` : "Sin medición"}</span></div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className={`h-full rounded-full ${toneBar(available ? usageTone(safe) : "slate")}`} style={{ width: available ? `${safe}%` : "0%" }} /></div>
     </div>
   );
 }

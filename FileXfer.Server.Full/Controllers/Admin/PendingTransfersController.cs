@@ -51,6 +51,17 @@ public sealed class PendingTransfersController : ControllerBase
 
     public sealed record CleanupRequest(string Reason);
 
+    [HttpPost("reconcile")]
+    [Authorize(Policy = "AdminEfirma")]
+    public async Task<ActionResult<PendingTransferCleanupResult>> Reconcile(RemoveRequest request, CancellationToken ct)
+    {
+        var actor = Actor();
+        if (string.IsNullOrWhiteSpace(actor)) return Forbid();
+        if (request.UploadIds is null) return BadRequest(new { message = "Seleccione las transferencias a conciliar." });
+        try { return Ok(await _maintenance.ReconcileAsync(request.UploadIds, request.Reason, actor, Ip(), ct)); }
+        catch (ArgumentException exception) { return BadRequest(new { message = exception.Message }); }
+    }
+
     private string? Actor() => User.FindFirst("rfc")?.Value;
     private string? Ip() => HttpContext.Connection.RemoteIpAddress?.ToString();
 }

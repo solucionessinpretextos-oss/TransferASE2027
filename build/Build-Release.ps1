@@ -246,6 +246,7 @@ try {
     $previousSwcCache = $env:SWC_NATIVE_BINDING_CACHE
     try {
         $env:SWC_NATIVE_BINDING_CACHE = $swcCache
+        Invoke-Checked npm @('test') $dashboardRoot
         Invoke-Checked npm @('run', 'build') $dashboardRoot
     }
     finally {
@@ -320,6 +321,7 @@ try {
     Invoke-Checked dotnet @('run', '--project', 'TransferClienteASE.Tls.SmokeTests/TransferClienteASE.Tls.SmokeTests.csproj', '-c', 'Release')
     Invoke-Checked dotnet @('run', '--project', 'FileXfer.Resume.SmokeTests/FileXfer.Resume.SmokeTests.csproj', '-c', 'Release')
     Invoke-Checked dotnet @('run', '--project', 'FileXfer.Monitoring.SmokeTests/FileXfer.Monitoring.SmokeTests.csproj', '-c', 'Release')
+    Invoke-Checked dotnet @('run', '--project', 'FileXfer.Storage.SmokeTests/FileXfer.Storage.SmokeTests.csproj', '-c', 'Release')
     $powerShellExecutable = (Get-Process -Id $PID).Path
     Invoke-Checked $powerShellExecutable @('-NoProfile', '-NonInteractive', '-File', 'deployment/Test-StagingReadiness.Smoke.ps1')
 

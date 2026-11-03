@@ -343,6 +343,7 @@ builder.Services.AddHostedService<AuthStateCleanupService>();
 builder.Services.AddHostedService<ResumableUploadCleanupService>();
 
 builder.Services.AddSingleton<ISystemHealthService, SystemHealthService>();
+builder.Services.AddSingleton<StorageHealthProbe>();
 builder.Services.AddSingleton<MonitoringStatisticsService>();
 
 builder.Services.AddSingleton<LogAlertSink>();
