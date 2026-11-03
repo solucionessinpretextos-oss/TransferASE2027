@@ -283,6 +283,20 @@ La omisión reduce garantías y debe ser excepcional.
 
 ## Respuesta operativa por escenario
 
+### Acceso que muestra login y después una pantalla negra
+
+Abra **https://187.141.128.194:51136/admin/**. La barra final identifica la página principal.
+Desde la corrección 2.2.1.10, el servidor también admite `/admin` y lo dirige automáticamente a `/admin/`,
+conservando los parámetros de la liga. El Dashboard reconoce ambas variantes después del inicio de sesión.
+
+Si tiene abierta una pestaña anterior a la actualización, presione **Ctrl + F5** y vuelva a entrar con su e.firma
+si la sesión venció. No necesita instalar un cliente ni cambiar los permisos de su cuenta.
+
+Si aparece **No se pudo mostrar el Dashboard**, presione **Volver a intentar**. Si el problema continúa,
+use **Abrir página principal** e informe a soporte la hora y la acción previa. No envíe su KEY ni contraseña.
+Una dirección de sección desconocida muestra **Esta sección no existe**, con un enlace **Volver al Dashboard**.
+Estas acciones de recuperación no eliminan archivos ni reinician estadísticas.
+
 | Escenario | Acción inmediata | Evidencia a conservar |
 |---|---|---|
 | `/readyz` en error | Detener nuevas cargas o drenar | Respuesta, hora, dependencias y logs |

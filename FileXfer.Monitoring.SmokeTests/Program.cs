@@ -4,6 +4,7 @@ using FileXfer.Server.Controllers.Admin;
 using FileXfer.Server.Data;
 using FileXfer.Server.Dtos.Admin;
 using FileXfer.Server.Options;
+using FileXfer.Server.Middleware;
 using FileXfer.Server.Services;
 using FileXfer.Server.Uploading;
 using Microsoft.AspNetCore.Authorization;
@@ -16,7 +17,8 @@ await TestLegacyActivityFallbackAsync();
 TestSqlServer2014QueryTranslation();
 TestHealthExplanations();
 await TestAdministrativeContractAsync();
-Console.WriteLine("PASS monitoring reset=durable-and-audited history-and-receipts=preserved statistics-window=bounded live-health=not-hidden active-transfers=not-double-counted pending-expiry=distinct-from-idle legacy-activity=creation-fallback sql2014=queries-translated-without-openjson health-formula=explained");
+await TestDashboardCanonicalPathAsync();
+Console.WriteLine("PASS monitoring reset=durable-and-audited history-and-receipts=preserved statistics-window=bounded live-health=not-hidden active-transfers=not-double-counted pending-expiry=distinct-from-idle legacy-activity=creation-fallback sql2014=queries-translated-without-openjson health-formula=explained dashboard-path=canonical-get-head-308");
 return 0;
 
 static async Task TestStatisticsAndSummaryAsync()
@@ -283,6 +285,59 @@ static async Task ExpectArgumentAsync(Func<Task<DateTimeOffset>> action)
     try { await action(); }
     catch (ArgumentException) { return; }
     throw new InvalidOperationException("Se aceptó un motivo de reinicio inválido.");
+}
+
+static async Task TestDashboardCanonicalPathAsync()
+{
+    var nextCalls = 0;
+    var middleware = new AdminDashboardCanonicalPathMiddleware(context =>
+    {
+        nextCalls++;
+        context.Response.StatusCode = StatusCodes.Status204NoContent;
+        return Task.CompletedTask;
+    });
+
+    foreach (var method in new[] { HttpMethods.Get, HttpMethods.Head })
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = method;
+        context.Request.Path = "/admin";
+        context.Request.PathBase = "/transfer";
+        context.Request.QueryString = new QueryString("?view=pulse&filter=%2F");
+        await middleware.InvokeAsync(context);
+        Require(context.Response.StatusCode == StatusCodes.Status308PermanentRedirect &&
+                context.Response.Headers.Location == "/transfer/admin/?view=pulse&filter=%2F" && nextCalls == 0,
+            "La entrada al Dashboard no canonizó GET/HEAD preservando PathBase y query.");
+    }
+
+    foreach (var (method, path) in new[]
+    {
+        (HttpMethods.Get, "/admin/"),
+        (HttpMethods.Get, "/admin/policies"),
+        (HttpMethods.Get, "/admin/monitoring/summary"),
+        (HttpMethods.Get, "/admin/assets/application.js"),
+        (HttpMethods.Get, "/administrator"),
+        (HttpMethods.Post, "/admin"),
+        (HttpMethods.Put, "/admin"),
+        (HttpMethods.Options, "/admin")
+    })
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = method;
+        context.Request.Path = path;
+        await middleware.InvokeAsync(context);
+        Require(context.Response.StatusCode == StatusCodes.Status204NoContent && !context.Response.Headers.ContainsKey("Location"),
+            $"La canonización interceptó indebidamente {method} {path}.");
+    }
+    Require(nextCalls == 8, "El middleware no continuó las rutas ajenas a la entrada exacta del Dashboard.");
+
+    var upperCase = new DefaultHttpContext();
+    upperCase.Request.Method = HttpMethods.Get;
+    upperCase.Request.Path = "/ADMIN";
+    await middleware.InvokeAsync(upperCase);
+    Require(upperCase.Response.StatusCode == StatusCodes.Status308PermanentRedirect &&
+            upperCase.Response.Headers.Location == "/admin/",
+        "La entrada en mayúsculas no canonizó a la misma URL estable.");
 }
 
 static void Require(bool condition, string message)

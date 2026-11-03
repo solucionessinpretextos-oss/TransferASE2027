@@ -11,6 +11,7 @@ using System.Text;
 using FileXfer.Server;
 using FileXfer.Server.Data;
 using FileXfer.Server.Endpoints;
+using FileXfer.Server.Middleware;
 using FileXfer.Server.Options;
 using FileXfer.Server.Services;
 using FileXfer.Server.Security;
@@ -493,6 +494,7 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseMiddleware<AdminDashboardCanonicalPathMiddleware>();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
