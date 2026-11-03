@@ -66,6 +66,14 @@ export interface OperationalKpisDto {
   catalogFailuresToday: number;
   completedWithoutReceiptToday: number;
   stalePendingTransfers: number;
+  pendingTransfers?: number;
+  expiredPendingTransfers?: number;
+  expiringNext24Hours?: number;
+  pendingBytes?: number;
+  oldestPendingAgeHours?: number;
+  nearExpiryBytes?: number;
+  administrativelyCancelledToday?: number;
+  expiredToday?: number;
   distinctRfcsToday: number;
   lastCompletedUtc?: string | null;
   lastFailedUtc?: string | null;
@@ -77,6 +85,46 @@ export interface SummaryResponse {
   kpis: OperationalKpisDto;
   recentTransfers: RecentTransferDto[];
   timestampUtc: string;
+  statisticsStartedUtc?: string | null;
+  statisticsTimeZone?: string;
+  healthBreakdown?: HealthBreakdownDto[];
+}
+
+export interface HealthBreakdownDto {
+  key: string;
+  label: string;
+  penalty: number;
+  maxPenalty: number;
+  detail: string;
+  remediation: string;
+}
+
+export interface PendingTransferDto {
+  uploadId: string;
+  fileName: string;
+  rfc: string;
+  status: string;
+  bytesReceived: number;
+  expectedLength?: number | null;
+  lastActivityUtc: string;
+  resumeExpiresUtc: string;
+  isActive: boolean;
+  isExpired: boolean;
+}
+
+export interface PendingTransfersResponse {
+  items: PendingTransferDto[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PendingCleanupResponse {
+  removed: number;
+  skipped: number;
+  failed: number;
+  bytesReclaimed: number;
+  message: string;
 }
 
 export interface RecentTransferDto {

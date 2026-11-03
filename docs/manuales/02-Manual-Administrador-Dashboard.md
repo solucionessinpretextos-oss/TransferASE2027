@@ -70,11 +70,11 @@ _Figura 2. La ayuda contextual tiene fondo opaco para mantener la legibilidad._
 
 | KPI | Significado operativo | Señal de atención |
 |---|---|---|
-| Salud operativa | Índice compuesto de disponibilidad, fallas, vencidos y cola | Desciende aunque el proceso siga vivo |
-| Éxito del día | Completadas respecto de cierres del día | Cae por fallas, rechazos, cancelaciones o expiraciones |
+| Salud operativa | Índice explicado de dependencias, fallas técnicas e inactividad/vencimiento | Cada descuento incluye su causa y una acción |
+| Éxito del día | Completadas / (completadas + fallas técnicas y rechazos) | Cancelaciones administrativas y expiraciones se muestran aparte |
 | En transmisión | Sesiones enviando bytes y esperando turno | Crece sin avance o se mantiene después de terminar |
 | Fallas del día | Cierres no exitosos, incluida falla de catálogo | Cualquier crecimiento sostenido |
-| Pendientes críticos | Pendientes de más de 30 minutos | Número alto o reanudables envejecidos |
+| Pendientes sin actividad | Más de 30 minutos sin actividad, sin sesión activa, aún dentro de plazo | Contactar al usuario y reanudar o retirar si se abandonó |
 | Cobertura de recibos | Completadas con recibo digital | Menor a 100 % requiere investigación |
 | Verificación aplicada | Archivos obligados que sí se verificaron | Omisiones no explicadas por política |
 | Duración P95 | Tiempo bajo el cual termina 95 % de cargas | Aumento abrupto frente a la mediana |
@@ -82,6 +82,61 @@ _Figura 2. La ayuda contextual tiene fondo opaco para mantener la legibilidad._
 | Throughput | Promedio efectivo de bytes confirmados en una hora | Cero con transmisiones activas |
 | Continuidad recuperada | Bytes reutilizados por reanudación | Cero después de cortes conocidos |
 | Actividad institucional | RFC distintos con actividad | Cambios no esperados en el patrón |
+| Pendientes persistentes | Cargas Pending/Paused que siguen registradas aunque reinicie el servidor | Diferenciar del número de conexiones en memoria |
+| Vencidos por limpiar | Pendientes inactivos que alcanzaron su vencimiento individual | Limpiar vencidos o revisar permisos si persisten |
+| Vencen en 24 horas | Pendientes inactivos con plazo próximo, todavía vigente | Avisar al usuario antes de perder la oportunidad de reanudar |
+| Espacio en parciales | Bytes recibidos asociados al backlog pendiente | Revisar capacidad y limpiar cargas abandonadas |
+| Antigüedad sin actividad | Horas desde la última actividad del pendiente inactivo más viejo | Priorizar el archivo más abandonado |
+| Bytes próximos a vencer | Bytes de parciales que vencen dentro de las siguientes 24 horas | Medir cuánto trabajo se perdería si no se reanuda |
+| Cancelaciones / expiraciones | Cierres administrativos y por plazo, separados de fallas técnicas | Detectar abandono sin distorsionar la tasa de éxito técnico |
+
+### Salud operativa: cálculo y saneamiento
+
+El valor inicia en **100 puntos** y descuenta los cuatro factores siguientes. El panel **Salud operativa: causas y recuperación** muestra el descuento exacto y el remedio para cada uno.
+
+| Factor | Descuento | Cómo recuperarlo |
+|---|---|---|
+| Dependencias degradadas | 25 si alguna dependencia observada falla | Revisar `/readyz`, SQL, ruta de almacenamiento, permisos de la cuenta del servicio y SMTP/outbox |
+| Fallas técnicas en 60 minutos | 0.6 puntos por cada 1 % de fallas; máximo 30 | Revisar error y TraceId, resolver su causa; la ventana se actualiza con el tiempo y los cierres exitosos |
+| Pendientes inactivos | 5 por archivo sin actividad durante 30 minutos, aún vigente; máximo 20 | Pedir al usuario reanudar o retirar si abandonó el envío |
+| Pendientes vencidos | 3 por archivo inactivo fuera de su plazo; máximo 15 | Ejecutar Limpiar vencidos o esperar el siguiente ciclo; si falla, revisar permisos y almacenamiento |
+
+`Salud = máximo(0, 100 − suma de descuentos)`.
+
+Las transferencias activas normales no reducen la salud. Un archivo viejo que sigue transfiriéndose tampoco se considera abandonado. Los vencidos se cuentan en su factor propio para evitar descontarlos también como inactivos. CPU, memoria y disco se muestran como señales separadas: no forman parte de esta fórmula.
+
+Sanear significa resolver la causa y comprobar el siguiente corte. Reiniciar estadísticas no restaura artificialmente la salud; la salud siempre considera la última hora real y todos los pendientes existentes.
+
+### Eliminar pendientes manualmente
+
+Solo el rol **admin**, autenticado con e.firma, puede realizar estas operaciones. `ops` puede consultar los pendientes.
+
+1. Abra el panel de **Pendientes y mantenimiento**.
+2. Busque el archivo por nombre/RFC y revise tamaño, última actividad y vencimiento. Use la paginación para recorrer la lista.
+3. Seleccione los archivos abandonados. Una transferencia activa no puede seleccionarse; el servidor también vuelve a comprobarlo al ejecutar.
+4. Presione el botón de eliminación de seleccionados.
+5. Escriba un motivo de entre 5 y 500 caracteres y confirme.
+6. Revise el resultado: eliminados, omitidos y errores. Un archivo que terminó o volvió a activarse durante la operación se omite.
+
+Se elimina la copia parcial del servidor y la transferencia deja de estar pendiente. Se conservan el registro terminal `Cancelled`, su responsable, el motivo y la auditoría. No se eliminan documentos completados ni sus recibos. Para enviar otra vez un archivo retirado, el usuario debe iniciar una transferencia nueva.
+
+### Expiración automática y Limpiar vencidos
+
+El servicio revisa al iniciar y **cada minuto** el plazo individual `ResumeExpiresUtc`. Para registros antiguos sin esa fecha, calcula el límite como última actividad + `Storage:ResumeRetentionHours` (24 horas por defecto; se respeta la configuración instalada). Si tampoco existe actividad válida, utiliza la creación.
+
+Una copia parcial vencida e inactiva se elimina y queda marcada `Expired` con auditoría. El botón **Limpiar vencidos** adelanta el mismo proceso. Cada pase trabaja hasta 1000 candidatos; una cola mayor se vacía en ciclos sucesivos. Los archivos activos o protegidos se omiten. Si falla el borrado, se conserva el pendiente para poder reintentar y consultar el error en los logs.
+
+El plazo se comprueba también al solicitar la reanudación: un archivo vencido no se revive durante el intervalo anterior al siguiente ciclo de limpieza.
+
+### Reiniciar estadísticas
+
+1. Presione **Reiniciar estadísticas** con sesión `admin`.
+2. Revise el alcance del mensaje, escriba un motivo y confirme.
+3. El Dashboard muestra la fecha del nuevo corte; completadas, fallas, volumen y tasas empiezan a medirse desde él.
+
+El corte se guarda en SQL como evento de auditoría y sobrevive al reinicio del servicio. No vacía tablas de transferencias, archivos ni recibos. Los KPI diarios usan el día de **America/Mazatlan** o el nuevo corte si es posterior; los horarios se almacenan en UTC y se presentan en la zona del navegador. Salud, pendientes y recursos siguen mostrando su estado real. Los contadores internos de alertas siguen el período de su propia fuente y no se borran mediante este botón.
+
+Sin cierres observados, una tasa de cero no significa falla: no existe todavía muestra suficiente. Interprete tasas junto al número de archivos.
 
 ### Cómo usar la ayuda detallada
 

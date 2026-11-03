@@ -108,6 +108,11 @@ namespace FileXfer.Server.Uploading
                 throw new RpcException(new Status(StatusCode.PermissionDenied, "El dispositivo no coincide con la sesión autenticada."));
             }
 
+            if (!_sessionStore.TryAcquireMaintenance(request.FileUuid, out var inspectionLease))
+                throw new RpcException(new Status(StatusCode.AlreadyExists,
+                    "La carga está activa o en mantenimiento. Intente de nuevo cuando concluya la operación."));
+            using var resumeInspection = inspectionLease;
+
             await using var db = await _dbf.CreateDbContextAsync(context.CancellationToken);
             var entry = await db.Uploads.SingleOrDefaultAsync(
                 upload => upload.FileUuid == request.FileUuid,
@@ -200,7 +205,8 @@ namespace FileXfer.Server.Uploading
             // Failed implica que el contenido no superó integridad/seguridad y ya no debe
             // reutilizarse. CatalogFailed, en cambio, conserva un archivo íntegro: se permite
             // reabrir desde el largo completo para repetir idempotentemente catálogo/recibo.
-            if (entry.Status is "Failed")
+            if (entry.Status is "Failed" or "Rejected" or "Cancelled" or "Expired" ||
+                (entry.Status is "Pending" or "Paused" && HasResumeWindowExpired(entry)))
             {
                 return new UploadStatusReply
                 {
@@ -723,6 +729,13 @@ namespace FileXfer.Server.Uploading
                                 throw new RpcException(new Status(
                                     StatusCode.AlreadyExists,
                                     "La carga ya fue completada."));
+                            }
+
+                            if (entry.Status is "Failed" or "Rejected" or "Cancelled" or "Expired" ||
+                                (entry.Status is "Pending" or "Paused" && HasResumeWindowExpired(entry)))
+                            {
+                                throw new RpcException(new Status(StatusCode.FailedPrecondition,
+                                    "La carga anterior fue eliminada, rechazada o venció. Seleccione el archivo nuevamente para iniciar una transferencia nueva."));
                             }
 
                             if (!string.Equals(entry.OriginalFileName, displayFileName, StringComparison.Ordinal))
@@ -1324,11 +1337,6 @@ namespace FileXfer.Server.Uploading
                     }
                 }
 
-                if (sessionStarted && fileUuid != null)
-                {
-                    _sessionStore.End(fileUuid);
-                }
-
                 try
                 {
                     if (!string.IsNullOrWhiteSpace(fileUuid))
@@ -1393,8 +1401,18 @@ namespace FileXfer.Server.Uploading
                             fileUuid);
                     }
                 }
+
+                // Keep the session lease until durable final state and any cleanup are
+                // complete. Otherwise a manual removal or resume may race this finally.
+                if (sessionStarted && fileUuid != null)
+                    _sessionStore.End(fileUuid);
             }
         }
+
+        private bool HasResumeWindowExpired(UploadEntry upload) =>
+            (upload.ResumeExpiresUtc ??
+                (upload.LastActivityUtc == default ? upload.CreatedUtc : upload.LastActivityUtc)
+                    .AddHours(_storage.ResumeRetentionHours)) <= DateTimeOffset.UtcNow;
 
         private async Task MarkPendingUploadPausedAsync(string fileUuid, long bytesReceived, string reason)
         {

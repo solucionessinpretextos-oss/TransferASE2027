@@ -23,6 +23,7 @@ namespace FileXfer.Server.Uploading
             new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, int> _admissionsByRfc =
             new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _maintenance = new(StringComparer.OrdinalIgnoreCase);
         private int _activeAdmissions;
 
         public UploadSessionStore(StorageOptions storage)
@@ -55,7 +56,7 @@ namespace FileXfer.Server.Uploading
         {
             lock (_sessionGate)
             {
-                if (_sessions.ContainsKey(fileUuid))
+                if (_sessions.ContainsKey(fileUuid) || _maintenance.Contains(fileUuid))
                     return UploadStartResult.DuplicateUuid;
 
                 var added = _sessions.TryAdd(fileUuid, new UploadSessionInfo
@@ -76,6 +77,41 @@ namespace FileXfer.Server.Uploading
             {
                 s.BytesReceived += bytesChunk;
                 s.LastUpdateUtc = DateTimeOffset.UtcNow;
+            }
+        }
+
+        // The same gate coordinates uploads, resume reconciliation and deletion. A
+        // maintenance operation must never dispose an active stream's write state.
+        public bool TryAcquireMaintenance(string fileUuid, out IDisposable? lease)
+        {
+            lease = null;
+            lock (_sessionGate)
+            {
+                if (_sessions.ContainsKey(fileUuid) || !_maintenance.Add(fileUuid))
+                    return false;
+                lease = new MaintenanceLease(this, fileUuid);
+                return true;
+            }
+        }
+
+        public bool IsActive(string fileUuid) => _sessions.ContainsKey(fileUuid);
+
+        private sealed class MaintenanceLease : IDisposable
+        {
+            private UploadSessionStore? _owner;
+            private readonly string _fileUuid;
+
+            public MaintenanceLease(UploadSessionStore owner, string fileUuid)
+            {
+                _owner = owner;
+                _fileUuid = fileUuid;
+            }
+
+            public void Dispose()
+            {
+                var owner = Interlocked.Exchange(ref _owner, null);
+                if (owner is null) return;
+                lock (owner._sessionGate) owner._maintenance.Remove(_fileUuid);
             }
         }
 

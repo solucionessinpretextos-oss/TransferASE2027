@@ -330,6 +330,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddSingleton<UploadSessionStore>();
+builder.Services.AddSingleton<PendingTransferMaintenanceService>();
 builder.Services.AddSingleton<FileAssembler>();
 builder.Services.AddSingleton<IPdfSafetyService, QpdfPdfSafetyService>();
 builder.Services.AddSingleton<IFileSafetyService, DefaultFileSafetyService>();
@@ -342,6 +343,7 @@ builder.Services.AddHostedService<AuthStateCleanupService>();
 builder.Services.AddHostedService<ResumableUploadCleanupService>();
 
 builder.Services.AddSingleton<ISystemHealthService, SystemHealthService>();
+builder.Services.AddSingleton<MonitoringStatisticsService>();
 
 builder.Services.AddSingleton<LogAlertSink>();
 builder.Services.AddSingleton<EmailAlertSink>();

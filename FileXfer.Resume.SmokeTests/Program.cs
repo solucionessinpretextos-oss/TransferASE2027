@@ -63,6 +63,8 @@ finally
     try { Directory.Delete(root, recursive: true); } catch { }
 }
 
+await PendingMaintenanceSmokeTests.RunAsync();
+
 static void Require(bool condition, string message)
 {
     if (!condition)

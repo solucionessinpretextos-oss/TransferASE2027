@@ -74,6 +74,14 @@ namespace FileXfer.Server.Dtos.Admin
         public int CompletedWithoutReceiptToday { get; set; }
         public int StalePendingTransfers { get; set; }
         public int DistinctRfcsToday { get; set; }
+        public int PendingTransfers { get; set; }
+        public int ExpiredPendingTransfers { get; set; }
+        public int ExpiringNext24Hours { get; set; }
+        public long PendingBytes { get; set; }
+        public double OldestPendingAgeHours { get; set; }
+        public long NearExpiryBytes { get; set; }
+        public int AdministrativelyCancelledToday { get; set; }
+        public int ExpiredToday { get; set; }
         public DateTimeOffset? LastCompletedUtc { get; set; }
         public DateTimeOffset? LastFailedUtc { get; set; }
     }
@@ -85,6 +93,19 @@ namespace FileXfer.Server.Dtos.Admin
         public OperationalKpisDto Kpis { get; set; } = default!;
         public IReadOnlyList<RecentTransferDto> RecentTransfers { get; set; } = Array.Empty<RecentTransferDto>();
         public DateTime TimestampUtc { get; set; }
+        public DateTimeOffset? StatisticsStartedUtc { get; set; }
+        public string StatisticsTimeZone { get; set; } = "America/Mazatlan";
+        public IReadOnlyList<HealthScoreComponentDto> HealthBreakdown { get; set; } = Array.Empty<HealthScoreComponentDto>();
+    }
+
+    public sealed class HealthScoreComponentDto
+    {
+        public string Key { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public double Penalty { get; set; }
+        public double MaxPenalty { get; set; }
+        public string Detail { get; set; } = string.Empty;
+        public string Remediation { get; set; } = string.Empty;
     }
 
     public sealed class RecentTransferDto

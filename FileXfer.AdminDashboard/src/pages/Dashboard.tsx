@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { RecentTransferDto, SummaryResponse } from "../types/admin";
+import { TransferMaintenance } from "../components/TransferMaintenance";
 
 const REFRESH_INTERVAL_MS = 2_000;
 const VIEW_PREFERENCE_KEY = "filexfer.admin.dashboard-view.v1";
@@ -55,6 +56,7 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<ViewMode>(readPreferredView);
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     let disposed = false;
@@ -91,7 +93,7 @@ export function Dashboard() {
       controller?.abort();
       window.clearInterval(timer);
     };
-  }, [authorizedFetch]);
+  }, [authorizedFetch, revision]);
 
   const chooseView = (next: ViewMode) => {
     setView(next);
@@ -130,6 +132,10 @@ export function Dashboard() {
 
       <KpiCommandDeck summary={summary} />
 
+      <OperationalHealthGuide summary={summary} />
+
+      <TransferMaintenance statisticsStartedUtc={summary.statisticsStartedUtc} onChanged={() => setRevision(value => value + 1)} />
+
       {view === "pulse" && <PulseView summary={summary} />}
       {view === "bars" && <BarsView summary={summary} />}
       {view === "text" && <TextView summary={summary} />}
@@ -144,10 +150,38 @@ export function Dashboard() {
       <RecentTransfers transfers={summary.recentTransfers} />
 
       <footer className="flex flex-col gap-2 border-t border-white/[0.06] pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-        <span>Actualización automática cada 2 segundos</span>
+        <span>Resumen cada 2 s · Cola de pendientes cada 15 s · Fechas en hora local</span>
         <span>Último corte: {formatDateTime(summary.timestampUtc)}</span>
       </footer>
     </div>
+  );
+}
+
+function OperationalHealthGuide({ summary }: { summary: SummaryResponse }) {
+  const breakdown = summary.healthBreakdown ?? [];
+  const totalPenalty = breakdown.reduce((total, item) => total + item.penalty, 0);
+  return (
+    <Panel>
+      <PanelHeading eyebrow="Diagnóstico y recuperación" title="Cómo leer y recuperar la salud operativa" description="El desglose proviene del servidor y muestra la deducción real de cada componente, junto con la acción que puede recuperarlo." />
+      <div className="mt-5 grid gap-5 lg:grid-cols-[17rem_1fr]">
+        <div className="rounded-2xl border border-amber-300/20 bg-[#17150e] p-5">
+          <p className="text-xs text-amber-100">Salud operativa actual</p>
+          <p className="mt-2 text-4xl font-semibold tabular-nums text-white">{formatPercent(summary.kpis.operationalHealthScore)}</p>
+          {breakdown.length > 0 && <p className="mt-3 text-xs text-amber-200">100 − {totalPenalty.toFixed(1)} puntos = {summary.kpis.operationalHealthScore.toFixed(1)} puntos</p>}
+          <p className="mt-4 text-xs leading-5 text-slate-300">Es un termómetro de operación, no disponibilidad histórica ni SLA. Las transferencias activas normales no reducen la puntuación. Una sesión sin actividad requiere revisión; su plazo real de reanudación se muestra aparte.</p>
+          <p className="mt-3 text-xs leading-5 text-slate-400">Reiniciar estadísticas no repara dependencias ni borra pendientes. La salud utiliza el estado real y las fallas recientes para conservar los focos de atención.</p>
+        </div>
+        <div className="space-y-3">
+          {breakdown.map(item => <div key={item.key} className={`rounded-xl border p-4 ${item.penalty > 0 ? "border-amber-300/25 bg-[#1b1710]" : "border-emerald-400/15 bg-[#101a17]"}`}>
+            <div className="flex justify-between gap-4"><h4 className="text-sm font-semibold text-white">{item.label}</h4><span className={`whitespace-nowrap text-xs font-semibold ${item.penalty > 0 ? "text-amber-200" : "text-emerald-200"}`}>−{item.penalty.toFixed(1)} / {item.maxPenalty} puntos</span></div>
+            <p className="mt-2 text-xs leading-5 text-slate-300">{item.detail}</p>
+            <p className="mt-2 text-xs leading-5 text-slate-400"><span className="font-semibold text-slate-200">Cómo sanearlo: </span>{item.remediation}</p>
+          </div>)}
+          {breakdown.length === 0 && <p className="rounded-xl border border-white/10 p-4 text-xs text-slate-400">El servidor todavía no proporciona el desglose de puntuación. Actualice el servicio para obtener deducciones y acciones precisas.</p>}
+          <details className="rounded-xl border border-white/10 p-4 text-xs text-slate-300"><summary className="cursor-pointer font-semibold text-white">Guía de intervención: qué revisar primero</summary><ol className="mt-3 list-decimal space-y-2 pl-5 leading-5"><li>Dependencias degradadas: revise conectividad SQL, permisos de la cuenta del servicio sobre storage y salud del bus. En alertas, revise SMTP y las entregas fallidas.</li><li>Fallas recientes: consulte la traza y el error del archivo. Corrija el origen y confirme una nueva carga exitosa. La tasa se recupera al salir las fallas de la ventana móvil de una hora.</li><li>Pendientes sin actividad: contacte al emisor para reanudar; retire manualmente las copias que ya no se necesitan. Los vencidos se limpian automáticamente según su fecha individual.</li><li>CPU, memoria y disco: confirme la tendencia. La limpieza de parciales libera disco; no elimine archivos completados para mejorar un indicador. Escale recursos si la presión continúa.</li></ol></details>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -210,7 +244,7 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
           <div className="mt-7 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-5">
             <MiniMetric label="Éxito hoy" value={formatPercent(kpis.successRateTodayPercent)} />
             <MiniMetric label="RFC activos" value={String(kpis.distinctRfcsToday)} />
-            <MiniMetric label="Vencidos" value={String(kpis.stalePendingTransfers)} danger={kpis.stalePendingTransfers > 0} />
+            <MiniMetric label="Sin actividad" value={String(kpis.stalePendingTransfers)} danger={kpis.stalePendingTransfers > 0} />
           </div>
         </Panel>
 
@@ -346,7 +380,7 @@ function TextView({ summary }: { summary: SummaryResponse }) {
           <MetricCard label="Falla última hora" value={formatPercent(kpis.failureRateLastHourPercent)} helper="Completadas contra fallidas" danger={kpis.failureRateLastHourPercent > 5} />
           <MetricCard label="Fallas de catálogo" value={String(kpis.catalogFailuresToday)} helper="El archivo llegó, pero no pudo registrarse" danger={kpis.catalogFailuresToday > 0} />
           <MetricCard label="RFC activos" value={String(kpis.distinctRfcsToday)} helper="Con actividad durante el día" />
-          <MetricCard label="Pendientes vencidos" value={String(kpis.stalePendingTransfers)} helper="Más de 30 minutos" danger={kpis.stalePendingTransfers > 0} />
+          <MetricCard label="Pendientes sin actividad" value={String(kpis.stalePendingTransfers)} helper="Más de 30 minutos sin avance" danger={kpis.stalePendingTransfers > 0} />
           <MetricCard label="Duración promedio" value={formatSeconds(kpis.averageUploadDurationTodaySeconds)} helper="Cargas completadas hoy" />
           <MetricCard label="Duración mediana" value={formatSeconds(kpis.medianUploadDurationTodaySeconds)} helper="La mitad terminó antes de este tiempo" />
           <MetricCard label="Duración P95" value={formatSeconds(kpis.p95UploadDurationTodaySeconds)} helper="95 % concluye antes de este tiempo" />
@@ -384,14 +418,14 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Salud operativa",
       value: formatPercent(kpis.operationalHealthScore),
       context: server.isHealthy ? "Dependencias disponibles" : "Hay servicios degradados",
-      description: "Índice compuesto de disponibilidad del servidor, fallas de la última hora, pendientes vencidos y presión de la cola. 100 % representa la mejor condición observada.",
+      description: "Parte de 100 y descuenta las deducciones reales del diagnóstico de salud. Consulte el desglose para conocer la causa y cómo recuperarla. La actividad normal no penaliza y el reinicio de estadísticas no oculta incidencias reales.",
       tone: !server.isHealthy || kpis.operationalHealthScore < 70 ? "red" : kpis.operationalHealthScore < 90 ? "gold" : "green"
     },
     {
       label: "Éxito del día",
       value: formatPercent(kpis.successRateTodayPercent),
       context: `${transfers.completedToday} completadas de ${kpis.totalTransfersToday}`,
-      description: "Porcentaje de transferencias cerradas hoy con estado completado. El denominador incluye cierres fallidos, cancelados, rechazados, expirados y fallas de catálogo.",
+      description: "Porcentaje de cierres completados entre completados, fallas técnicas, rechazos y fallas de catálogo del período. Los retiros administrativos y expiraciones se muestran por separado para no confundirlos con errores.",
       tone: kpis.totalTransfersToday === 0 ? "slate" : kpis.successRateTodayPercent >= 95 ? "green" : kpis.successRateTodayPercent >= 85 ? "gold" : "red"
     },
     {
@@ -405,14 +439,14 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Fallas del día",
       value: String(transfers.failedToday),
       context: `${kpis.catalogFailuresToday} de catálogo`,
-      description: "Cierres no exitosos del día. Incluye fallas técnicas, fallas de catálogo, rechazos, cancelaciones y expiraciones; no incluye cargas aún pendientes.",
+      description: "Cierres con falla técnica, falla de catálogo o rechazo dentro del período diario medido. Las cancelaciones administrativas y expiraciones cuentan por separado; las cargas abiertas no son fallas.",
       tone: transfers.failedToday > 0 ? "red" : "green"
     },
     {
       label: "Pendientes críticos",
       value: String(kpis.stalePendingTransfers),
       context: `${transfers.pausedResumableTransfers} reanudables`,
-      description: "Transferencias que permanecen pendientes por más de 30 minutos. Las reanudables conservan una copia parcial vigente y pueden continuar sin empezar desde cero.",
+      description: "Pendientes o pausadas sin actividad durante más de 30 minutos. Esto pide revisión, pero no significa que haya vencido el plazo del archivo. Las activas se protegen de la limpieza.",
       tone: kpis.stalePendingTransfers > 0 ? "red" : transfers.pausedResumableTransfers > 0 ? "violet" : "green"
     },
     {
@@ -463,6 +497,48 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       context: `Promedio ${formatBytes(kpis.averageFileSizeTodayBytes)}`,
       description: "Cantidad de RFC distintos con actividad creada durante el día. El contexto muestra el tamaño promedio de los archivos completados.",
       tone: "gold"
+    },
+    {
+      label: "Pendientes persistidos",
+      value: String(kpis.pendingTransfers ?? 0),
+      context: `${formatBytes(kpis.pendingBytes ?? 0)} en copias parciales`,
+      description: "Total de sesiones Pending o Paused que aún están abiertas en base de datos, incluso tras reiniciar el servidor. El tamaño indica espacio recibido pendiente de completar o retirar.",
+      tone: (kpis.pendingTransfers ?? 0) > 0 ? "violet" : "green"
+    },
+    {
+      label: "Plazo vencido",
+      value: String(kpis.expiredPendingTransfers ?? 0),
+      context: "Pendientes por limpiar",
+      description: "Archivos parciales cuya fecha individual de reanudación ya venció y siguen abiertos. Se retiran en el próximo ciclo automático si no están activos; puede ejecutar la limpieza ahora.",
+      tone: (kpis.expiredPendingTransfers ?? 0) > 0 ? "red" : "green"
+    },
+    {
+      label: "Vencen en 24 horas",
+      value: String(kpis.expiringNext24Hours ?? 0),
+      context: `${formatBytes(kpis.nearExpiryBytes ?? 0)} por reanudar`,
+      description: "Pendientes que vencerán durante las siguientes 24 horas. Priorice contactar a sus emisores para completar el envío antes de que se elimine la copia parcial.",
+      tone: (kpis.expiringNext24Hours ?? 0) > 0 ? "gold" : "green"
+    },
+    {
+      label: "Mayor espera pendiente",
+      value: `${(kpis.oldestPendingAgeHours ?? 0).toFixed(1)} h`,
+      context: "Desde la última actividad",
+      description: "Horas sin actividad de la transferencia pendiente más antigua. Permite descubrir abandono o cortes persistentes. No es el tiempo de transmisión ni cambia al reiniciar estadísticas.",
+      tone: (kpis.oldestPendingAgeHours ?? 0) >= 24 ? "red" : (kpis.oldestPendingAgeHours ?? 0) > 0.5 ? "gold" : "green"
+    },
+    {
+      label: "Expiradas del día",
+      value: String(kpis.expiredToday ?? 0),
+      context: "Cerradas por vencimiento",
+      description: "Transferencias terminadas como Expired durante el período diario medido. Indica cuántas cargas perdieron la ventana de continuidad y requieren iniciar de nuevo.",
+      tone: (kpis.expiredToday ?? 0) > 0 ? "gold" : "green"
+    },
+    {
+      label: "Retiros manuales del día",
+      value: String(kpis.administrativelyCancelledToday ?? 0),
+      context: "Decisiones administrativas",
+      description: "Pendientes retirados manualmente por un administrador durante el período diario medido. Permite distinguir limpieza intencional de fallas técnicas; el motivo permanece en la bitácora.",
+      tone: "slate"
     }
   ];
 
@@ -472,6 +548,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
         <SectionTitle title="KPI de mando" subtitle="Indicadores operativos con definición, ventana de tiempo y contexto accionable." />
         <span className="text-[11px] text-slate-500">Pase el cursor o use Tab sobre una tarjeta para conocer cómo se interpreta.</span>
       </div>
+      <p className="mt-3 text-xs leading-5 text-slate-400">Contadores del día: desde medianoche en {summary.statisticsTimeZone ?? "America/Mazatlan"}{summary.statisticsStartedUtc ? `, o desde el último reinicio si fue posterior (${formatDateTime(summary.statisticsStartedUtc)})` : ""}. Las ventanas de última hora se recortan al reinicio. Salud, pendientes y recursos reflejan la operación real.</p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         {cards.map(card => <KpiInsightCard key={card.label} {...card} />)}
       </div>
@@ -744,7 +821,7 @@ function buildHeatSignals(summary: SummaryResponse): Array<{ label: string; valu
     { label: "Salud operativa", value: formatPercent(kpis.operationalHealthScore), detail: "Índice compuesto", severity: scoreSeverity(kpis.operationalHealthScore) },
     { label: "Éxito hoy", value: formatPercent(kpis.successRateTodayPercent), detail: `${kpis.totalTransfersToday} cerradas`, severity: kpis.totalTransfersToday === 0 ? "warning" : scoreSeverity(kpis.successRateTodayPercent) },
     { label: "Fallas · 1 h", value: formatPercent(kpis.failureRateLastHourPercent), detail: `${transfers.failedLastHour} transferencias`, severity: inverseSeverity(kpis.failureRateLastHourPercent, 5, 15) },
-    { label: "Pendientes vencidos", value: String(kpis.stalePendingTransfers), detail: "Más de 30 minutos", severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
+    { label: "Pendientes sin actividad", value: String(kpis.stalePendingTransfers), detail: "Más de 30 minutos sin avance", severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
     { label: "CPU", value: formatPercent(server.cpuUsagePercent), detail: "Utilización actual", severity: inverseSeverity(server.cpuUsagePercent, 75, 90) },
     { label: "Memoria", value: formatPercent(server.memoryUsagePercent), detail: "Utilización actual", severity: inverseSeverity(server.memoryUsagePercent, 75, 90) },
     { label: "Disco", value: formatPercent(server.diskUsagePercent), detail: "Utilización actual", severity: inverseSeverity(server.diskUsagePercent, 75, 90) },
@@ -784,7 +861,7 @@ function buildTrafficSignals(summary: SummaryResponse): Array<{ label: string; d
     { label: "Memoria", detail: `${formatPercent(server.memoryUsagePercent)} de utilización.`, severity: inverseSeverity(server.memoryUsagePercent, 75, 90) },
     { label: "Disco", detail: `${formatPercent(server.diskUsagePercent)} de utilización.`, severity: inverseSeverity(server.diskUsagePercent, 75, 90) },
     { label: "Fallas recientes", detail: `${formatPercent(kpis.failureRateLastHourPercent)} durante la última hora.`, severity: inverseSeverity(kpis.failureRateLastHourPercent, 5, 15) },
-    { label: "Pendientes vencidos", detail: `${kpis.stalePendingTransfers} cargas superan 30 minutos.`, severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
+    { label: "Pendientes sin actividad", detail: `${kpis.stalePendingTransfers} cargas llevan más de 30 minutos sin actividad.`, severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
     { label: "Alertas no entregadas", detail: `${server.alertDeadLetter} mensajes en dead-letter.`, severity: countSeverity(server.alertDeadLetter, 1, 1) },
     { label: "Verificación omitida", detail: `${transfers.verificationBypassedToday} archivos por política explícita.`, severity: transfers.verificationBypassedToday > 0 ? "warning" : "good" },
     { label: "Recibos", detail: `${transfers.receiptsIssuedToday} emitidos para ${transfers.completedToday} completadas.`, severity: transfers.receiptsIssuedToday < transfers.completedToday ? "warning" : "good" }
@@ -992,12 +1069,12 @@ function InfoPopover({ title, description, align = "left", compact = false }: { 
 
 export function panelExplanation(title: string): string | undefined {
   const explanations: Record<string, string> = {
-    "Pulso operativo": "Índice de 0 a 100. Parte de 100 y descuenta disponibilidad degradada, tasa de fallas de la última hora, transferencias pendientes por más de 30 minutos y presión de sesiones activas o en espera. Es una señal operativa, no un SLA contractual.",
+    "Pulso operativo": "Índice de 0 a 100. Parte de 100 y descuenta dependencias degradadas, tasa de fallas técnicas de la última hora, pendientes sin actividad por más de 30 minutos y plazos de reanudación vencidos. Las sesiones activas normales no penalizan. Consulte el diagnóstico para ver cada deducción y cómo recuperarla. No es un SLA contractual.",
     "Ruta de los archivos": "Combina el flujo actual en memoria con resultados persistidos del día: sesiones esperando, transmisiones activas, cargas parciales reanudables y transferencias completadas. Cada etapa tiene su propia explicación contextual.",
     "Constelación de servicios": "Resume las dependencias que sostienen el ecosistema: base de datos, almacenamiento, bus interno y alertamiento. También muestra presión de CPU, memoria y disco. Una dependencia roja requiere diagnóstico aunque la página continúe respondiendo.",
     "Huella de actividad": "Muestra las 20 transferencias más recientes ordenadas por fecha de creación. Cada bloque conserva identidad estable y usa un color exclusivo por estado; al enfocarlo muestra RFC, tiempos, tamaño, control aplicado y causa del error.",
     "Recursos del servidor": "Compara CPU, memoria y disco contra una escala común de 0 a 100 %. Verde indica menos de 75 %, ámbar de 75 a 89.9 % y rojo 90 % o más. Una lectura aislada debe confirmarse con tendencia y duración.",
-    "Completadas contra fallidas": "Compara cierres exitosos y no exitosos en dos ventanas: día actual y última hora. Las fallas incluyen errores técnicos, fallas de catálogo, rechazos, cancelaciones y expiraciones.",
+    "Completadas contra fallidas": "Compara completadas con fallas técnicas, fallas de catálogo y rechazos en el día medido y la última hora. Las cancelaciones administrativas y expiraciones cuentan por separado. Después de un reinicio estadístico, estas ventanas solo incluyen resultados posteriores al nuevo corte.",
     "Carga de la tubería": "Representa trabajo que todavía no finaliza: transmisiones activas, sesiones en espera y cargas parciales reanudables. Permite detectar acumulación antes de que se convierta en incumplimiento.",
     "Verificación y evidencia": "Relaciona recibos digitales, cargas reanudadas y verificaciones omitidas por una política explícita. Sirve para vigilar custodia e integridad, no solamente volumen transferido.",
     "Resumen ejecutivo": "Convierte las métricas del corte actual en observaciones accionables sobre estabilidad, focos de atención y continuidad. La lectura se recalcula automáticamente cada dos segundos.",
@@ -1046,11 +1123,15 @@ function EmptyState({ title, detail, tone = "neutral" }: { title: string; detail
   return <div className={`rounded-3xl border p-8 ${tone === "error" ? "border-rose-400/25 bg-rose-500/[0.06]" : "border-white/[0.07] bg-white/[0.025]"}`}><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">Centro de control</p><h2 className="mt-3 text-2xl font-semibold">{title}</h2><p className="mt-2 text-sm text-slate-400">{detail}</p></div>;
 }
 
-function buildExecutiveObservations(summary: SummaryResponse): Array<{ title: string; body: string; tone: Tone }> {
+export function buildExecutiveObservations(summary: SummaryResponse): Array<{ title: string; body: string; tone: Tone }> {
   const { server, transfers, kpis } = summary;
   const activity = kpis.totalTransfersToday === 0 ? "Todavía no hay transferencias cerradas durante el día; el porcentaje de éxito aparecerá cuando exista actividad." : `Hoy cerraron ${kpis.totalTransfersToday} transferencias con ${formatPercent(kpis.successRateTodayPercent)} de éxito y ${formatBytes(transfers.totalBytesTransferredToday)} confirmados.`;
-  const attentionCount = kpis.stalePendingTransfers + transfers.failedLastHour + server.alertDeadLetter;
-  const attention = attentionCount === 0 ? "No se detectan pendientes vencidos, fallas recientes ni alertas en dead-letter. No hay intervención inmediata pendiente." : `Se detectan ${kpis.stalePendingTransfers} pendientes vencidos, ${transfers.failedLastHour} fallas en la última hora y ${server.alertDeadLetter} alertas que requieren revisión.`;
+  const penalizedHealth = summary.healthBreakdown?.filter(item => item.penalty > 0) ?? [];
+  const expiredPending = kpis.expiredPendingTransfers ?? 0;
+  const attentionCount = kpis.stalePendingTransfers + expiredPending + transfers.failedLastHour + server.alertDeadLetter + penalizedHealth.length + (server.isHealthy ? 0 : 1);
+  const attention = attentionCount === 0
+    ? "No se detectan pendientes sin actividad, plazos vencidos ni alertas operativas en este corte."
+    : `Revise ${kpis.stalePendingTransfers} pendientes sin actividad, ${expiredPending} pendientes con plazo vencido y ${server.alertDeadLetter} alertas en dead-letter. El período medido registra ${transfers.failedLastHour} fallas en la última hora. ${penalizedHealth.length ? `La salud conserva deducciones por: ${penalizedHealth.map(item => item.label).join(", ")}; consulte el diagnóstico para sanearlas.` : server.isHealthy ? "" : "Hay dependencias degradadas; consulte el diagnóstico."}`;
   const continuity = transfers.pausedResumableTransfers === 0 && transfers.resumedTransfersToday === 0
     ? "No hay cargas parciales por reanudar. El mecanismo de continuidad permanece disponible y sin trabajo acumulado."
     : `${countLabel(transfers.pausedResumableTransfers, "carga reanudable", "cargas reanudables")} en custodia; hoy se recuperaron ${formatBytes(transfers.resumedBytesToday)} en ${countLabel(transfers.resumedTransfersToday, "transferencia", "transferencias")}.`;

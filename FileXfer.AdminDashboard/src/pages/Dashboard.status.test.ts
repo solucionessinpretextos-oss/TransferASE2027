@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { panelExplanation, statusKind } from "./Dashboard";
+import { buildExecutiveObservations, panelExplanation, statusKind } from "./Dashboard";
+import { SummaryResponse } from "../types/admin";
 
 describe("semántica visual de estados del Dashboard", () => {
   it.each([
@@ -29,5 +30,18 @@ describe("semántica visual de estados del Dashboard", () => {
     "Verificación y evidencia"
   ])("mantiene explicación operativa para %s", (panel) => {
     expect(panelExplanation(panel)).toBeTruthy();
+  });
+
+  it("mantiene la atención por salud y vencimientos aunque se reinicien los contadores históricos", () => {
+    const summary = {
+      server: { isHealthy: true, alertDeadLetter: 0 },
+      transfers: { failedLastHour: 0, pausedResumableTransfers: 0, resumedTransfersToday: 0 },
+      kpis: { totalTransfersToday: 0, operationalHealthScore: 80, stalePendingTransfers: 0, expiredPendingTransfers: 2 },
+      healthBreakdown: [{ key: "failures", label: "Fallas técnicas recientes", penalty: 20, maxPenalty: 30, detail: "", remediation: "" }]
+    } as SummaryResponse;
+    const attention = buildExecutiveObservations(summary)[1];
+    expect(attention.title).toBe("Atención recomendada");
+    expect(attention.body).toContain("2 pendientes con plazo vencido");
+    expect(attention.body).toContain("Fallas técnicas recientes");
   });
 });

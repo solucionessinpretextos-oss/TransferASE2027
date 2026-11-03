@@ -15,6 +15,7 @@ using FileXfer.Server.Data;
 using FileXfer.Server.Dtos.Admin;
 using FileXfer.Server.Services;
 using FileXfer.Server.Uploading;
+using FileXfer.Server.Options;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -29,15 +30,18 @@ namespace FileXfer.Server.Controllers.Admin
         private readonly IDbContextFactory<FileXferDbContext> _dbFactory;
         private readonly ISystemHealthService _systemHealth;
         private readonly UploadSessionStore _sessions;
+        private readonly StorageOptions _storage;
 
         public MonitoringController(
             IDbContextFactory<FileXferDbContext> dbFactory,
             ISystemHealthService systemHealth,
-            UploadSessionStore sessions)
+            UploadSessionStore sessions,
+            StorageOptions storage)
         {
             _dbFactory = dbFactory;
             _systemHealth = systemHealth;
             _sessions = sessions;
+            _storage = storage;
         }
 
         [HttpGet("summary")]
@@ -46,15 +50,41 @@ namespace FileXfer.Server.Controllers.Admin
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
             var now = DateTimeOffset.UtcNow;
-            var oneHourAgo = now.AddHours(-1);
+            var statisticsStartedUtc = await MonitoringStatisticsService.GetStartedUtcAsync(db, ct);
+            var hourWindowStart = now.AddHours(-1);
+            var oneHourAgo = statisticsStartedUtc > hourWindowStart ? statisticsStartedUtc.Value : hourWindowStart;
             var staleThreshold = now.AddMinutes(-30);
-            var todayStart = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, TimeSpan.Zero);
+            var dashboardTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Mazatlan");
+            var localToday = TimeZoneInfo.ConvertTime(now, dashboardTimeZone).Date;
+            var dayStart = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(localToday, dashboardTimeZone));
+            var todayStart = statisticsStartedUtc > dayStart ? statisticsStartedUtc.Value : dayStart;
 
-            var activeSessions = _sessions.ActiveCount();
-            var waitingSessions = _sessions.WaitingCount();
-            var totalPendingSessions = activeSessions + waitingSessions;
+            // Las sesiones admitidas incluyen a las que esperan su primer bloque: no contarlas dos veces.
+            var liveSessions = _sessions.Sessions.Values.ToArray();
+            var activeUuids = liveSessions.Select(session => session.FileUuid).ToArray();
+            var waitingSessions = liveSessions.Count(session => session.BytesReceived == 0);
+            var activeSessions = liveSessions.Length - waitingSessions;
+            var totalPendingSessions = liveSessions.Length;
 
             var uploads = db.Uploads.AsNoTracking();
+            var pending = uploads.Where(u => (u.Status == "Pending" || u.Status == "Paused") && u.CompletedUtc == null);
+            // EF.Constant evita OPENJSON, no disponible en el SQL Server 2014 instalado.
+            var inactivePending = pending.Where(u => !EF.Constant(activeUuids).Contains(u.FileUuid));
+            var fallbackExpiryThreshold = now.AddHours(-_storage.ResumeRetentionHours);
+            var nearExpiryThreshold = now.AddHours(24);
+            var fallbackNearThreshold = nearExpiryThreshold.AddHours(-_storage.ResumeRetentionHours);
+            var expiredPending = inactivePending.Where(u =>
+                (u.ResumeExpiresUtc != null && u.ResumeExpiresUtc <= now) ||
+                (u.ResumeExpiresUtc == null &&
+                    (u.LastActivityUtc == default ? u.CreatedUtc : u.LastActivityUtc) <= fallbackExpiryThreshold));
+            var nearExpiry = inactivePending.Where(u =>
+                (u.ResumeExpiresUtc > now && u.ResumeExpiresUtc <= nearExpiryThreshold) ||
+                (u.ResumeExpiresUtc == null &&
+                    (u.LastActivityUtc == default ? u.CreatedUtc : u.LastActivityUtc) > fallbackExpiryThreshold &&
+                    (u.LastActivityUtc == default ? u.CreatedUtc : u.LastActivityUtc) <= fallbackNearThreshold));
+            var expiredPendingTransfers = await expiredPending.CountAsync(ct);
+            var oldestPendingUtc = await inactivePending.OrderBy(u => u.LastActivityUtc == default ? u.CreatedUtc : u.LastActivityUtc)
+                .Select(u => (DateTimeOffset?)(u.LastActivityUtc == default ? u.CreatedUtc : u.LastActivityUtc)).FirstOrDefaultAsync(ct);
 
             var completedLastHour = await uploads.CountAsync(
                 u => u.Status == "Completed" && u.CompletedUtc >= oneHourAgo, ct);
@@ -62,9 +92,7 @@ namespace FileXfer.Server.Controllers.Admin
             var failedLastHour = await uploads.CountAsync(
                 u => (u.Status == "Failed" ||
                       u.Status == "CatalogFailed" ||
-                      u.Status == "Rejected" ||
-                      u.Status == "Cancelled" ||
-                      u.Status == "Expired") &&
+                      u.Status == "Rejected") &&
                      u.CompletedUtc >= oneHourAgo, ct);
 
             var completedTodayDetails = await uploads
@@ -85,9 +113,7 @@ namespace FileXfer.Server.Controllers.Admin
             var failedToday = await uploads.CountAsync(
                 u => (u.Status == "Failed" ||
                       u.Status == "CatalogFailed" ||
-                      u.Status == "Rejected" ||
-                      u.Status == "Cancelled" ||
-                      u.Status == "Expired") &&
+                      u.Status == "Rejected") &&
                      u.CompletedUtc >= todayStart, ct);
 
             var catalogFailuresToday = await uploads.CountAsync(
@@ -101,11 +127,14 @@ namespace FileXfer.Server.Controllers.Admin
                 .Where(u => u.Status == "Completed" && u.CompletedUtc >= todayStart)
                 .SumAsync(u => u.BytesReceived, ct);
 
-            var stalePendingTransfers = await uploads.CountAsync(
-                u => u.Status == "Pending" && u.CompletedUtc == null && u.CreatedUtc < staleThreshold, ct);
+            var stalePendingTransfers = await inactivePending.CountAsync(
+                u => (u.LastActivityUtc == default ? u.CreatedUtc : u.LastActivityUtc) < staleThreshold &&
+                     ((u.ResumeExpiresUtc != null && u.ResumeExpiresUtc > now) ||
+                      (u.ResumeExpiresUtc == null &&
+                        (u.LastActivityUtc == default ? u.CreatedUtc : u.LastActivityUtc) > fallbackExpiryThreshold)), ct);
 
             var distinctRfcsToday = await uploads
-                .Where(u => u.CreatedUtc >= todayStart)
+                .Where(u => u.CreatedUtc >= todayStart || u.CompletedUtc >= todayStart)
                 .Select(u => u.Rfc)
                 .Distinct()
                 .CountAsync(ct);
@@ -154,7 +183,8 @@ namespace FileXfer.Server.Controllers.Admin
                 : Math.Clamp(resumedBytesToday * 100.0 / bytesToday, 0, 100);
 
             var lastCompletedUtc = await uploads
-                .Where(u => u.Status == "Completed" && u.CompletedUtc != null)
+                .Where(u => u.Status == "Completed" && u.CompletedUtc != null &&
+                            (statisticsStartedUtc == null || u.CompletedUtc >= statisticsStartedUtc))
                 .OrderByDescending(u => u.CompletedUtc)
                 .Select(u => u.CompletedUtc)
                 .FirstOrDefaultAsync(ct);
@@ -162,10 +192,9 @@ namespace FileXfer.Server.Controllers.Admin
             var lastFailedUtc = await uploads
                 .Where(u => (u.Status == "Failed" ||
                              u.Status == "CatalogFailed" ||
-                             u.Status == "Rejected" ||
-                             u.Status == "Cancelled" ||
-                             u.Status == "Expired") &&
-                            u.CompletedUtc != null)
+                             u.Status == "Rejected") &&
+                            u.CompletedUtc != null &&
+                            (statisticsStartedUtc == null || u.CompletedUtc >= statisticsStartedUtc))
                 .OrderByDescending(u => u.CompletedUtc)
                 .Select(u => u.CompletedUtc)
                 .FirstOrDefaultAsync(ct);
@@ -210,14 +239,17 @@ namespace FileXfer.Server.Controllers.Admin
             };
 
             var server = await _systemHealth.GetSnapshotAsync(ct);
+            // La salud usa la hora real, incluso después de reiniciar las estadísticas visibles.
+            var healthCompleted = await uploads.CountAsync(u => u.Status == "Completed" && u.CompletedUtc >= hourWindowStart, ct);
+            var healthFailed = await uploads.CountAsync(u =>
+                (u.Status == "Failed" || u.Status == "CatalogFailed" || u.Status == "Rejected") &&
+                u.CompletedUtc >= hourWindowStart, ct);
+            var healthBreakdown = OperationalHealthCalculator.Explain(
+                server, CalculateRate(healthFailed, healthCompleted + healthFailed), stalePendingTransfers, expiredPendingTransfers);
 
             var kpis = new OperationalKpisDto
             {
-                OperationalHealthScore = CalculateOperationalHealthScore(
-                    server.IsHealthy,
-                    failureRateLastHourPercent,
-                    stalePendingTransfers,
-                    totalPendingSessions),
+                OperationalHealthScore = OperationalHealthCalculator.Score(healthBreakdown),
                 TotalTransfersToday = totalTransfersToday,
                 SuccessRateTodayPercent = successRateTodayPercent,
                 FailureRateTodayPercent = failureRateTodayPercent,
@@ -234,6 +266,15 @@ namespace FileXfer.Server.Controllers.Admin
                 CompletedWithoutReceiptToday = completedWithoutReceiptToday,
                 StalePendingTransfers = stalePendingTransfers,
                 DistinctRfcsToday = distinctRfcsToday,
+                PendingTransfers = await pending.CountAsync(ct),
+                ExpiredPendingTransfers = expiredPendingTransfers,
+                ExpiringNext24Hours = await nearExpiry.CountAsync(ct),
+                PendingBytes = await pending.SumAsync(u => u.BytesReceived, ct),
+                OldestPendingAgeHours = oldestPendingUtc == null ? 0 : Math.Max(0, (now - oldestPendingUtc.Value).TotalHours),
+                NearExpiryBytes = await nearExpiry.SumAsync(u => u.BytesReceived, ct),
+                AdministrativelyCancelledToday = await uploads.CountAsync(u => u.Status == "Cancelled" &&
+                    u.CompletedUtc >= todayStart && u.LastError != null && u.LastError.StartsWith("Eliminación manual"), ct),
+                ExpiredToday = await uploads.CountAsync(u => u.Status == "Expired" && u.CompletedUtc >= todayStart, ct),
                 LastCompletedUtc = lastCompletedUtc,
                 LastFailedUtc = lastFailedUtc
             };
@@ -243,7 +284,11 @@ namespace FileXfer.Server.Controllers.Admin
                 Server = server,
                 Transfers = transfers,
                 Kpis = kpis,
+                StatisticsStartedUtc = statisticsStartedUtc,
+                HealthBreakdown = healthBreakdown,
                 RecentTransfers = await uploads
+                    .Where(u => statisticsStartedUtc == null || u.CreatedUtc >= statisticsStartedUtc ||
+                                u.CompletedUtc >= statisticsStartedUtc || u.Status == "Pending" || u.Status == "Paused")
                     .OrderByDescending(u => u.CreatedUtc)
                     .Take(20)
                     .Select(u => new RecentTransferDto
@@ -287,22 +332,5 @@ namespace FileXfer.Server.Controllers.Admin
             return orderedValues[index];
         }
 
-        private static double CalculateOperationalHealthScore(
-            bool serverHealthy,
-            double failureRateLastHourPercent,
-            int stalePendingTransfers,
-            int pendingSessions)
-        {
-            var score = 100.0;
-
-            if (!serverHealthy)
-                score -= 25;
-
-            score -= Math.Min(30, failureRateLastHourPercent * 0.6);
-            score -= Math.Min(20, stalePendingTransfers * 5);
-            score -= Math.Min(15, pendingSessions * 2);
-
-            return Math.Clamp(score, 0, 100);
-        }
     }
 }
