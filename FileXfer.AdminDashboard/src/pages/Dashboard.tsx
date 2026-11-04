@@ -10,21 +10,32 @@ import { StorageDiagnostics } from "../components/StorageDiagnostics";
 const REFRESH_INTERVAL_MS = 2_000;
 const VIEW_PREFERENCE_KEY = "filexfer.admin.dashboard-view.v1";
 
-type ViewMode =
-  | "pulse"
-  | "bars"
-  | "text"
-  | "rings"
-  | "heatmap"
-  | "flow"
-  | "mosaic"
-  | "timeline"
-  | "radar"
-  | "traffic";
+type ViewMode = typeof dashboardViews[number]["mode"];
 type Tone = "gold" | "green" | "red" | "blue" | "slate";
 type Severity = "good" | "warning" | "danger";
 type StatusKind = "completed" | "transmitting" | "pending" | "paused" | "catalogFailed" | "failed" | "cancelled" | "unknown";
 type KpiTone = "green" | "red" | "blue" | "gold" | "violet" | "slate";
+type DashboardSection = "overview" | "health" | "maintenance" | "activity";
+
+const dashboardSections = [
+  { id: "overview", label: "Panorama" },
+  { id: "health", label: "Diagnóstico" },
+  { id: "maintenance", label: "Mantenimiento" },
+  { id: "activity", label: "Actividad" }
+] as const;
+
+const dashboardViews = [
+  { mode: "pulse", label: "Pulso", helper: "Estado general", description: "Salud, servicios, recursos y señales de actividad reciente.", Component: PulseView },
+  { mode: "bars", label: "Barras", helper: "Comparación", description: "Compara capacidad, resultados, cola y evidencia en escalas comunes.", Component: BarsView },
+  { mode: "text", label: "Ejecutiva", helper: "Lectura rápida", description: "Lee el corte operativo y las observaciones en texto.", Component: TextView },
+  { mode: "rings", label: "Anillos", helper: "Proporciones", description: "Compara porcentajes de salud, resultados, capacidad y verificación.", Component: RingsView },
+  { mode: "heatmap", label: "Térmico", helper: "Intensidad", description: "Localiza las señales que requieren seguimiento por nivel de atención.", Component: HeatmapView },
+  { mode: "flow", label: "Flujo", helper: "Etapas", description: "Consulta la cola actual y los resultados del día por etapa.", Component: FlowView },
+  { mode: "mosaic", label: "Mosaico", helper: "Prioridades", description: "Explora los indicadores principales en un tablero de tarjetas.", Component: MosaicView },
+  { mode: "timeline", label: "Cronología", helper: "Eventos", description: "Recorre las transferencias recientes y consulta sus resultados.", Component: TimelineView },
+  { mode: "radar", label: "Radar", helper: "Equilibrio", description: "Compara fortalezas y brechas en distintas dimensiones de operación.", Component: RadarView },
+  { mode: "traffic", label: "Semáforo", helper: "Decisión", description: "Separa lo que está operando de lo que conviene vigilar o atender.", Component: TrafficView }
+] as const;
 
 class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -57,6 +68,7 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<ViewMode>(readPreferredView);
+  const [section, setSection] = useState<DashboardSection>("overview");
   const [revision, setRevision] = useState(0);
   const [maintenanceRequest, setMaintenanceRequest] = useState<MaintenanceRequest | null>(null);
 
@@ -99,7 +111,12 @@ export function Dashboard() {
 
   const chooseView = (next: ViewMode) => {
     setView(next);
-    window.localStorage.setItem(VIEW_PREFERENCE_KEY, next);
+    try { window.localStorage.setItem(VIEW_PREFERENCE_KEY, next); } catch { /* La vista sigue disponible para esta sesión. */ }
+  };
+
+  const openMaintenance = (kind: MaintenanceRequest["kind"]) => {
+    setSection("maintenance");
+    setMaintenanceRequest(previous => ({ kind, nonce: (previous?.nonce ?? 0) + 1 }));
   };
 
   if (loading && !summary && !error) return <DashboardSkeleton />;
@@ -112,50 +129,119 @@ export function Dashboard() {
     return <EmptyState title="Sin información disponible" detail="El servidor todavía no reporta actividad operativa." />;
   }
 
+  const SelectedView = dashboardViews.find(option => option.mode === view)?.Component ?? PulseView;
   return (
-    <div className="space-y-7">
-      <header className="flex flex-col gap-5 2xl:flex-row 2xl:items-end 2xl:justify-between">
+    <div className="dashboard-console space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-amber-300/80">Inteligencia operativa</p>
-            <LiveBadge healthy={summary.server.isHealthy} />
-          </div>
+          <p className="dashboard-eyebrow">Operación de transferencias</p>
           <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">Dashboard general</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Una sola fuente de verdad, diez maneras de leerla. Cambie la vista sin alterar los datos.</p>
         </div>
-        <ViewSwitcher selected={view} onChange={chooseView} />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-slate-400">
+          {error ? <span className="font-semibold text-amber-200">Actualización interrumpida</span> : <LiveBadge healthy={summary.server.isHealthy} />}
+          <time dateTime={summary.timestampUtc}>Corte {formatDateTime(summary.timestampUtc)}</time>
+        </div>
       </header>
 
       {error && (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+        <div role="status" className="rounded-xl border border-amber-500/30 bg-[#211b11] px-4 py-3 text-sm text-amber-100">
           Los últimos datos válidos siguen visibles. La actualización reportó: {error}
         </div>
       )}
 
-      <KpiCommandDeck summary={summary} />
+      <nav className="dashboard-section-nav" aria-label="Secciones del Dashboard">
+        {dashboardSections.map(item => (
+          <button key={item.id} id={`dashboard-nav-${item.id}`} type="button" aria-pressed={section === item.id}
+            aria-controls={`dashboard-${item.id}`} onClick={() => setSection(item.id)}>
+            {item.label}
+            {item.id === "maintenance" && (summary.kpis.expiredPendingTransfers ?? 0) > 0 && (
+              <span className="dashboard-nav-count" aria-label="vencidas">{summary.kpis.expiredPendingTransfers}</span>
+            )}
+          </button>
+        ))}
+      </nav>
 
-      <OperationalHealthGuide summary={summary} onChanged={() => setRevision(value => value + 1)} onMaintenanceAction={kind => setMaintenanceRequest({ kind, nonce: Date.now() })} />
+      <section id="dashboard-overview" aria-label="Panorama" hidden={section !== "overview"}>
+        {section === "overview" && <div className="space-y-7">
+          <OperationalOverview summary={summary} onNavigate={next => {
+            setSection(next);
+            document.getElementById(`dashboard-nav-${next}`)?.focus();
+          }} />
+          <section aria-labelledby="dashboard-views-title" className="space-y-4">
+            <div>
+              <p className="dashboard-eyebrow">Exploración visual</p>
+              <h3 id="dashboard-views-title" className="mt-1 text-xl font-semibold text-white">Vistas del Dashboard</h3>
+              <p className="mt-1 text-sm text-slate-400">Elige cómo leer el mismo corte de información.</p>
+            </div>
+            <ViewSwitcher selected={view} onChange={chooseView} />
+            <SelectedView summary={summary} />
+          </section>
+          <KpiCommandDeck summary={summary} />
+        </div>}
+      </section>
 
-      <TransferMaintenance statisticsStartedUtc={summary.statisticsStartedUtc} onChanged={() => setRevision(value => value + 1)} requestAction={maintenanceRequest} />
+      <section id="dashboard-health" aria-label="Diagnóstico" hidden={section !== "health"}>
+        <OperationalHealthGuide summary={summary} onChanged={() => setRevision(value => value + 1)} onMaintenanceAction={openMaintenance} />
+      </section>
 
-      {view === "pulse" && <PulseView summary={summary} />}
-      {view === "bars" && <BarsView summary={summary} />}
-      {view === "text" && <TextView summary={summary} />}
-      {view === "rings" && <RingsView summary={summary} />}
-      {view === "heatmap" && <HeatmapView summary={summary} />}
-      {view === "flow" && <FlowView summary={summary} />}
-      {view === "mosaic" && <MosaicView summary={summary} />}
-      {view === "timeline" && <TimelineView summary={summary} />}
-      {view === "radar" && <RadarView summary={summary} />}
-      {view === "traffic" && <TrafficView summary={summary} />}
+      <section id="dashboard-maintenance" aria-label="Mantenimiento" hidden={section !== "maintenance"}>
+        <TransferMaintenance statisticsStartedUtc={summary.statisticsStartedUtc} onChanged={() => setRevision(value => value + 1)} requestAction={maintenanceRequest} />
+      </section>
 
-      <RecentTransfers transfers={summary.recentTransfers} />
+      <section id="dashboard-activity" aria-label="Actividad" hidden={section !== "activity"}>
+        <RecentTransfers transfers={summary.recentTransfers} />
+      </section>
 
       <footer className="flex flex-col gap-2 border-t border-white/[0.06] pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
         <span>Resumen cada 2 s · Cola de pendientes cada 15 s · Fechas en hora local</span>
-        <span>Último corte: {formatDateTime(summary.timestampUtc)}</span>
+        <span>Transfer ASE · Centro de control</span>
       </footer>
     </div>
+  );
+}
+
+function OperationalOverview({ summary, onNavigate }: { summary: SummaryResponse; onNavigate: (section: DashboardSection) => void }) {
+  const { server, transfers, kpis } = summary;
+  const score = clamp(kpis.operationalHealthScore, 0, 100);
+  const severity = operationalSeverity(score, server.isHealthy);
+  const expired = kpis.expiredPendingTransfers ?? 0;
+  const signals = [
+    { label: "En transmisión", value: transfers.activeTransfers, detail: `${transfers.waitingTransfers} en espera`, tone: "sky", section: "maintenance" },
+    { label: "Completadas hoy", value: transfers.completedToday, detail: formatBytes(transfers.totalBytesTransferredToday), tone: "emerald", section: "activity" },
+    { label: "Fallas hoy", value: transfers.failedToday, detail: `${kpis.catalogFailuresToday} de catálogo`, tone: "rose", section: "activity" },
+    { label: "Pendientes vencidos", value: expired, detail: `${kpis.pendingTransfers ?? 0} pendientes registrados`, tone: "amber", section: "maintenance" }
+  ] as const;
+
+  return (
+    <section aria-label="Resumen de operación" className="dashboard-overview">
+      <div className="dashboard-health-hero" data-severity={severity}>
+        <div className="relative min-w-0">
+          <p className="dashboard-eyebrow">Salud operativa</p>
+          <p className="mt-1 text-5xl font-semibold tracking-[-0.065em] tabular-nums text-white">{score.toFixed(1)} <span className="text-2xl font-medium text-slate-400">%</span></p>
+          <p className="dashboard-health-caption">{severity === "good" ? "Operación estable" : severity === "warning" ? "Requiere seguimiento" : "Requiere atención"}</p>
+          <button type="button" className="dashboard-hero-link" onClick={() => onNavigate("health")}>
+            Ver diagnóstico <span aria-hidden="true">↗</span>
+          </button>
+        </div>
+        <svg className="dashboard-hero-gauge" viewBox="0 0 120 120" aria-hidden="true">
+          <circle cx="60" cy="60" r="55" fill="none" stroke="currentColor" opacity=".12" strokeDasharray="1 4" />
+          <circle cx="60" cy="60" r="44" fill="none" stroke="currentColor" opacity=".14" strokeWidth="8" />
+          <circle cx="60" cy="60" r="44" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" pathLength="100" strokeDasharray={`${score} 100`} transform="rotate(-90 60 60)" visibility={score === 0 ? "hidden" : undefined} />
+          <path d="M35 61h13l8-13 9 25 6-12h14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
+      <div className="dashboard-signal-grid">
+        {signals.map(signal => (
+          <button type="button" className="dashboard-signal" data-tone={signal.value ? signal.tone : "neutral"} key={signal.label}
+            onClick={() => onNavigate(signal.section)}>
+            <span className="dashboard-signal-label">{signal.label}</span>
+            <span className="dashboard-signal-value">{signal.value.toLocaleString("es-MX")}</span>
+            <span className="dashboard-signal-detail">{signal.detail}</span>
+            <span className="dashboard-signal-arrow" aria-hidden="true">↗</span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -195,41 +281,27 @@ function OperationalHealthGuide({ summary, onChanged, onMaintenanceAction }: { s
 }
 
 function ViewSwitcher({ selected, onChange }: { selected: ViewMode; onChange: (mode: ViewMode) => void }) {
-  const options: Array<{ mode: ViewMode; label: string; helper: string }> = [
-    { mode: "pulse", label: "Pulso", helper: "Salud general" },
-    { mode: "bars", label: "Barras", helper: "Comparación" },
-    { mode: "text", label: "Ejecutiva", helper: "Lectura" },
-    { mode: "rings", label: "Anillos", helper: "Proporciones" },
-    { mode: "heatmap", label: "Térmico", helper: "Intensidad" },
-    { mode: "flow", label: "Flujo", helper: "Proceso" },
-    { mode: "mosaic", label: "Mosaico", helper: "Prioridades" },
-    { mode: "timeline", label: "Cronología", helper: "Eventos" },
-    { mode: "radar", label: "Radar", helper: "Equilibrio" },
-    { mode: "traffic", label: "Semáforo", helper: "Decisión" }
-  ];
-
+  const current = dashboardViews.find(option => option.mode === selected);
   return (
-    <div className="grid w-full grid-cols-2 gap-1 rounded-2xl border border-white/10 bg-white/[0.025] p-1.5 sm:grid-cols-5 2xl:grid-cols-10" aria-label="Vista del Dashboard">
-      {options.map((option) => {
-        const active = selected === option.mode;
-        return (
+    <div className="dashboard-view-picker">
+      <div className="dashboard-view-grid" role="group" aria-label="Vista del Dashboard">
+        {dashboardViews.map((option) => (
           <button
             key={option.mode}
             type="button"
-            aria-pressed={active}
+            aria-pressed={selected === option.mode}
             onClick={() => onChange(option.mode)}
-            className={`flex min-w-0 items-center justify-center gap-2 rounded-xl px-2 py-2.5 text-left transition ${active
-              ? "bg-amber-400/12 text-amber-100 ring-1 ring-inset ring-amber-300/25"
-              : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"}`}
+            className="dashboard-view-option"
           >
             <ViewGlyph mode={option.mode} />
             <span className="min-w-0">
-              <span className="block truncate text-xs font-semibold">{option.label}</span>
-              <span className="hidden text-[9px] text-current opacity-55 2xl:block">{option.helper}</span>
+              <span className="block text-xs font-semibold">{option.label}</span>
+              <span className="dashboard-view-helper">{option.helper}</span>
             </span>
           </button>
-        );
-      })}
+        ))}
+      </div>
+      <p className="dashboard-view-description" aria-live="polite"><strong>{current?.label}</strong><span>{current?.description}</span></p>
     </div>
   );
 }
@@ -333,8 +405,8 @@ function BarsView({ summary }: { summary: SummaryResponse }) {
       <ChartPanel eyebrow="Resultados" title="Completadas contra fallidas" footer={`Éxito global del día: ${formatPercent(kpis.successRateTodayPercent)}`}>
         <MetricBar label="Completadas hoy" value={transfers.completedToday} max={resultMax} display={String(transfers.completedToday)} tone="green" />
         <MetricBar label="Fallidas hoy" value={transfers.failedToday} max={resultMax} display={String(transfers.failedToday)} tone="red" />
-        <MetricBar label="Completadas · 1 h" value={transfers.completedLastHour} max={resultMax} display={String(transfers.completedLastHour)} tone="blue" />
-        <MetricBar label="Fallidas · 1 h" value={transfers.failedLastHour} max={resultMax} display={String(transfers.failedLastHour)} tone="gold" />
+        <MetricBar label="Completadas · 1 h" value={transfers.completedLastHour} max={resultMax} display={String(transfers.completedLastHour)} tone="green" />
+        <MetricBar label="Fallidas · 1 h" value={transfers.failedLastHour} max={resultMax} display={String(transfers.failedLastHour)} tone="red" />
       </ChartPanel>
 
       <ChartPanel eyebrow="Flujo actual" title="Carga de la tubería" footer={`${transfers.totalPendingTransfers} transferencias pendientes en memoria`}>
@@ -422,8 +494,14 @@ function TextView({ summary }: { summary: SummaryResponse }) {
 
 function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
   const { server, transfers, kpis } = summary;
-  const cards: Array<{ label: string; value: string; context: string; description: string; tone: KpiTone }> = [
+  const groups = {
+    performance: "Rendimiento y capacidad",
+    results: "Resultados y evidencia",
+    continuity: "Continuidad y pendientes"
+  } as const;
+  const cards: Array<{ group: typeof groups[keyof typeof groups]; label: string; value: string; context: string; description: string; tone: KpiTone }> = [
     {
+      group: groups.performance,
       label: "Salud operativa",
       value: formatPercent(kpis.operationalHealthScore),
       context: server.isHealthy ? "Dependencias disponibles" : "Hay servicios degradados",
@@ -431,6 +509,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: !server.isHealthy || kpis.operationalHealthScore < 70 ? "red" : kpis.operationalHealthScore < 90 ? "gold" : "green"
     },
     {
+      group: groups.results,
       label: "Éxito del día",
       value: formatPercent(kpis.successRateTodayPercent),
       context: `${transfers.completedToday} completadas de ${kpis.totalTransfersToday}`,
@@ -438,6 +517,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: kpis.totalTransfersToday === 0 ? "slate" : kpis.successRateTodayPercent >= 95 ? "green" : kpis.successRateTodayPercent >= 85 ? "gold" : "red"
     },
     {
+      group: groups.performance,
       label: "En transmisión",
       value: String(transfers.activeTransfers),
       context: `${transfers.waitingTransfers} esperando turno`,
@@ -445,6 +525,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: transfers.activeTransfers > 0 ? "blue" : "slate"
     },
     {
+      group: groups.results,
       label: "Fallas del día",
       value: String(transfers.failedToday),
       context: `${kpis.catalogFailuresToday} de catálogo`,
@@ -452,6 +533,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: transfers.failedToday > 0 ? "red" : "green"
     },
     {
+      group: groups.continuity,
       label: "Pendientes críticos",
       value: String(kpis.stalePendingTransfers),
       context: `${transfers.pausedResumableTransfers} reanudables`,
@@ -459,6 +541,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: kpis.stalePendingTransfers > 0 ? "red" : transfers.pausedResumableTransfers > 0 ? "violet" : "green"
     },
     {
+      group: groups.results,
       label: "Cobertura de recibos",
       value: formatPercent(kpis.receiptCoverageTodayPercent),
       context: `${kpis.completedWithoutReceiptToday} sin recibo`,
@@ -466,6 +549,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: kpis.completedWithoutReceiptToday > 0 ? "red" : "green"
     },
     {
+      group: groups.results,
       label: "Verificación aplicada",
       value: formatPercent(kpis.verificationCoverageTodayPercent),
       context: `${transfers.verificationBypassedToday} omitidas por política`,
@@ -473,6 +557,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: kpis.verificationCoverageTodayPercent < 100 ? "red" : transfers.verificationBypassedToday > 0 ? "gold" : "green"
     },
     {
+      group: groups.performance,
       label: "Duración P95",
       value: formatSeconds(kpis.p95UploadDurationTodaySeconds),
       context: `Mediana ${formatSeconds(kpis.medianUploadDurationTodaySeconds)}`,
@@ -480,6 +565,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: "blue"
     },
     {
+      group: groups.performance,
       label: "Volumen confirmado",
       value: formatBytes(transfers.totalBytesTransferredToday),
       context: `P95 por archivo ${formatBytes(kpis.p95FileSizeTodayBytes)}`,
@@ -487,6 +573,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: "blue"
     },
     {
+      group: groups.performance,
       label: "Throughput",
       value: `${transfers.averageThroughputMbps.toFixed(2)} Mbps`,
       context: `${formatBytes(transfers.bytesTransferredLastHour)} en 1 h`,
@@ -494,6 +581,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: "blue"
     },
     {
+      group: groups.performance,
       label: "Continuidad recuperada",
       value: formatPercent(kpis.resumeReuseTodayPercent),
       context: `${formatBytes(transfers.resumedBytesToday)} reutilizados`,
@@ -501,6 +589,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: transfers.resumedBytesToday > 0 ? "violet" : "slate"
     },
     {
+      group: groups.results,
       label: "Actividad institucional",
       value: `${kpis.distinctRfcsToday} RFC`,
       context: `Promedio ${formatBytes(kpis.averageFileSizeTodayBytes)}`,
@@ -508,6 +597,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: "gold"
     },
     {
+      group: groups.continuity,
       label: "Pendientes persistidos",
       value: String(kpis.pendingTransfers ?? 0),
       context: `${formatBytes(kpis.pendingBytes ?? 0)} en copias parciales`,
@@ -515,6 +605,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: (kpis.pendingTransfers ?? 0) > 0 ? "violet" : "green"
     },
     {
+      group: groups.continuity,
       label: "Plazo vencido",
       value: String(kpis.expiredPendingTransfers ?? 0),
       context: "Pendientes por limpiar",
@@ -522,6 +613,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: (kpis.expiredPendingTransfers ?? 0) > 0 ? "red" : "green"
     },
     {
+      group: groups.continuity,
       label: "Vencen en 24 horas",
       value: String(kpis.expiringNext24Hours ?? 0),
       context: `${formatBytes(kpis.nearExpiryBytes ?? 0)} por reanudar`,
@@ -529,6 +621,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: (kpis.expiringNext24Hours ?? 0) > 0 ? "gold" : "green"
     },
     {
+      group: groups.continuity,
       label: "Mayor espera pendiente",
       value: `${(kpis.oldestPendingAgeHours ?? 0).toFixed(1)} h`,
       context: "Desde la última actividad",
@@ -536,6 +629,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: (kpis.oldestPendingAgeHours ?? 0) >= 24 ? "red" : (kpis.oldestPendingAgeHours ?? 0) > 0.5 ? "gold" : "green"
     },
     {
+      group: groups.continuity,
       label: "Expiradas del día",
       value: String(kpis.expiredToday ?? 0),
       context: "Cerradas por vencimiento",
@@ -543,6 +637,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       tone: (kpis.expiredToday ?? 0) > 0 ? "gold" : "green"
     },
     {
+      group: groups.continuity,
       label: "Retiros manuales del día",
       value: String(kpis.administrativelyCancelledToday ?? 0),
       context: "Decisiones administrativas",
@@ -552,16 +647,26 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
   ];
 
   return (
-    <section aria-label="KPI de mando">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <SectionTitle title="KPI de mando" subtitle="Indicadores operativos con definición, ventana de tiempo y contexto accionable." />
-        <span className="text-[11px] text-slate-500">Pase el cursor o use Tab sobre una tarjeta para conocer cómo se interpreta.</span>
+    <details className="dashboard-kpi-details">
+      <summary>
+        <span className="min-w-0">
+          <span className="block text-lg font-semibold text-white">Indicadores detallados</span>
+          <span className="mt-1 block text-xs text-slate-400">{cards.length} indicadores de rendimiento, evidencia y continuidad</span>
+        </span>
+        <span className="dashboard-disclosure-icon" aria-hidden="true">⌄</span>
+      </summary>
+      <div className="space-y-6 border-t border-white/10 p-4 sm:p-5">
+        <p className="text-xs leading-5 text-slate-400">Contadores del día desde medianoche en {summary.statisticsTimeZone ?? "America/Mazatlan"}{summary.statisticsStartedUtc ? `, o desde el último reinicio si fue posterior (${formatDateTime(summary.statisticsStartedUtc)})` : ""}. Las ventanas de última hora se recortan al reinicio. Pasa el cursor o usa Tab sobre una tarjeta para consultar su definición.</p>
+        {Object.values(groups).map(group => (
+          <section key={group} aria-label={group}>
+            <h4 className="mb-3 text-sm font-semibold text-slate-200">{group}</h4>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+              {cards.filter(card => card.group === group).map(card => <KpiInsightCard key={card.label} {...card} />)}
+            </div>
+          </section>
+        ))}
       </div>
-      <p className="mt-3 text-xs leading-5 text-slate-400">Contadores del día: desde medianoche en {summary.statisticsTimeZone ?? "America/Mazatlan"}{summary.statisticsStartedUtc ? `, o desde el último reinicio si fue posterior (${formatDateTime(summary.statisticsStartedUtc)})` : ""}. Las ventanas de última hora se recortan al reinicio. Salud, pendientes y recursos reflejan la operación real.</p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-        {cards.map(card => <KpiInsightCard key={card.label} {...card} />)}
-      </div>
-    </section>
+    </details>
   );
 }
 
@@ -590,9 +695,8 @@ function KpiInsightCard(props: { label: string; value: string; context: string; 
 function RingsView({ summary }: { summary: SummaryResponse }) {
   const { server, transfers, kpis } = summary;
   const capacity = resourceHeadroom(server);
-  const receiptCoverage = transfers.completedToday === 0 ? 100 : clamp(transfers.receiptsIssuedToday / transfers.completedToday * 100, 0, 100);
-  const verifiedRecent = summary.recentTransfers.filter(item => !item.verificationRequired || item.verificationPerformed).length;
-  const verificationCoverage = summary.recentTransfers.length === 0 ? 100 : verifiedRecent / summary.recentTransfers.length * 100;
+  const receiptCoverage = kpis.receiptCoverageTodayPercent;
+  const verificationCoverage = kpis.verificationCoverageTodayPercent;
   const stability = clamp(100 - kpis.failureRateLastHourPercent, 0, 100);
 
   return (
@@ -652,17 +756,12 @@ function FlowView({ summary }: { summary: SummaryResponse }) {
   return (
     <Panel>
       <PanelHeading eyebrow="Secuencia operativa" title="Flujo de transferencias" />
-      <p className="mt-2 text-sm text-slate-500">Una lectura de izquierda a derecha del estado actual y los resultados acumulados del día.</p>
-      <div className="mt-8 overflow-x-auto pb-3">
-        <div className="flex min-w-[1120px] items-stretch">
-          {stages.map((stage, index) => (
-            <div key={stage.label} className="flex flex-1 items-center">
-              <ProcessStage index={index + 1} {...stage} />
-              {index < stages.length - 1 && <div className="mx-2 flex w-8 shrink-0 items-center"><span className="h-px flex-1 bg-gradient-to-r from-amber-300/35 to-transparent" /><span className="text-amber-300/40">›</span></div>}
-            </div>
-          ))}
-        </div>
-      </div>
+      <p className="mt-2 text-sm text-slate-400">Estado actual de la cola y resultados acumulados del día.</p>
+      <ol className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        {stages.map((stage, index) => (
+          <li key={stage.label}><ProcessStage index={index + 1} {...stage} /></li>
+        ))}
+      </ol>
       <div className="mt-5 grid gap-3 sm:grid-cols-4">
         <MiniMetric label="Éxito" value={formatPercent(kpis.successRateTodayPercent)} />
         <MiniMetric label="Throughput" value={`${transfers.averageThroughputMbps.toFixed(2)} Mbps`} />
@@ -774,7 +873,7 @@ function RingMetric({ label, value, display, inverse = false }: { label: string;
   const color = visualTone === "green" ? "#34d399" : visualTone === "gold" ? "#f2b96b" : "#fb7185";
   return (
     <div className="text-center">
-      <div className="mx-auto grid h-32 w-32 place-items-center rounded-full p-2" style={{ background: `conic-gradient(${color} ${safe}%, rgba(255,255,255,.06) 0)` }}><div className="grid h-full w-full place-items-center rounded-full bg-[#11141a]"><span className="px-2 text-center text-sm font-semibold text-white">{display}</span></div></div>
+      <div className="mx-auto grid aspect-square w-full max-w-32 place-items-center rounded-full p-2" style={{ background: `conic-gradient(${color} ${safe}%, rgba(255,255,255,.06) 0)` }}><div className="grid h-full w-full place-items-center rounded-full bg-[#11141a]"><span className="px-2 text-center text-xs font-semibold text-white sm:text-sm">{display}</span></div></div>
       <p className="mt-3 text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p>
     </div>
   );
@@ -827,7 +926,7 @@ function TrafficColumn({ severity, title, subtitle, items }: { severity: Severit
 function buildHeatSignals(summary: SummaryResponse): Array<{ label: string; value: string; detail: string; severity: Severity }> {
   const { server, transfers, kpis } = summary;
   return [
-    { label: "Salud operativa", value: formatPercent(kpis.operationalHealthScore), detail: "Índice compuesto", severity: scoreSeverity(kpis.operationalHealthScore) },
+    { label: "Salud operativa", value: formatPercent(kpis.operationalHealthScore), detail: "Índice compuesto", severity: operationalSeverity(kpis.operationalHealthScore, server.isHealthy) },
     { label: "Éxito hoy", value: formatPercent(kpis.successRateTodayPercent), detail: `${kpis.totalTransfersToday} cerradas`, severity: kpis.totalTransfersToday === 0 ? "warning" : scoreSeverity(kpis.successRateTodayPercent) },
     { label: "Fallas · 1 h", value: formatPercent(kpis.failureRateLastHourPercent), detail: `${transfers.failedLastHour} transferencias`, severity: inverseSeverity(kpis.failureRateLastHourPercent, 5, 15) },
     { label: "Pendientes sin actividad", value: String(kpis.stalePendingTransfers), detail: "Más de 30 minutos sin avance", severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
@@ -886,6 +985,11 @@ function scoreSeverity(value: number): Severity {
   return value >= 85 ? "good" : value >= 60 ? "warning" : "danger";
 }
 
+function operationalSeverity(value: number, healthy: boolean): Severity {
+  if (!healthy || value < 70) return "danger";
+  return value < 90 ? "warning" : "good";
+}
+
 function inverseSeverity(value: number, warningAt: number, dangerAt: number): Severity {
   return value >= dangerAt ? "danger" : value >= warningAt ? "warning" : "good";
 }
@@ -923,7 +1027,7 @@ function ActivityStatusChip({ transfer }: { transfer: RecentTransferDto }) {
         aria-label={`${transfer.fileName}. ${presentation.label}. ${formatBytes(transfer.bytesReceived)}. ${verification}.`}
         className={`h-5 w-5 cursor-help rounded-md border outline-none transition hover:scale-125 focus-visible:scale-125 focus-visible:ring-2 focus-visible:ring-white/70 ${presentation.dotClass}`}
       />
-      <span role="tooltip" className="pointer-events-none invisible absolute left-1/2 top-7 z-[110] w-72 -translate-x-1/2 translate-y-1 rounded-xl border border-white/15 bg-[#05070b] p-3 text-left opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/activity:visible group-hover/activity:translate-y-0 group-hover/activity:opacity-100 group-focus-within/activity:visible group-focus-within/activity:translate-y-0 group-focus-within/activity:opacity-100">
+      <span role="tooltip" className="dashboard-context-help pointer-events-none invisible z-[110] rounded-xl border border-white/15 bg-[#05070b] p-3 text-left opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/activity:visible group-hover/activity:opacity-100 group-focus-within/activity:visible group-focus-within/activity:opacity-100">
         <span className="block break-words text-xs font-semibold text-white">{transfer.fileName}</span>
         <span className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[9px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span>
         <span className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px] leading-4 text-slate-400">
@@ -952,7 +1056,7 @@ function StatusLegend({ counts }: { counts: Record<StatusKind, number> }) {
             <span className={`h-2.5 w-2.5 rounded-sm border ${presentation.dotClass}`} />
             <span>{presentation.label}</span>
             <span className="font-semibold tabular-nums text-slate-200">{counts[kind]}</span>
-            <span role="tooltip" className="pointer-events-none invisible absolute left-0 top-5 z-[110] w-56 rounded-lg border border-white/15 bg-[#05070b] p-2 text-[10px] leading-4 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_20px_60px_rgba(0,0,0,0.95)] transition group-hover/legend:visible group-hover/legend:opacity-100 group-focus/legend:visible group-focus/legend:opacity-100">{presentation.description}</span>
+            <span role="tooltip" className="dashboard-context-help pointer-events-none invisible z-[110] rounded-lg border border-white/15 bg-[#05070b] p-3 text-xs leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_20px_60px_rgba(0,0,0,0.95)] transition group-hover/legend:visible group-hover/legend:opacity-100 group-focus/legend:visible group-focus/legend:opacity-100">{presentation.description}</span>
           </span>
         );
       })}
@@ -961,22 +1065,46 @@ function StatusLegend({ counts }: { counts: Record<StatusKind, number> }) {
 }
 
 function RecentTransfers({ transfers }: { transfers: RecentTransferDto[] }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<StatusKind | "all">("all");
+  const term = query.trim().toLowerCase();
+  const filtered = transfers.filter(transfer =>
+    (status === "all" || statusKind(transfer.status) === status) &&
+    (!term || [transfer.fileName, transfer.rfc, transfer.traceId, transfer.receiptId]
+      .some(value => value?.toLowerCase().includes(term))));
+  const statuses = Object.keys(countRecentStatuses(transfers)) as StatusKind[];
+
   return (
-    <section className="overflow-hidden rounded-3xl border border-white/[0.07] bg-white/[0.025]">
+    <section className="dashboard-panel overflow-hidden rounded-2xl border" aria-labelledby="recent-transfers-title">
       <div className="flex flex-col gap-1 border-b border-white/[0.06] px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">Trazabilidad</p>
-          <h3 className="mt-1 text-lg font-semibold">Transferencias recientes</h3>
+          <p className="dashboard-eyebrow">Trazabilidad</p>
+          <h3 id="recent-transfers-title" className="mt-1 text-xl font-semibold">Transferencias recientes</h3>
         </div>
-        <span className="text-xs text-slate-500">{transfers.length} registros visibles</span>
+        <span className="text-xs text-slate-400" aria-live="polite">{filtered.length} de {transfers.length} registros recientes</span>
       </div>
-      <div className="overflow-x-auto">
+      <div className="grid gap-3 border-b border-white/10 px-5 py-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <label className="grid min-w-0 gap-1.5 text-xs font-medium text-slate-300">
+          Buscar transferencia
+          <input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Archivo, RFC, traza o recibo"
+            className="min-h-11 min-w-0 rounded-lg border border-white/15 bg-[#0e131b] px-3 text-sm text-white outline-none focus-visible:border-amber-300" />
+        </label>
+        <label className="grid min-w-0 gap-1.5 text-xs font-medium text-slate-300">
+          Estado
+          <select value={status} onChange={event => setStatus(event.target.value as StatusKind | "all")}
+            className="min-h-11 min-w-0 rounded-lg border border-white/15 bg-[#0e131b] px-3 text-sm text-white outline-none focus-visible:border-amber-300">
+            <option value="all">Todos los estados</option>
+            {statuses.map(kind => <option key={kind} value={kind}>{statusPresentation(kind).label}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="overflow-x-auto focus-visible:outline-amber-300" tabIndex={0} role="region" aria-label="Tabla de transferencias recientes">
         <table className="w-full min-w-[1080px] text-left text-xs">
           <thead className="bg-black/15 text-[10px] uppercase tracking-wider text-slate-500">
             <tr><th className="px-5 py-3 font-semibold">Archivo</th><th className="py-3 font-semibold">RFC</th><th className="py-3 font-semibold">Estado</th><th className="py-3 font-semibold">Tamaño</th><th className="py-3 font-semibold">Política</th><th className="py-3 font-semibold">Verificación</th><th className="py-3 font-semibold">Traza</th><th className="py-3 pr-5 font-semibold">Recibo</th></tr>
           </thead>
           <tbody>
-            {transfers.map((transfer) => (
+            {filtered.map((transfer) => (
               <tr key={transfer.uploadId || `${transfer.traceId ?? transfer.fileName}-${transfer.createdUtc}`} className="border-t border-white/[0.05] text-slate-300 transition hover:bg-white/[0.025]">
                 <td className="max-w-72 truncate px-5 py-3.5 font-medium text-slate-100" title={transfer.fileName}>{transfer.fileName}</td>
                 <td className="max-w-36 truncate font-mono text-[10px] text-slate-400" title={transfer.rfc}>{transfer.rfc || "—"}</td>
@@ -990,7 +1118,7 @@ function RecentTransfers({ transfers }: { transfers: RecentTransferDto[] }) {
             ))}
           </tbody>
         </table>
-        {transfers.length === 0 && <p className="px-5 py-10 text-center text-sm text-slate-500">No existen transferencias recientes.</p>}
+        {filtered.length === 0 && <p className="px-5 py-10 text-center text-sm text-slate-400">{transfers.length === 0 ? "No existen transferencias recientes." : "Ninguna transferencia reciente coincide con estos filtros."}</p>}
       </div>
     </section>
   );
@@ -998,7 +1126,8 @@ function RecentTransfers({ transfers }: { transfers: RecentTransferDto[] }) {
 
 function HealthRing({ score, healthy }: { score: number; healthy: boolean }) {
   const safeScore = clamp(score, 0, 100);
-  const color = !healthy || safeScore < 60 ? "#fb7185" : safeScore < 85 ? "#f2b96b" : "#4ade80";
+  const severity = operationalSeverity(safeScore, healthy);
+  const color = severity === "danger" ? "#fb7185" : severity === "warning" ? "#f2b96b" : "#4ade80";
   return (
     <div className="relative grid h-48 w-48 place-items-center rounded-full p-3" style={{ background: `conic-gradient(${color} 0% ${safeScore}%, rgba(255,255,255,0.07) ${safeScore}% 100%)` }}>
       <div className="absolute inset-2 rounded-full bg-[#12151b]" />
@@ -1011,7 +1140,7 @@ function HealthRing({ score, healthy }: { score: number; healthy: boolean }) {
 function FlowNode(props: { index: string; label: string; value: number; detail: string; description: string; tone: Tone; active?: boolean }) {
   return (
     <div className={`relative rounded-2xl border p-4 ${tonePanel(props.tone)}`}>
-      <div className="flex items-center justify-between"><span className="text-[10px] font-semibold tracking-widest text-current opacity-55">{props.index}</span><span className="flex items-center gap-2">{props.active && <span className="ase-pulse h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_16px_#38bdf8]" />}<InfoPopover title={props.label} description={props.description} align="right" compact /></span></div>
+      <div className="flex items-center justify-between"><span className="text-[10px] font-semibold tracking-widest text-current opacity-55">{props.index}</span><span className="flex items-center gap-2">{props.active && <span className="ase-pulse h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_16px_#38bdf8]" />}<InfoPopover title={props.label} description={props.description} compact /></span></div>
       <p className="mt-5 text-3xl font-semibold tabular-nums text-white">{props.value}</p><p className="mt-1 text-sm font-semibold">{props.label}</p><p className="mt-1 text-[11px] text-current opacity-55">{props.detail}</p>
     </div>
   );
@@ -1021,7 +1150,7 @@ function ResourceDial({ label, value, description, available = true }: { label: 
   const safe = clamp(value, 0, 100);
   return (
     <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4">
-      <div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2 font-semibold text-slate-300">{label}<InfoPopover title={`Uso de ${label}`} description={description} align="left" compact /></span><span className="tabular-nums text-slate-400">{available ? `${safe.toFixed(1)} %` : "Sin medición"}</span></div>
+      <div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2 font-semibold text-slate-300">{label}<InfoPopover title={`Uso de ${label}`} description={description} compact /></span><span className="tabular-nums text-slate-400">{available ? `${safe.toFixed(1)} %` : "Sin medición"}</span></div>
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className={`h-full rounded-full ${toneBar(available ? usageTone(safe) : "slate")}`} style={{ width: available ? `${safe}%` : "0%" }} /></div>
     </div>
   );
@@ -1030,7 +1159,7 @@ function ResourceDial({ label, value, description, available = true }: { label: 
 function ServiceTile({ label, ok, detail, description }: { label: string; ok: boolean; detail?: string; description: string }) {
   return (
     <div className={`rounded-2xl border p-4 ${ok ? "border-emerald-400/15 bg-emerald-400/[0.045]" : "border-rose-400/25 bg-rose-500/[0.07]"}`}>
-      <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-400 shadow-[0_0_12px_#4ade80]" : "bg-rose-400 shadow-[0_0_12px_#fb7185]"}`} /><span className="text-xs font-semibold text-slate-200">{label}</span></span><InfoPopover title={label} description={description} align="right" compact /></div>
+      <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-400 shadow-[0_0_12px_#4ade80]" : "bg-rose-400 shadow-[0_0_12px_#fb7185]"}`} /><span className="text-xs font-semibold text-slate-200">{label}</span></span><InfoPopover title={label} description={description} compact /></div>
       <p className={`mt-3 text-[11px] ${ok ? "text-emerald-300/75" : "text-rose-200"}`}>{detail ?? (ok ? "Operando" : "Requiere atención")}</p>
     </div>
   );
@@ -1054,7 +1183,7 @@ function MetricCard(props: { label: string; value: string; helper?: string; desc
 }
 
 function SignalCard({ label, value, detail, description }: { label: string; value: string; detail: string; description?: string }) {
-  return <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4"><div className="flex items-start justify-between gap-2"><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>{description && <InfoPopover title={label} description={description} align="right" compact />}</div><p className="mt-2 text-xl font-semibold text-white">{value}</p><p className="mt-1 text-[11px] text-slate-500">{detail}</p></div>;
+  return <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4"><div className="flex items-start justify-between gap-2"><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>{description && <InfoPopover title={label} description={description} compact />}</div><p className="mt-2 text-xl font-semibold text-white">{value}</p><p className="mt-1 text-[11px] text-slate-500">{detail}</p></div>;
 }
 
 function MiniMetric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
@@ -1062,21 +1191,20 @@ function MiniMetric({ label, value, danger = false }: { label: string; value: st
 }
 
 function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <section className={`rounded-3xl border border-white/[0.07] bg-white/[0.025] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.18)] sm:p-6 ${className}`}>{children}</section>;
+  return <section className={`dashboard-panel rounded-2xl border p-5 sm:p-6 ${className}`}>{children}</section>;
 }
 
 function PanelHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description?: string }) {
   const explanation = description ?? panelExplanation(title);
-  return <div className="relative"><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">{eyebrow}</p><div className="mt-1 flex items-center gap-2"><h3 className="text-xl font-semibold tracking-tight text-white">{title}</h3>{explanation && <InfoPopover title={title} description={explanation} align="left" />}</div></div>;
+  return <div className="relative"><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">{eyebrow}</p><div className="mt-1 flex items-center gap-2"><h3 className="text-xl font-semibold tracking-tight text-white">{title}</h3>{explanation && <InfoPopover title={title} description={explanation} />}</div></div>;
 }
 
-function InfoPopover({ title, description, align = "left", compact = false }: { title: string; description: string; align?: "left" | "right"; compact?: boolean }) {
-  const position = align === "right" ? "right-0" : "left-0";
+function InfoPopover({ title, description, compact = false }: { title: string; description: string; compact?: boolean }) {
   const size = compact ? "h-4 w-4 text-[9px]" : "h-5 w-5 text-[10px]";
   return (
     <span className="group/help relative z-20 inline-flex shrink-0 hover:z-[100] focus-within:z-[100]">
       <button type="button" aria-label={`Explicación: ${title}`} className={`grid place-items-center rounded-full border border-amber-300/25 bg-[#15120b] font-bold text-amber-200 outline-none transition hover:border-amber-200/60 hover:bg-amber-300/10 focus-visible:ring-2 focus-visible:ring-amber-300/70 ${size}`}>i</button>
-      <span role="tooltip" className={`pointer-events-none invisible absolute top-7 z-[110] w-80 max-w-[calc(100vw-2rem)] translate-y-1 rounded-xl border border-amber-300/25 bg-[#05070b] p-4 text-left text-[11px] font-normal leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/help:visible group-hover/help:translate-y-0 group-hover/help:opacity-100 group-focus-within/help:visible group-focus-within/help:translate-y-0 group-focus-within/help:opacity-100 ${position}`}>
+      <span role="tooltip" className="dashboard-context-help pointer-events-none invisible z-[110] rounded-xl border border-amber-300/25 bg-[#05070b] p-4 text-left text-xs font-normal leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/help:visible group-hover/help:opacity-100 group-focus-within/help:visible group-focus-within/help:opacity-100">
         <span className="block text-xs font-semibold text-amber-200">{title}</span>
         <span className="mt-1 block text-slate-200">{description}</span>
       </span>
@@ -1106,7 +1234,7 @@ export function panelExplanation(title: string): string | undefined {
 }
 
 function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) {
-  return <div><h3 className="text-lg font-semibold text-white">{title}</h3><p className="mt-1 text-sm text-slate-500">{subtitle}</p></div>;
+  return <div><h3 className="text-lg font-semibold text-white">{title}</h3><p className="mt-1 text-sm text-slate-400">{subtitle}</p></div>;
 }
 
 function LiveBadge({ healthy }: { healthy: boolean }) {
@@ -1168,9 +1296,12 @@ function healthExplanation(summary: SummaryResponse): string {
 }
 
 function readPreferredView(): ViewMode {
-  const value = window.localStorage.getItem(VIEW_PREFERENCE_KEY);
-  const validViews: ViewMode[] = ["pulse", "bars", "text", "rings", "heatmap", "flow", "mosaic", "timeline", "radar", "traffic"];
-  return validViews.includes(value as ViewMode) ? value as ViewMode : "pulse";
+  try {
+    const stored = window.localStorage.getItem(VIEW_PREFERENCE_KEY);
+    return dashboardViews.find(option => option.mode === stored)?.mode ?? "pulse";
+  } catch {
+    return "pulse";
+  }
 }
 
 export function statusKind(status: string): StatusKind {

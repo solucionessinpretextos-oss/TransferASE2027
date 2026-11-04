@@ -28,29 +28,72 @@ export function StorageDiagnostics({ server, onChanged }: { server: ServerHealth
     } finally { setBusy(false); }
   };
 
-  return <section className="mt-4 rounded-2xl border border-white/15 bg-[#101721] p-4" aria-labelledby="storage-diagnostic-title">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <h4 id="storage-diagnostic-title" className="text-sm font-semibold text-white">Diagnóstico comprobado del almacenamiento</h4>
-      <button type="button" disabled={busy || !canManage} onClick={recheck} className="rounded-xl border border-sky-300/30 bg-sky-300/10 px-3 py-2 text-xs font-semibold text-sky-100 hover:bg-sky-300/15 disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Comprobando lectura, escritura y borrado…" : "Comprobar almacenamiento ahora"}</button>
-    </div>
-    {busy && <p role="status" className="mt-3 text-xs text-sky-100">El servicio está comprobando su acceso mediante un archivo temporal de diagnóstico. Espere el resultado.</p>}
-    {error && <p role="alert" className="mt-3 rounded-lg border border-rose-400/30 bg-[#2b151b] p-3 text-xs text-rose-100">{error}</p>}
-    {diagnostic ? <>
-      <p role="status" className={`mt-3 text-sm font-semibold ${current.storageOk ? "text-emerald-200" : "text-rose-200"}`}>{diagnostic.message}</p>
-      <dl className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
-        <div className="sm:col-span-2"><dt className="font-semibold text-slate-400">Ruta verificada</dt><dd className="mt-1 break-all font-mono text-slate-100">{diagnostic.path || "Sin configurar"}</dd></div>
-        <div><dt className="font-semibold text-slate-400">Cuenta que ejecutó la prueba</dt><dd className="mt-1 break-all text-slate-100">{diagnostic.serviceIdentity || "Sin dato"}</dd></div>
-        <div><dt className="font-semibold text-slate-400">Última comprobación</dt><dd className="mt-1 text-slate-100">{diagnostic.checkedUtc ? new Date(diagnostic.checkedUtc).toLocaleString() : "Sin dato"}</dd></div>
-      </dl>
-      <div className="mt-4 flex flex-wrap gap-2">{[
-        { label: "Lectura", ok: diagnostic.canRead }, { label: "Escritura", ok: diagnostic.canWrite }, { label: "Borrado del temporal", ok: diagnostic.canDelete }
-      ].map(test => <span key={test.label} className={`rounded-lg border px-2 py-1.5 text-xs ${test.ok ? "border-emerald-400/25 bg-[#10271f] text-emerald-100" : "border-rose-400/25 bg-[#2b151b] text-rose-100"}`}>{test.label}: {test.ok ? "Correcta" : "No confirmada"}</span>)}</div>
-      <p className="mt-3 text-xs leading-5 text-slate-300"><span className="font-semibold text-white">Acción para esta causa: </span>{diagnostic.remediation}</p>
-      <p className="mt-3 text-xs text-slate-400">{diagnostic.capacityAvailable ? `Capacidad medida: ${bytes(diagnostic.freeBytes)} libres de ${bytes(diagnostic.totalBytes)}.` : "Capacidad: sin medición. Esto no significa 0 % de uso ni invalida una prueba correcta de lectura, escritura y borrado."}</p>
-      <p className="mt-2 font-mono text-[10px] text-slate-500">Diagnóstico: {diagnostic.code}</p>
-    </> : <p className="mt-3 text-xs leading-5 text-slate-400">El servidor todavía no devuelve un diagnóstico detallado de acceso. Use la comprobación para solicitarlo.</p>}
-    {!canManage && <p className="mt-3 text-xs text-amber-100">Se requiere rol administrador para ejecutar una comprobación inmediata.</p>}
-  </section>;
+  return (
+    <section className="mt-4 min-w-0 rounded-xl border border-white/10 bg-[#14171d] p-3 sm:p-4" aria-labelledby="storage-diagnostic-title">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.17em] text-amber-200/85">Prueba de acceso</p>
+          <h4 id="storage-diagnostic-title" className="mt-1 text-sm font-semibold text-white">Diagnóstico comprobado del almacenamiento</h4>
+        </div>
+        <button
+          type="button"
+          disabled={busy || !canManage}
+          onClick={recheck}
+          className="min-h-10 rounded-lg border border-amber-300/25 bg-amber-300/8 px-3 py-2 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-300/15 focus-visible:outline-2 focus-visible:outline-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "Comprobando lectura, escritura y borrado…" : "Comprobar almacenamiento ahora"}
+        </button>
+      </div>
+
+      {busy && <p role="status" className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/5 px-3 py-2 text-xs leading-5 text-amber-100">El servicio está probando su acceso con un archivo temporal de diagnóstico.</p>}
+      {error && <p role="alert" className="mt-3 rounded-lg border border-rose-400/30 bg-[#2b151b] p-3 text-xs text-rose-100">{error}</p>}
+      {diagnostic ? (
+        <>
+          <div role="status" className={`mt-3 rounded-lg border p-3 ${current.storageOk ? "border-emerald-400/20 bg-[#10211b] text-emerald-100" : "border-rose-400/25 bg-[#28191e] text-rose-100"}`}>
+            <p className="text-[10px] font-semibold uppercase tracking-wide">{current.storageOk ? "Acceso operativo" : "Acceso requiere revisión"}</p>
+            <p className="mt-1 text-sm leading-5">{diagnostic.message}</p>
+          </div>
+          <ul className="mt-3 grid gap-2 sm:grid-cols-3" aria-label="Resultados de la prueba de acceso">
+            {[
+              { label: "Lectura", ok: diagnostic.canRead },
+              { label: "Escritura", ok: diagnostic.canWrite },
+              { label: "Borrado del temporal", ok: diagnostic.canDelete }
+            ].map(test => (
+              <li key={test.label} className={`flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 rounded-lg border px-2.5 py-2 text-xs ${test.ok ? "border-emerald-400/20 bg-[#10211b] text-emerald-100" : "border-rose-400/20 bg-[#28191e] text-rose-100"}`}>
+                <span>{test.label}</span>
+                <strong>{test.ok ? "Correcta" : "No confirmada"}</strong>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 rounded-lg border border-amber-300/15 bg-amber-300/5 p-3">
+            <p className="text-xs font-semibold text-amber-100">Siguiente paso</p>
+            <p className="mt-1 text-xs leading-5 text-slate-200">{diagnostic.remediation}</p>
+          </div>
+          <dl className="mt-3 grid gap-x-4 gap-y-3 rounded-lg border border-white/10 bg-[#101217] p-3 text-xs sm:grid-cols-2">
+            <div className="min-w-0 sm:col-span-2">
+              <dt className="font-semibold text-slate-400">Ruta verificada</dt>
+              <dd className="mt-1 font-mono text-slate-100 [overflow-wrap:anywhere]">{diagnostic.path || "Sin configurar"}</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="font-semibold text-slate-400">Cuenta que ejecutó la prueba</dt>
+              <dd className="mt-1 text-slate-100 [overflow-wrap:anywhere]">{diagnostic.serviceIdentity || "Sin dato"}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold text-slate-400">Última comprobación</dt>
+              <dd className="mt-1 tabular-nums text-slate-100">{diagnostic.checkedUtc ? new Date(diagnostic.checkedUtc).toLocaleString() : "Sin dato"}</dd>
+            </div>
+            <div className="border-t border-white/10 pt-2 sm:col-span-2">
+              <dt className="sr-only">Capacidad</dt>
+              <dd className="leading-5 text-slate-300">{diagnostic.capacityAvailable ? `Capacidad medida: ${bytes(diagnostic.freeBytes)} libres de ${bytes(diagnostic.totalBytes)}.` : "Capacidad: sin medición. La capacidad y el acceso se comprueban por separado."}</dd>
+              <dt className="sr-only">Código de diagnóstico</dt>
+              <dd className="mt-1 font-mono text-[10px] text-slate-400 [overflow-wrap:anywhere]">Diagnóstico: {diagnostic.code}</dd>
+            </div>
+          </dl>
+        </>
+      ) : <p className="mt-3 text-xs leading-5 text-slate-300">El servidor todavía no devuelve un diagnóstico detallado de acceso. Use la comprobación para solicitarlo.</p>}
+      {!canManage && <p className="mt-3 text-xs text-amber-100">Se requiere rol administrador para ejecutar una comprobación inmediata.</p>}
+    </section>
+  );
 }
 
 function bytes(value?: number | null): string {
