@@ -21,6 +21,12 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 
+if (args is ["--dashboard-access"])
+{
+    await DashboardAccessSmokeTests.RunAsync();
+    return 0;
+}
+
 if (args.Length != 1)
 {
     Console.Error.WriteLine("Uso: security-smoke <ruta-updater.exe>");
@@ -37,6 +43,7 @@ await TestAlertDeliveryQueueAsync();
 TestBudiSchemaRequirements();
 TestClientUpdateManifestEndpoint();
 TestMfaRemovedFromAuthenticationContract();
+await DashboardAccessSmokeTests.RunAsync();
 TestRfcResourceAuthorization();
 TestUploadFileNamePolicy();
 TestUploadAdmission();

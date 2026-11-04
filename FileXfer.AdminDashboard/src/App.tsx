@@ -12,6 +12,7 @@ import { Layout } from "./components/Layout";
 import { EfirmaLogin } from "./components/EfirmaLogin";
 import { Dashboard } from "./pages/Dashboard";
 import { FilePolicies } from "./pages/FilePolicies";
+import { DashboardAccess } from "./pages/DashboardAccess";
 
 export default function App() {
   return (
@@ -43,6 +44,7 @@ function AuthenticatedApplication() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/policies" element={<FilePolicies />} />
+          <Route path="/access" element={<DashboardAccess />} />
           <Route path="*" element={
             <section className="rounded-2xl border border-amber-300/25 bg-[#17150e] p-6" role="status">
               <h2 className="text-xl font-semibold text-white">Esta sección no existe</h2>

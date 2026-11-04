@@ -8,8 +8,8 @@ El Dashboard de Transfer ASE permite observar la operación, interpretar KPI, di
 
 | Rol | Puede consultar | Puede modificar |
 |---|---|---|
-| `ops` | Dashboard, métricas, dependencias, transferencias y políticas | No cambia políticas |
-| `admin` | Todo lo anterior | Crea versiones de políticas y ejecuta rollback |
+| `ops` (Consulta) | Dashboard, métricas, diagnósticos disponibles, transferencias y políticas | No administra accesos, políticas ni mantenimiento |
+| `admin` (Administrador) | Todo lo anterior y directorio de accesos | Administra RFC, políticas, pendientes y estadísticas |
 
 > **IMPORTANTE:** el acceso al Dashboard ocurre con e.firma antes de mostrar información. No se usa token manual ni código MFA. La sesión administrativa exige el rol asignado al RFC.
 
@@ -40,10 +40,46 @@ Use `https://localhost:51136/admin/` en el mismo servidor o el DNS/IP expresamen
 
 _Figura 1. Dashboard autenticado. Los valores son datos de desarrollo y cambian automáticamente._
 
-1. **Navegación**: Dashboard y Políticas de archivos.
+1. **Navegación**: Dashboard, Políticas de archivos y, para administradores, Accesos al Dashboard.
 2. **Selector de vistas**: diez representaciones de la misma información.
 3. **KPI de mando**: resumen cuantitativo con ventana y contexto.
 4. **Ayuda contextual**: pase el cursor o use Tab para conocer interpretación y límites.
+
+## Administrar los RFC que pueden entrar al Dashboard
+
+Abra **Accesos al Dashboard** en el menú lateral. Esta sección aparece únicamente para el perfil **Administrador**. Estar registrado en el cliente de Transfer ASE no otorga por sí mismo acceso al Dashboard.
+
+![Directorio de accesos al Dashboard](assets/dashboard/03-accesos-rfc-demo.png)
+
+_Ejemplo ilustrativo con datos sintéticos. Los contadores y registros de su servidor serán distintos._
+
+### Autorizar una persona
+
+1. Presione **Autorizar RFC**.
+2. Escriba el RFC completo del titular, con homoclave, y presione **Consultar RFC**. No cargue archivos CER o KEY de otras personas.
+3. Si el RFC ya tiene cuenta, el formulario recupera su referencia y notas. Si es nuevo, se preparará el alta sin duplicar cuentas.
+4. Capture una referencia para identificarlo y seleccione **Consulta** o **Administrador**. Consulta puede observar la operación; Administrador también puede cambiar accesos, políticas y mantenimiento.
+5. Si la cuenta estaba inactiva, debe marcar expresamente **Reactivar la cuenta**. Esto también permite volver a usar el cliente según sus autorizaciones en BuDi.
+6. Presione **Revisar cambio**. Compruebe RFC, permiso anterior y permiso nuevo.
+7. Presione **Confirmar permisos**. Espere el mensaje de resultado. El titular debe entrar con su propia e.firma para obtener los permisos actuales. No se utiliza MFA.
+
+### Cambiar o retirar el acceso
+
+1. Busque el RFC o nombre en el directorio. El filtro inicial muestra **Con acceso**; use **Todos los registrados**, **Sin acceso** o **Cuentas inactivas** según corresponda.
+2. Presione **Modificar** para cambiar perfil, referencia o notas. Para retirar el permiso del Dashboard, presione **Retirar acceso**.
+3. Revise el cambio y confirme. Cancelar no guarda nada.
+4. Al retirarlo, el registro aparece como **No autorizado**. Su cuenta del cliente, archivos y autorizaciones de BuDi se conservan. Cambiar permisos invalida las sesiones anteriores tanto del Dashboard como del cliente; deberá autenticarse otra vez.
+5. Para devolver el acceso, busque el RFC con **Todos los registrados** y seleccione nuevamente Consulta o Administrador.
+
+El directorio permite 10, 25, 50 o 100 RFC por página. Los contadores representan todo el directorio, no únicamente los resultados filtrados. La lista se actualiza al entrar, al guardar y al presionar **Actualizar lista**.
+
+### Protección y trazabilidad
+
+- No puede retirar su propio perfil administrador ni desactivar el último administrador activo. Para un cambio en su propio perfil, debe intervenir otro administrador autorizado.
+- El servidor exige e.firma y rol administrador para guardar, aunque alguien intente usar directamente la API.
+- Las operaciones se registran en la auditoría del servidor (`rfc_provision_create` / `rfc_provision_update`) con fecha, RFC responsable y permisos resultantes.
+- Si el registro cambió durante la edición, cierre el formulario y vuelva a abrirlo. Si aparece un error, no se presenta el cambio como exitoso.
+- Las notas son referencias administrativas. No escriba contraseñas, llaves privadas ni secretos.
 
 ## Diez formas de leer la misma operación
 

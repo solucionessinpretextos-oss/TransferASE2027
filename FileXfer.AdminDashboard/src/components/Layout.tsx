@@ -55,6 +55,14 @@ export function Layout({ children }: { children: ReactNode }) {
             </svg>
             <span>Políticas de archivos</span>
           </NavLink>
+          {session?.roles.some(role => role.toLowerCase() === "admin") && (
+            <NavLink to="/access" className={({ isActive }) => navClass(isActive)}>
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="size-[18px] shrink-0">
+                <path d="M12 3 4 6v5c0 5 8 10 8 10s8-5 8-10V6Z" /><path d="m8.5 11.5 2.5 2.5 4.5-5" />
+              </svg>
+              <span>Accesos al Dashboard</span>
+            </NavLink>
+          )}
         </nav>
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#101217] p-2.5 lg:mt-auto lg:block lg:p-3">
           <div className="min-w-0 px-1">
