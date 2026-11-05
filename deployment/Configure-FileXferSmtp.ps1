@@ -127,7 +127,10 @@ $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity,
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-ffff'
 $temporary = Join-Path $install "smtp-settings.$stamp.tmp"
 $backup = Join-Path $install "smtp-settings.$stamp.backup"
+$temporaryCreated = $false
+$replaceAttempted = $false
 $written = $false
+$stage = 'preparar archivos protegidos'
 try {
     $config.Alerts.Enabled = $true
     $config.Alerts.SmtpHost = $SmtpHost
@@ -137,17 +140,26 @@ try {
     $config.Alerts.SmtpPassword = $credential.Password
     $config.Alerts.EmailFrom = $Account
     $config.Alerts.EmailTo = $Recipient
-    foreach ($path in @($temporary, $backup)) {
-        New-Item -ItemType File -Path $path -ErrorAction Stop | Out-Null
-        Set-Acl -LiteralPath $path -AclObject $acl
-    }
+    New-Item -ItemType File -Path $temporary -ErrorAction Stop | Out-Null
+    $temporaryCreated = $true
+    Set-Acl -LiteralPath $temporary -AclObject $acl
+    New-Item -ItemType File -Path $backup -ErrorAction Stop | Out-Null
+    Set-Acl -LiteralPath $backup -AclObject $acl
     [IO.File]::WriteAllBytes($backup, $originalBytes)
     [IO.File]::WriteAllText($temporary, ($config | ConvertTo-Json -Depth 64), [Text.UTF8Encoding]::new($false))
+    $stage = 'reemplazar la configuración activa'
+    if (-not [Collections.StructuralComparisons]::StructuralEqualityComparer.Equals([IO.File]::ReadAllBytes($configPath), $originalBytes)) {
+        throw 'La configuración cambió durante la verificación SMTP.'
+    }
+    $replaceAttempted = $true
     Set-Acl -LiteralPath $configPath -AclObject $acl
-    [IO.File]::Replace($temporary, $configPath, $null)
+    # Ya se escribió el respaldo. NullString evita que PowerShell pase una ruta vacía a .NET.
+    [IO.File]::Replace($temporary, $configPath, [NullString]::Value)
     $written = $true
     Set-Acl -LiteralPath $configPath -AclObject $acl
+    $stage = 'reiniciar el servicio'
     Restart-Service -Name $ServiceName -ErrorAction Stop
+    $stage = 'comprobar la disponibilidad del servicio'
     $healthy = $false
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
         try {
@@ -162,17 +174,40 @@ try {
     "Respaldo protegido: $backup"
     'Los avisos nuevos y los pendientes del servicio usarán este canal; los agotados conservan su evidencia y requieren reproceso autorizado.'
 } catch {
-    $failureType = $_.Exception.GetType().Name
-    if ($written) {
-        [IO.File]::WriteAllBytes($configPath, $originalBytes)
-        Set-Acl -LiteralPath $configPath -AclObject $originalAcl
-        Restart-Service -Name $ServiceName -ErrorAction Continue
-    } else { Set-Acl -LiteralPath $configPath -AclObject $originalAcl }
-    throw "La configuración SMTP no fue activada correctamente; se restauró el archivo anterior si fue reemplazado. Error: $failureType."
+    $cause = $_.Exception.GetBaseException()
+    $failure = '{0} (0x{1:X8})' -f $cause.GetType().Name, $cause.HResult
+    $recovery = 'La operación se detuvo antes de reemplazar el archivo activo.'
+    if ($replaceAttempted) {
+        try {
+            $originalIsActive = (Test-Path -LiteralPath $configPath -PathType Leaf) -and
+                [Collections.StructuralComparisons]::StructuralEqualityComparer.Equals([IO.File]::ReadAllBytes($configPath), $originalBytes)
+            if (-not $originalIsActive) {
+                # Windows puede dejar el destino ausente si falla un reemplazo. Restaure desde un temporal protegido.
+                if (-not (Test-Path -LiteralPath $temporary -PathType Leaf)) {
+                    New-Item -ItemType File -Path $temporary -ErrorAction Stop | Out-Null
+                }
+                Set-Acl -LiteralPath $temporary -AclObject $acl
+                [IO.File]::WriteAllBytes($temporary, $originalBytes)
+                [IO.File]::Move($temporary, $configPath, $true)
+            }
+            Set-Acl -LiteralPath $configPath -AclObject $originalAcl
+            if ($written -or -not $originalIsActive) { Restart-Service -Name $ServiceName -ErrorAction Stop }
+            $recovery = "El archivo de configuración anterior quedó restaurado. Respaldo protegido: $backup."
+        } catch {
+            $restoreCause = $_.Exception.GetBaseException()
+            $restoreFailure = '{0} (0x{1:X8})' -f $restoreCause.GetType().Name, $restoreCause.HResult
+            $recovery = "No se pudo completar la recuperación ($restoreFailure). Respaldo protegido: $backup."
+        }
+    }
+    throw "Falló la activación SMTP en la etapa de $stage. Error: $failure. $recovery"
 } finally {
     $config.Alerts.SmtpPassword = $null
     $credential = $null
     $securePassword.Dispose()
     # Solo el temporal exacto creado por esta ejecución; nunca borrado recursivo.
-    if (Test-Path -LiteralPath $temporary -PathType Leaf) { Remove-Item -LiteralPath $temporary -Force }
+    if ($temporaryCreated -and (Test-Path -LiteralPath $temporary -PathType Leaf)) {
+        try { Remove-Item -LiteralPath $temporary -Force } catch {
+            Write-Warning "Quedó un archivo temporal protegido que no se pudo eliminar: $temporary."
+        }
+    }
 }
