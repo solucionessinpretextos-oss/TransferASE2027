@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { HelpTrigger } from "./ContextualHelp";
 
 export interface AlertDelivery {
   id: string; eventId: string; transport: string; title: string; status: string;
@@ -55,7 +56,7 @@ export function AlertDeliveryDiagnostics({ active = true }: { active?: boolean }
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-200">Notificaciones y reintentos</p>
-        <h3 id="alert-delivery-title" className="mt-1 text-lg font-semibold text-white">Entrega de alertas</h3>
+        <div className="mt-1 flex items-center gap-2"><h3 id="alert-delivery-title" className="text-lg font-semibold text-white">Entrega de alertas</h3><HelpTrigger title="Entrega de alertas" description="Estos registros cuentan los intentos de notificar un evento por correo o webhook. Una alerta puede corresponder a un archivo, una sesión o un evento del sistema." nextStep="Filtra por Intentos agotados y revisa el canal, la causa y el ID del evento antes de solicitar un reproceso." /></div>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">Identifique qué aviso falló, por qué y a qué archivo o evento corresponde. Los intentos son de entrega de la notificación; no de subida del archivo.</p>
       </div>
       <button type="button" className={control} disabled={loading} onClick={() => setRevision(value => value + 1)}>{loading ? "Consultando…" : "Actualizar alertas"}</button>

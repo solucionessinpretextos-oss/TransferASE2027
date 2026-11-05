@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { HelpTrigger } from "../components/ContextualHelp";
 import { AccessLevel, RfcAccess, accessLabels, accessLevel, hasDashboardAccess, rolesForAccess, sameAccessRecord, validRfc } from "./dashboardAccessModel";
 
 type Editor = {
@@ -168,8 +169,9 @@ function AccessManager({ actorRfc }: { actorRfc: string }) {
         ["Administradores", allowed.filter(user => accessLevel(user) === "admin").length, "Pueden administrar accesos, políticas y mantenimiento.", "text-amber-200"],
         ["Solo consulta", allowed.filter(user => accessLevel(user) === "ops").length, "Pueden observar indicadores y consultar información operativa.", "text-sky-200"],
         ["Sin acceso", users.length - allowed.length, "Cuentas de cliente sin permisos de Dashboard o cuentas inactivas.", "text-slate-300"]
-      ].map(([label, count, help, color]) => <div key={label} className="rounded-2xl border border-white/10 bg-[#14181f] p-4" title={String(help)} tabIndex={0}>
-        <p className="text-xs font-medium text-slate-400">{label}</p><p className={`mt-2 text-3xl font-semibold ${color}`}>{loaded ? count : "—"}</p>
+      ].map(([label, count, help, color]) => <div key={label} className="rounded-2xl border border-white/10 bg-[#14181f] p-4">
+        <div className="flex items-center justify-between gap-2"><p className="text-xs font-medium text-slate-400">{label}</p><HelpTrigger title={String(label)} description={help} nextStep="Usa el filtro de perfil para consultar las cuentas de este grupo." /></div>
+        <p className={`mt-2 text-3xl font-semibold ${color}`}>{loaded ? count : "—"}</p>
         <p className="mt-2 text-xs leading-5 text-slate-400">{help}</p>
       </div>)}
     </div>
@@ -247,7 +249,8 @@ function AccessManager({ actorRfc }: { actorRfc: string }) {
               <td className="px-5 py-4"><span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${hasDashboardAccess(user) ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200" : "border-slate-400/20 bg-slate-400/10 text-slate-300"}`}>{hasDashboardAccess(user) ? "Autorizado" : user.isActive ? "No autorizado" : "Cuenta inactiva"}</span></td>
               <td className="px-5 py-3"><div className="flex gap-2">
                 <button type="button" className={`${button} px-3 text-xs`} disabled={busy || !!editor || lookup !== null} aria-label={`Modificar acceso de ${user.rfc}`} onClick={() => void open(user.rfc)}>Modificar</button>
-                {accessLevel(user) !== "none" && <button type="button" className={`${button} px-3 text-xs text-rose-200`} disabled={busy || isSelf || !!editor || lookup !== null} title={isSelf ? "No puede retirar su propio acceso." : "Retira solo los permisos del Dashboard; conserva la cuenta del cliente."} aria-label={`Retirar acceso de ${user.rfc}`} onClick={() => void open(user.rfc, true)}>Retirar acceso</button>}
+                {accessLevel(user) !== "none" && <><button type="button" className={`${button} px-3 text-xs text-rose-200`} disabled={busy || isSelf || !!editor || lookup !== null} aria-label={`Retirar acceso de ${user.rfc}`} onClick={() => void open(user.rfc, true)}>Retirar acceso</button>
+                  <span className="self-center"><HelpTrigger title="Retirar acceso al Dashboard" description={isSelf ? "No puedes retirar tu propio acceso." : "Retira los permisos de Dashboard de este RFC y conserva la cuenta del cliente."} nextStep={isSelf ? "Pide a otro administrador autorizado que revise tu perfil." : "Verifica el RFC y revisa el alcance antes de confirmar."} /></span></>}
               </div></td>
             </tr>;
           })}</tbody>

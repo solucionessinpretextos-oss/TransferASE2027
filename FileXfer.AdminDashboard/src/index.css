@@ -246,16 +246,6 @@ html {
 
 .dashboard-console #pending-maintenance { scroll-margin-top: 7rem; }
 
-.dashboard-context-help {
-  position: fixed;
-  right: 1rem;
-  bottom: 1rem;
-  width: min(21rem, calc(100vw - 2rem));
-  max-height: calc(100dvh - 2rem);
-  overflow-wrap: anywhere;
-  overflow-y: auto;
-}
-
 .dashboard-section-nav button:focus-visible, .dashboard-hero-link:focus-visible,
 .dashboard-signal:focus-visible, .dashboard-view-option:focus-visible,
 .dashboard-kpi-details > summary:focus-visible {

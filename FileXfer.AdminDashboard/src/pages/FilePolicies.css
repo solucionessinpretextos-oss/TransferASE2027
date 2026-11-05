@@ -1,0 +1,71 @@
+.file-policy-list {
+  container: file-policies / inline-size;
+}
+
+.file-policy-table :is(th, td) {
+  padding: 0.7rem 0.6rem;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+.file-policy-table-label,
+.file-policy-compact-sort {
+  display: none;
+}
+
+@container file-policies (width >= 53rem) {
+  .file-policy-table :is(th, td):first-child {
+    padding-inline-start: 1rem;
+  }
+
+  .file-policy-table :is(th, td):last-child {
+    padding-inline-end: 1rem;
+  }
+}
+
+@container file-policies (width < 53rem) {
+  .file-policy-compact-sort {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .file-policy-table,
+  .file-policy-table tbody {
+    display: block;
+  }
+
+  .file-policy-table :is(colgroup, thead) {
+    display: none;
+  }
+
+  .file-policy-table tbody > tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem 1.1rem;
+    margin: 0.75rem;
+    padding: 0.85rem;
+    border: 1px solid #273448;
+    border-radius: 0.75rem;
+    background: #111827;
+  }
+
+  .file-policy-table tbody :is(th, td) {
+    display: grid;
+    align-content: start;
+    gap: 0.2rem;
+    padding: 0;
+    text-align: left;
+  }
+
+  .file-policy-table-label {
+    display: block;
+    color: #b4c1d4;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .file-policy-table-value {
+    min-width: 0;
+  }
+}

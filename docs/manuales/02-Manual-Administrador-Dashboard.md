@@ -343,7 +343,20 @@ Estas acciones de recuperación no eliminan archivos ni reinician estadísticas.
 | Omitidas por política aumentan | Revisar cambios administrativos | Extensión, versión, motivo y responsable |
 | Dead-letter de alertas | Resolver canal y reintentar controladamente | Evento, intentos y error externo |
 
-## Cierre de sesión y seguridad
+## Guía en pantalla y operación
+
+### Aprender mientras usa el Dashboard
+
+1. Abra **Guía de esta pantalla** en el menú lateral. **Anterior** y **Siguiente** recorren las tareas de la página actual. En el último paso puede volver al inicio del recorrido.
+2. En cualquier presentación, pase el puntero sobre el círculo **i** o llegue con **Tab**. La explicación aparece siempre en una tarjeta oscura en la **esquina inferior derecha**, también al abrir los indicadores detallados.
+3. Si necesita más tiempo, pulse el círculo o use **Enter** o **Espacio**. La tarjeta queda abierta. Cuando haya una recomendación, busque **Qué hacer**.
+4. Use **Esc** o **Cerrar ayuda** para regresar al control que abrió la tarjeta. La guía funciona también con toque.
+
+**Ejemplo:** si la salud muestra 75, abra la ayuda del indicador para entender la escala. Luego vaya a **Diagnóstico** para conocer la deducción real. Si aparece una falla de alertamiento, **Entrega de alertas** muestra el canal y el evento correspondiente.
+
+### Leer todas las columnas de Políticas de archivos
+
+La lista muestra **10 filas por página** al entrar. Puede cambiar a 25, 50 o 100 desde **Registros por página**. Buscar una extensión y ordenar los resultados siguen disponibles. En escritorio, la tabla ocupa todo el ancho y sus textos pueden continuar en otra línea; **Responsable** y las acciones permanecen visibles. En ventanas estrechas, cada fila presenta los mismos campos con su etiqueta. Abra **Ver detalle** o **Editar** para consultar el panel y su historial debajo de la lista.
 
 ### Permisos de Solo consulta
 
@@ -399,6 +412,8 @@ El responsable del servidor abre **PowerShell 7 como administrador** en SERVERDI
 Los valores preparados son `mail.ase-sinaloa.gob.mx:465`, cuenta/remitente/destinatario `juan.carrillo@ase-sinaloa.gob.mx`. Capture la contraseña cuando se solicite: no la escriba en un comando, chat o ticket. El script prueba cifrado y autenticación sin enviar mensajes, guarda la configuración local con permisos restringidos y reinicia únicamente `FileXferPruebas.Server`. Necesita volver a comprobar la entrega con una alerta autorizada; autenticarse en SMTP no prueba por sí solo que un correo llegó al buzón.
 
 La herramienta no reenvía automáticamente los eventos agotados. Para esos avisos, conserve el ID y coordine con soporte el reproceso. La configuración local contiene el secreto protegido por permisos Windows, no cifrado en reposo, y debe permanecer fuera del repositorio.
+
+## Cierre de sesión y seguridad
 
 - Presione **Cerrar sesión** al terminar.
 - No comparta el equipo con una sesión administrativa abierta.

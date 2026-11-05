@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { HelpTrigger } from "./ContextualHelp";
 import { PendingCleanupResponse, PendingTransferDto, PendingTransfersResponse } from "../types/admin";
 
 type MaintenanceAction = "remove" | "expire" | "reconcile" | "reset";
@@ -145,7 +146,7 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged, requestAc
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.17em] text-amber-200/85">Continuidad y limpieza</p>
-          <h3 id="maintenance-title" className="mt-1 text-xl font-semibold text-white">Transferencias pendientes</h3>
+          <div className="mt-1 flex items-center gap-2"><h3 id="maintenance-title" className="text-xl font-semibold text-white">Transferencias pendientes</h3><HelpTrigger title="Qué acción elegir en pendientes" description="Retirar elimina una carga parcial. Conciliar cierra el registro y conserva su archivo físico. Limpiar vencidas aplica la revisión de plazos de reanudación." nextStep="Lee el estado y la fecha límite de cada archivo antes de elegir. La pantalla de confirmación muestra qué operación quedará registrada." /></div>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-300">Retirar elimina un parcial propio. Conciliar cierra el registro y conserva su archivo físico. La bitácora guarda el resultado, el responsable y el motivo.</p>
         </div>
         <button type="button" className={buttonClass} disabled={busy} onClick={() => setRevision(value => value + 1)}>{loading ? "Consultando…" : "Actualizar pendientes"}</button>

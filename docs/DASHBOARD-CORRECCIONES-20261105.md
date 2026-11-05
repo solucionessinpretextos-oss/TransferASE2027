@@ -8,10 +8,12 @@
 - Diagnóstico incorpora **Entrega de alertas**: paginación, filtro, canal, evento, archivo cuando existe, RFC, intentos fallidos, error, remedio e identificadores. No devuelve el cuerpo interno de las alertas ni secretos.
 - La alerta observada agotó tres intentos SMTP al notificar **Login SAT fallido** por certificado fuera de vigencia. No corresponde a una subida de archivo. El host activo era un valor de ejemplo.
 - SMTP soporta TLS implícito en 465 y exige STARTTLS en otros puertos. Se conserva la validación de certificados. El cliente usa [MailKit y sus opciones TLS explícitas](https://mimekit.net/docs/html/M_MailKit_MailService_ConnectAsync_2.htm).
+- La ayuda contextual se muestra en una sola tarjeta fija en la esquina inferior derecha. Las vistas e indicadores detallados comparten el componente; admite puntero, teclado, toque, fijación con clic y cierre con Esc. **Guía de esta pantalla** ofrece un recorrido por pasos en cada módulo.
+- Políticas muestra 10 filas de inicio con opciones de 25, 50 y 100. La tabla usa todo el ancho, conserva cada campo en ventanas estrechas y el editor e historial se consultan aparte de la lista.
 
 ## Evidencia de pruebas
 
-- TypeScript: sin errores; Dashboard: 65 pruebas aprobadas y compilación completada.
+- TypeScript y compilación de Dashboard sin errores; 70 pruebas aprobadas, incluidos los controles de consulta, paginación y ayuda contextual.
 - Prueba HTTP con los controladores reales: 11 escrituras administrativas devuelven 403 para `ops`; directorio RFC reservado; e.firma obligatoria. Reinicio válido 200, motivos inválidos 400, auditoría y avisos anteriores preservados.
 - Regresión reproducida: con los atributos anteriores, el mismo ensayo HTTP devuelve 500; con la corrección pasa.
 - Pruebas de monitoreo y suite de seguridad aprobadas, incluyendo outbox durable, reintentos, políticas, recibos, descargas y actualización firmada.

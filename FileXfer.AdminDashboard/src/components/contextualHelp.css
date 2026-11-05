@@ -1,0 +1,55 @@
+.context-help-trigger:focus-visible {
+  outline: 2px solid #f4cc78;
+  outline-offset: 3px;
+}
+
+.context-help-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 1px solid #a78542;
+  border-radius: 50%;
+  background: #201a10;
+  color: #ffe4a4;
+  font: bold .75rem/1 system-ui, sans-serif;
+  cursor: help;
+}
+
+.context-help-icon:hover { background: #3d2e15; }
+
+.context-help-panel {
+  position: fixed;
+  z-index: 90;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  width: min(24rem, calc(100% - 2rem));
+  max-height: min(65dvh, 30rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 1rem;
+  border: 1px solid #8c713b;
+  border-radius: .85rem;
+  background: #090c12;
+  box-shadow: 0 12px 40px #000c;
+  color: #edf2fa;
+  font: .875rem/1.5 system-ui, sans-serif;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.context-help-heading { display: flex; align-items: start; justify-content: space-between; gap: .65rem; }
+.context-help-heading h2 { font-size: 1rem; font-weight: 700; color: #ffe2a0; }
+.context-help-eyebrow { margin: 0 0 .2rem; font-size: .67rem; font-weight: 700; color: #e7c184; letter-spacing: .09em; text-transform: uppercase; }
+.context-help-description { margin-top: .6rem; }
+.context-help-next { margin-top: .7rem; padding-top: .65rem; border-top: 1px solid #3b352a; }
+.context-help-next strong { color: #ffe2a0; }
+.context-help-hint { margin-top: .65rem; font-size: .75rem; color: #bac5d7; }
+.context-help-close, .context-help-step-controls button { border: 1px solid #6b5940; border-radius: .5rem; background: #211c14; color: #ffe4ab; cursor: pointer; }
+.context-help-close { min-width: 2.15rem; min-height: 2.15rem; font-size: 1.35rem; line-height: 1; }
+.context-help-step-controls { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+.context-help-step-controls button { padding: .35rem .65rem; }
+.context-help-step-controls button:disabled { opacity: .5; cursor: default; }
+.context-help-panel button:focus-visible, .context-help-panel a:focus-visible { outline: 2px solid #ffdc91; outline-offset: 2px; }

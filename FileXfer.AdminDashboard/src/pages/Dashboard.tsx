@@ -1,12 +1,13 @@
 // DOCUMENTACIÓN DE MANTENIMIENTO — TRANSFER ASE
 // Consola operativa con diez representaciones complementarias del mismo resumen.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { RecentTransferDto, SummaryResponse } from "../types/admin";
 import { MaintenanceRequest, TransferMaintenance } from "../components/TransferMaintenance";
 import { StorageDiagnostics } from "../components/StorageDiagnostics";
 import { AlertDeliveryDiagnostics } from "../components/AlertDeliveryDiagnostics";
+import { HelpSteps, HelpTrigger } from "../components/ContextualHelp";
 
 const REFRESH_INTERVAL_MS = 2_000;
 const VIEW_PREFERENCE_KEY = "filexfer.admin.dashboard-view.v1";
@@ -37,6 +38,71 @@ const dashboardViews = [
   { mode: "radar", label: "Radar", helper: "Equilibrio", description: "Compara fortalezas y brechas en distintas dimensiones de operación.", Component: RadarView },
   { mode: "traffic", label: "Semáforo", helper: "Decisión", description: "Separa lo que está operando de lo que conviene vigilar o atender.", Component: TrafficView }
 ] as const;
+
+// El mismo indicador conserva su definición al cambiar de presentación.
+const metricGuidance = [
+  { labels: ["Salud operativa", "Salud operativa actual", "Índice operativo", "Salud"], description: "La salud parte de 100 y descuenta las incidencias del corte. La actividad normal de transferencia puede continuar con una puntuación degradada.", nextStep: "Abre Diagnóstico para ver la causa de cada deducción y cómo recuperarla." },
+  { labels: ["Éxito del día", "Éxito hoy", "Éxito"], description: "Porcentaje de transferencias completadas entre los cierres del período. Sin cierres, todavía no se puede interpretar la tasa.", nextStep: "Consulta Completadas y Fallidas antes de interpretar un porcentaje calculado con pocos archivos." },
+  { labels: ["En transmisión", "Transmitiendo"], description: "Sesiones que están enviando datos en el corte actual. Todavía están abiertas y su resultado está por confirmarse.", nextStep: "Consulta Mantenimiento para dar seguimiento a los pendientes." },
+  { labels: ["En espera"], description: "Sesiones admitidas que todavía esperan transmitir sus primeros bytes.", nextStep: "Si la cola crece de forma sostenida, consulta el uso de CPU, memoria y disco." },
+  { labels: ["Completadas", "Completadas hoy", "Completados"], description: "Transferencias que el servidor cerró correctamente durante el período diario medido.", nextStep: "En Actividad puedes buscar el archivo y consultar su recibo y traza." },
+  { labels: ["Completadas · 1 h"], description: "Transferencias cerradas correctamente durante la última hora medida.", nextStep: "Compara con Fallidas de la misma ventana para entender el resultado reciente." },
+  { labels: ["Cerradas hoy", "Resultado del día"], description: "Cierres completados y fallidos del período diario. Las cargas en curso y los retiros administrativos se consultan aparte.", nextStep: "En Actividad puedes filtrar cada estado para investigar un archivo concreto." },
+  { labels: ["Fallas hoy", "Fallas del día", "Fallidas", "Fallidas hoy"], description: "Cierres con falla técnica, falla de catálogo o rechazo en el período diario medido. Los retiros y las expiraciones se consultan por separado.", nextStep: "Filtra los fallidos en Actividad y abre el estado para leer el error y copiar la traza." },
+  { labels: ["Fallidas · 1 h"], description: "Cantidad de transferencias fallidas durante la última hora medida.", nextStep: "Revisa los errores recientes en Actividad antes de volver a enviar archivos." },
+  { labels: ["Falla hoy"], description: "Porcentaje de cierres fallidos entre los cierres del período diario.", nextStep: "Revisa cuántos archivos cerraron y usa Actividad para identificar errores repetidos." },
+  { labels: ["Falla última hora", "Fallas · 1 h", "Fallas recientes"], description: "Porcentaje de cierres fallidos entre los cierres de la última hora medida.", nextStep: "Abre Actividad para localizar el error y la traza de la transferencia." },
+  { labels: ["Fallas de catálogo"], description: "El servidor recibió los bytes y el registro final en catálogo falló.", nextStep: "Conserva la traza del archivo y solicita revisión del catálogo antes de duplicar el envío." },
+  { labels: ["Pendientes críticos", "Pendientes sin actividad", "Sin actividad"], description: "Cargas que siguen abiertas y llevan más de 30 minutos sin avanzar. Cada una conserva su plazo de reanudación.", nextStep: "En Mantenimiento revisa la última actividad y el vencimiento antes de intervenir." },
+  { labels: ["Pendientes persistidos"], description: "Sesiones pendientes o pausadas que siguen abiertas en base de datos. El tamaño indica cuántos bytes se conservan en copias parciales.", nextStep: "Consulta la cola de Mantenimiento para identificar cada archivo y su plazo." },
+  { labels: ["Plazo vencido", "Pendientes vencidos"], description: "Cargas parciales abiertas cuya fecha individual de reanudación ya pasó. Las sesiones activas se protegen durante la limpieza.", nextStep: "Abre Mantenimiento para revisar el archivo antes de ejecutar una limpieza." },
+  { labels: ["Vencen en 24 horas"], description: "Cargas parciales cuyo plazo de reanudación termina durante las próximas 24 horas.", nextStep: "Contacta a los emisores para que completen la carga mientras la copia sigue disponible." },
+  { labels: ["Mayor espera pendiente"], description: "Tiempo transcurrido desde la última actividad de la carga abierta más antigua.", nextStep: "Busca la carga en Mantenimiento y revisa su plazo de reanudación." },
+  { labels: ["Expiradas del día"], description: "Cargas que cerraron por vencimiento durante el período diario medido.", nextStep: "Si el archivo sigue siendo necesario, pide al emisor que inicie un nuevo envío." },
+  { labels: ["Retiros manuales del día"], description: "Cargas pendientes retiradas por decisión administrativa en el período diario medido.", nextStep: "Consulta la bitácora para conocer el motivo del retiro." },
+  { labels: ["Reanudables", "Custodia activa"], description: "Cargas interrumpidas con una copia parcial vigente. El cliente puede continuar desde el último byte confirmado.", nextStep: "Revisa el plazo de reanudación del archivo en Mantenimiento." },
+  { labels: ["Reanudadas", "Reanudadas hoy", "Cargas reanudadas"], description: "Cargas que continuaron a partir de una copia parcial durante el período medido.", nextStep: "Revisa los bytes recuperados para conocer el volumen que el cliente evitó volver a enviar." },
+  { labels: ["Recibos firmados", "Recibos emitidos", "Recibos hoy", "Recibos"], description: "Cantidad de recibos digitales del período. Aportan evidencia firmada y encadenada de las transferencias.", nextStep: "Consulta el recibo en Actividad o revisa la cobertura para identificar faltantes." },
+  { labels: ["Cobertura de recibos"], description: "Porcentaje de transferencias completadas del día que tienen un recibo asociado.", nextStep: "Si hay completadas sin recibo, conserva su traza y solicita revisar la emisión de evidencia." },
+  { labels: ["Verificación aplicada", "Cobertura de verificación", "Verificación"], description: "Porcentaje de archivos completados que fueron verificados entre los que debían pasar el control por política.", nextStep: "Revisa las transferencias con verificación requerida y consulta su resultado en Actividad." },
+  { labels: ["Verificación omitida"], description: "Archivos que omitieron la verificación profunda por una política explícita de extensión.", nextStep: "En Políticas de archivos puedes consultar la regla de cada extensión y su historial." },
+  { labels: ["Volumen confirmado", "Transferido hoy", "Volumen del día", "Volumen hoy"], description: "Suma de bytes pertenecientes a transferencias completadas durante el período diario medido.", nextStep: "Consulta el tamaño P95 para dimensionar la capacidad que necesitan las cargas más grandes." },
+  { labels: ["Volumen última hora"], description: "Bytes de transferencias completadas y confirmadas en la última hora medida.", nextStep: "Compara este volumen con el promedio en Mbps para detectar variaciones de demanda." },
+  { labels: ["Throughput", "Throughput promedio"], description: "Velocidad efectiva promedio de los bytes confirmados en la última hora, expresada en Mbps.", nextStep: "Si baja durante varios cortes con cargas en curso, revisa la cola y la presión de recursos." },
+  { labels: ["Continuidad recuperada", "Ahorro por reanudación"], description: "Proporción del volumen completado hoy que el servidor conservó y reutilizó al reanudar cargas.", nextStep: "Consulta Bytes recuperados para ver el volumen que se evitó volver a enviar." },
+  { labels: ["Recuperación", "Bytes recuperados"], description: "Volumen de bytes reutilizados al reanudar una carga parcial vigente durante el período diario medido.", nextStep: "Compara con el volumen confirmado para medir el efecto de la reanudación." },
+  { labels: ["Actividad institucional", "RFC activos"], description: "Número de RFC distintos que iniciaron actividad de transferencia durante el período diario medido.", nextStep: "Busca un RFC en Actividad para consultar sus registros recientes." },
+  { labels: ["Duración promedio"], description: "Tiempo medio de las cargas completadas del período diario. Las transferencias muy largas pueden elevar el promedio.", nextStep: "Compara con la mediana y P95 para entender la dispersión." },
+  { labels: ["Duración mediana"], description: "La mitad de las cargas completadas del período terminó en este tiempo o menos.", nextStep: "Compárala con P95 para detectar cargas que tardaron mucho más de lo habitual." },
+  { labels: ["Duración P95"], description: "El 95 % de las cargas completadas del período terminó en este tiempo o menos.", nextStep: "Una diferencia persistente respecto a la mediana indica que conviene revisar las cargas más lentas." },
+  { labels: ["Tamaño promedio"], description: "Tamaño medio de los archivos completados en el período diario.", nextStep: "Consulta el tamaño P95 para evaluar el efecto de los archivos más grandes." },
+  { labels: ["Tamaño P95"], description: "El 95 % de los archivos completados del período tiene este tamaño o uno menor.", nextStep: "Úsalo junto con el volumen confirmado para planear capacidad de transferencia y almacenamiento." },
+  { labels: ["Última carga OK"], description: "Fecha y hora del último cierre correcto en los datos del corte.", nextStep: "En Actividad, filtra los completados para localizar la transferencia correspondiente." },
+  { labels: ["Última falla"], description: "Fecha y hora del último cierre fallido que informa el servidor.", nextStep: "En Actividad, filtra los fallidos y abre su estado para leer el error." },
+  { labels: ["Trazas mostradas"], description: "Cantidad de transferencias recientes que aparecen en la cronología.", nextStep: "Usa Actividad para buscar por archivo, RFC, traza o recibo." },
+  { labels: ["CPU"], description: "Porcentaje aproximado de capacidad de procesamiento utilizada en el servidor.", nextStep: "Vigila niveles sostenidos a partir de 75 %. Una lectura persistente de 90 % o más requiere atención." },
+  { labels: ["Memoria"], description: "Porcentaje de memoria física que utiliza el servidor. Una presión sostenida puede ralentizar transferencias.", nextStep: "Vigila niveles sostenidos a partir de 75 % y revisa procesos consumidores si se mantiene en 90 % o más." },
+  { labels: ["Disco"], description: "Ocupación del volumen supervisado. Sin medición indica que el servidor todavía no pudo consultar la capacidad.", nextStep: "Abre Diagnóstico para revisar la capacidad y el acceso al almacenamiento por separado." },
+  { labels: ["Presión principal"], description: "Recurso con la mayor utilización entre los que tienen medición disponible.", nextStep: "En Barras compara el uso de CPU, memoria y disco antes de intervenir." },
+  { labels: ["Holgura", "Holgura CPU/RAM"], description: "Porcentaje disponible del recurso más utilizado entre los que tienen medición.", nextStep: "En Barras puedes identificar qué recurso limita la capacidad." },
+  { labels: ["Estabilidad"], description: "100 menos el porcentaje de fallas de la última hora. Una puntuación alta indica menor proporción de fallas en esa ventana.", nextStep: "Revisa los cierres de la última hora para confirmar cuánta actividad respalda la lectura." },
+  { labels: ["Continuidad"], description: "Proporción de cargas reanudadas del día frente al total de reanudadas y parciales vigentes. El radar muestra 100 cuando no hay actividad de continuidad.", nextStep: "Revisa parciales vigentes en Mantenimiento para identificar oportunidades de reanudar." },
+  { labels: ["Integridad"], description: "Proporción de cargas completadas del día que no registraron omisión de verificación. El radar muestra 100 cuando todavía no hubo cierres completados.", nextStep: "Consulta Verificación aplicada para ver la cobertura de los archivos que sí debían pasar el control." },
+  { labels: ["Base de datos"], description: "Comprueba la conexión a la base operativa que sostiene las sesiones, el catálogo, los recibos y la auditoría.", nextStep: "Si aparece degradada, consulta Diagnóstico y reporta la dependencia afectada." },
+  { labels: ["Almacenamiento"], description: "Estado de acceso al destino de los archivos. Afecta la escritura, reanudación y descarga.", nextStep: "En Diagnóstico consulta el detalle de la ruta y la prueba de acceso." },
+  { labels: ["Bus interno"], description: "Canal interno que coordina tareas y eventos del servidor. Una degradación puede retrasar pasos posteriores.", nextStep: "Consulta Diagnóstico para identificar si la falla afecta a otras dependencias." },
+  { labels: ["Alertas", "Alertamiento", "Alertas no entregadas"], description: "Estado del canal de notificación. Los avisos con intentos agotados quedan disponibles para diagnóstico.", nextStep: "En Diagnóstico → Entrega de alertas revisa el canal, la causa y el identificador del evento." }
+];
+
+type MetricHelpProps = Omit<ComponentProps<typeof HelpTrigger>, "title" | "description"> & {
+  label: string;
+  description?: ComponentProps<typeof HelpTrigger>["description"];
+};
+
+function MetricHelp({ label, description, nextStep, ...triggerProps }: MetricHelpProps) {
+  const guide = metricGuidance.find(entry => entry.labels.includes(label));
+  return <HelpTrigger {...triggerProps} title={label} description={description ?? guide?.description ?? "Valor informado en el último corte del Dashboard."} nextStep={nextStep ?? guide?.nextStep} />;
+}
 
 class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -218,7 +284,7 @@ function OperationalOverview({ summary, onNavigate }: { summary: SummaryResponse
     <section aria-label="Resumen de operación" className="dashboard-overview">
       <div className="dashboard-health-hero" data-severity={severity}>
         <div className="relative min-w-0">
-          <p className="dashboard-eyebrow">Salud operativa</p>
+          <div className="flex items-center gap-2"><p className="dashboard-eyebrow">Salud operativa</p><MetricHelp label="Salud operativa" /></div>
           <p className="mt-1 text-5xl font-semibold tracking-[-0.065em] tabular-nums text-white">{score.toFixed(1)} <span className="text-2xl font-medium text-slate-400">%</span></p>
           <p className="dashboard-health-caption">{severity === "good" ? "Operación estable" : severity === "warning" ? "Requiere seguimiento" : "Requiere atención"}</p>
           <button type="button" className="dashboard-hero-link" onClick={() => onNavigate("health")}>
@@ -234,13 +300,16 @@ function OperationalOverview({ summary, onNavigate }: { summary: SummaryResponse
       </div>
       <div className="dashboard-signal-grid">
         {signals.map(signal => (
-          <button type="button" className="dashboard-signal" data-tone={signal.value ? signal.tone : "neutral"} key={signal.label}
-            onClick={() => onNavigate(signal.section)}>
-            <span className="dashboard-signal-label">{signal.label}</span>
-            <span className="dashboard-signal-value">{signal.value.toLocaleString("es-MX")}</span>
-            <span className="dashboard-signal-detail">{signal.detail}</span>
-            <span className="dashboard-signal-arrow" aria-hidden="true">↗</span>
-          </button>
+          <div className="relative min-w-0" key={signal.label}>
+            <button type="button" className="dashboard-signal h-full w-full" data-tone={signal.value ? signal.tone : "neutral"}
+              onClick={() => onNavigate(signal.section)}>
+              <span className="dashboard-signal-label">{signal.label}</span>
+              <span className="dashboard-signal-value">{signal.value.toLocaleString("es-MX")}</span>
+              <span className="dashboard-signal-detail pr-7">{signal.detail}</span>
+              <span className="dashboard-signal-arrow" aria-hidden="true">↗</span>
+            </button>
+            <MetricHelp label={signal.label} className="absolute bottom-3 right-3" />
+          </div>
         ))}
       </div>
     </section>
@@ -257,7 +326,7 @@ function OperationalHealthGuide({ summary, onChanged, onMaintenanceAction }: { s
       <PanelHeading eyebrow="Diagnóstico y recuperación" title="Cómo leer y recuperar la salud operativa" description="El desglose proviene del servidor y muestra la deducción real de cada componente, junto con la acción que puede recuperarlo." />
       <div className="mt-5 grid gap-5 lg:grid-cols-[17rem_1fr]">
         <div className="rounded-2xl border border-amber-300/20 bg-[#17150e] p-5">
-          <p className="text-xs text-amber-100">Salud operativa actual</p>
+          <div className="flex items-center gap-2"><p className="text-xs text-amber-100">Salud operativa actual</p><MetricHelp label="Salud operativa actual" /></div>
           <p className="mt-2 text-4xl font-semibold tabular-nums text-white">{formatPercent(summary.kpis.operationalHealthScore)}</p>
           {breakdown.length > 0 && <p className="mt-3 text-xs text-amber-200">100 − {totalPenalty.toFixed(1)} puntos = {summary.kpis.operationalHealthScore.toFixed(1)} puntos</p>}
           <p className="mt-4 text-xs leading-5 text-slate-300">Es un termómetro de operación, no disponibilidad histórica ni SLA. Las transferencias activas normales no reducen la puntuación. Una sesión sin actividad requiere revisión; su plazo real de reanudación se muestra aparte.</p>
@@ -265,7 +334,10 @@ function OperationalHealthGuide({ summary, onChanged, onMaintenanceAction }: { s
         </div>
         <div className="space-y-3">
           {breakdown.map(item => <div key={item.key} className={`rounded-xl border p-4 ${item.penalty > 0 ? "border-amber-300/25 bg-[#1b1710]" : "border-emerald-400/15 bg-[#101a17]"}`}>
-            <div className="flex justify-between gap-4"><h4 className="text-sm font-semibold text-white">{item.label}</h4><span className={`whitespace-nowrap text-xs font-semibold ${item.penalty > 0 ? "text-amber-200" : "text-emerald-200"}`}>−{item.penalty.toFixed(1)} / {item.maxPenalty} puntos</span></div>
+            <div className="flex justify-between gap-4">
+              <div className="flex items-center gap-2"><h4 className="text-sm font-semibold text-white">{item.label}</h4><HelpTrigger title={item.label} description={item.detail} nextStep={item.remediation} /></div>
+              <span className={`whitespace-nowrap text-xs font-semibold ${item.penalty > 0 ? "text-amber-200" : "text-emerald-200"}`}>−{item.penalty.toFixed(1)} / {item.maxPenalty} puntos</span>
+            </div>
             <p className="mt-2 text-xs leading-5 text-slate-300">{item.detail}</p>
             <p className="mt-2 text-xs leading-5 text-slate-400"><span className="font-semibold text-slate-200">Cómo sanearlo: </span>{item.remediation}</p>
             {(item.key === "expired" || item.key === "idle") && item.penalty > 0 && <div className="mt-3 flex flex-wrap gap-2">
@@ -275,7 +347,16 @@ function OperationalHealthGuide({ summary, onChanged, onMaintenanceAction }: { s
           </div>)}
           {breakdown.length === 0 && <p className="rounded-xl border border-white/10 p-4 text-xs text-slate-400">El servidor todavía no proporciona el desglose de puntuación. Actualice el servicio para obtener deducciones y acciones precisas.</p>}
           <StorageDiagnostics server={summary.server} onChanged={onChanged} />
-          <details className="rounded-xl border border-white/10 p-4 text-xs text-slate-300"><summary className="cursor-pointer font-semibold text-white">Guía de intervención: qué revisar primero</summary><ol className="mt-3 list-decimal space-y-2 pl-5 leading-5"><li>Dependencias degradadas: revise conectividad SQL, permisos de la cuenta del servicio sobre storage y salud del bus. En alertas, revise SMTP y las entregas fallidas.</li><li>Fallas recientes: consulte la traza y el error del archivo. Corrija el origen y confirme una nueva carga exitosa. La tasa se recupera al salir las fallas de la ventana móvil de una hora.</li><li>Pendientes sin actividad: contacte al emisor para reanudar; retire manualmente las copias que ya no se necesitan. Los vencidos se limpian automáticamente según su fecha individual.</li><li>CPU, memoria y disco: confirme la tendencia. La limpieza de parciales libera disco; no elimine archivos completados para mejorar un indicador. Escale recursos si la presión continúa.</li></ol></details>
+          <HelpTrigger title="Guía de intervención" clickOnly
+            className="w-full rounded-xl border border-white/15 p-4 text-left text-xs font-semibold text-amber-200"
+            description={<HelpSteps steps={[
+              { title: "Revisa las dependencias degradadas", text: "Verifica qué dependencia aparece degradada en el desglose. En Almacenamiento revisa la prueba de acceso. En Entrega de alertas consulta el canal, el error y el evento." },
+              { title: "Investiga las fallas recientes", text: "Abre Actividad, filtra los fallidos y selecciona el estado del archivo para consultar su error y su traza." },
+              { title: "Confirma los plazos de los pendientes", text: "En Mantenimiento, revisa la última actividad y el vencimiento. Contacta al emisor para que reanude los envíos que siguen vigentes." },
+              { title: "Comprueba si la presión de recursos persiste", text: "Compara varios cortes en Barras. Una presión sostenida de CPU, memoria o disco requiere revisar el recurso afectado con el equipo de soporte." }
+            ]} />}>
+            Guía de intervención · Qué revisar primero
+          </HelpTrigger>
         </div>
       </div>
     </Panel>
@@ -303,7 +384,11 @@ function ViewSwitcher({ selected, onChange }: { selected: ViewMode; onChange: (m
           </button>
         ))}
       </div>
-      <p className="dashboard-view-description" aria-live="polite"><strong>{current?.label}</strong><span>{current?.description}</span></p>
+      {current && <div className="dashboard-view-description">
+        <strong>{current.label}</strong><span aria-live="polite">{current.description}</span>
+        <HelpTrigger title={`Vista ${current.label}`} description={current.description}
+          nextStep="Activa la ayuda de un indicador para entender su cifra. Abre Indicadores detallados para consultar los indicadores comunes a todas las vistas." />
+      </div>}
     </div>
   );
 }
@@ -337,15 +422,15 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
             <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] uppercase tracking-wider text-slate-500">En vivo</span>
           </div>
           <div className="mt-7 grid gap-3 md:grid-cols-4">
-            <FlowNode index="01" label="En espera" value={transfers.waitingTransfers} detail="Listos para iniciar" tone="slate" description="Sesiones admitidas en memoria que todavía esperan iniciar la transmisión efectiva de bytes. Un crecimiento sostenido puede indicar presión de concurrencia o red lenta." />
-            <FlowNode index="02" label="Transmitiendo" value={transfers.activeTransfers} detail="Streams en curso" tone="blue" active={transfers.activeTransfers > 0} description="Sesiones gRPC que están enviando datos en este instante. Son operaciones incompletas: todavía no cuentan como exitosas ni fallidas." />
-            <FlowNode index="03" label="Reanudables" value={transfers.pausedResumableTransfers} detail="Parciales protegidos" tone="gold" description="Cargas interrumpidas cuyo archivo parcial continúa dentro de la ventana de retención. El cliente puede seguir desde el último byte confirmado." />
-            <FlowNode index="04" label="Completados" value={transfers.completedToday} detail="Durante el día" tone="green" description="Transferencias cerradas hoy con estado Completed. Ya terminaron la recepción y validación exigida; la cobertura de recibos se informa por separado." />
+            <FlowNode index="01" label="En espera" value={transfers.waitingTransfers} detail="Listos para iniciar" tone="slate" />
+            <FlowNode index="02" label="Transmitiendo" value={transfers.activeTransfers} detail="Streams en curso" tone="blue" active={transfers.activeTransfers > 0} />
+            <FlowNode index="03" label="Reanudables" value={transfers.pausedResumableTransfers} detail="Parciales protegidos" tone="gold" />
+            <FlowNode index="04" label="Completados" value={transfers.completedToday} detail="Durante el día" tone="green" />
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            <SignalCard label="Transferido hoy" value={formatBytes(transfers.totalBytesTransferredToday)} detail={`${transfers.averageThroughputMbps.toFixed(2)} Mbps promedio`} description="Suma de bytes pertenecientes a cargas completadas desde las 00:00 UTC. El throughput usa una ventana móvil de una hora y no representa la velocidad instantánea." />
-            <SignalCard label="Recibos emitidos" value={String(transfers.receiptsIssuedToday)} detail="Evidencia firmada y encadenada" description="Recibos digitales generados durante el día. Cada recibo aporta evidencia de integridad, identidad, fecha y encadenamiento de la transferencia." />
-            <SignalCard label="Recuperación" value={formatBytes(transfers.resumedBytesToday)} detail={`${transfers.resumedTransfersToday} cargas reanudadas`} description="Bytes que no tuvieron que retransmitirse porque el servidor conservó una carga parcial válida. Mide el valor práctico del mecanismo de continuidad." />
+            <SignalCard label="Transferido hoy" value={formatBytes(transfers.totalBytesTransferredToday)} detail={`${transfers.averageThroughputMbps.toFixed(2)} Mbps promedio`} />
+            <SignalCard label="Recibos emitidos" value={String(transfers.receiptsIssuedToday)} detail="Evidencia firmada y encadenada" />
+            <SignalCard label="Recuperación" value={formatBytes(transfers.resumedBytesToday)} detail={`${transfers.resumedTransfersToday} cargas reanudadas`} />
           </div>
         </Panel>
       </div>
@@ -354,15 +439,15 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
         <Panel>
           <PanelHeading eyebrow="Dependencias críticas" title="Constelación de servicios" />
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <ServiceTile label="Base de datos" ok={server.databaseOk} description="Confirma que FileXfer puede conectarse y ejecutar una consulta mínima contra su base operativa. Una falla aquí afecta catálogo, sesiones, recibos y auditoría." />
-            <ServiceTile label="Almacenamiento" ok={server.storageOk} description="Comprueba disponibilidad y acceso a la ubicación configurada para archivos. Un estado degradado puede impedir escribir, reanudar o descargar contenido." />
-            <ServiceTile label="Bus interno" ok={server.messageBusOk} description="Valida el canal interno usado para coordinar trabajo y eventos del servidor. Su degradación puede retrasar procesos posteriores aunque la API siga respondiendo." />
-            <ServiceTile label="Alertamiento" ok={!server.alertingEnabled || server.alertingOk} detail={server.alertingEnabled ? "Habilitado" : "Modo local"} description={server.alertingEnabled ? "Verifica que el canal de notificación configurado pueda procesar alertas operativas. Revise cola, reintentos y dead-letter si aparece degradado." : "El alertamiento externo está deshabilitado en este ambiente. No es una falla: los eventos permanecen disponibles localmente para diagnóstico."} />
+            <ServiceTile label="Base de datos" ok={server.databaseOk} />
+            <ServiceTile label="Almacenamiento" ok={server.storageOk} />
+            <ServiceTile label="Bus interno" ok={server.messageBusOk} />
+            <ServiceTile label="Alertamiento" ok={!server.alertingEnabled || server.alertingOk} detail={server.alertingEnabled ? "Habilitado" : "Modo local"} description={server.alertingEnabled ? undefined : "El alertamiento externo está deshabilitado. Los eventos permanecen disponibles localmente para diagnóstico."} />
           </div>
           <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            <ResourceDial label="CPU" value={server.cpuUsagePercent} description="Uso aproximado de procesador del servidor. Verde: menor a 75 %; ámbar: 75–89.9 %; rojo: 90 % o más." />
-            <ResourceDial label="Memoria" value={server.memoryUsagePercent} description="Porcentaje de memoria física utilizada. La presión sostenida puede provocar pausas, paginación y menor rendimiento en archivos grandes." />
-            <ResourceDial label="Disco" value={server.diskUsagePercent} available={server.diskCapacityAvailable !== false} description="Porcentaje de ocupación del volumen supervisado. Sin medición indica que no se obtuvo la capacidad; no representa 0 % de uso ni una falla de acceso por sí sola." />
+            <ResourceDial label="CPU" value={server.cpuUsagePercent} />
+            <ResourceDial label="Memoria" value={server.memoryUsagePercent} />
+            <ResourceDial label="Disco" value={server.diskUsagePercent} available={server.diskCapacityAvailable !== false} />
           </div>
         </Panel>
 
@@ -378,10 +463,10 @@ function PulseView({ summary }: { summary: SummaryResponse }) {
             ))}
           </div>
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <MiniMetric label="Completados" value={String(recentCounts.completed)} />
-            <MiniMetric label="Transmitiendo" value={String(recentCounts.transmitting)} />
-            <MiniMetric label="Pendientes" value={String(recentCounts.pending + recentCounts.paused)} danger={recentIncomplete > 0} />
-            <MiniMetric label="Con falla" value={String(recentFailed)} danger={recentFailed > 0} />
+            <MiniMetric label="Completados" value={String(recentCounts.completed)} description="Transferencias completadas dentro de los registros recientes de esta huella." />
+            <MiniMetric label="Transmitiendo" value={String(recentCounts.transmitting)} description="Transferencias en curso dentro de los registros recientes de esta huella." />
+            <MiniMetric label="Pendientes" value={String(recentCounts.pending + recentCounts.paused)} danger={recentIncomplete > 0} description="Suma de pendientes y pausadas dentro de los registros recientes de esta huella." nextStep="En Mantenimiento puedes consultar el estado de la cola completa." />
+            <MiniMetric label="Con falla" value={String(recentFailed)} danger={recentFailed > 0} description="Suma de fallidas y fallas de catálogo dentro de los registros recientes de esta huella." nextStep="Abre el bloque de la transferencia para consultar su error y su traza." />
           </div>
           <p className="mt-4 text-xs leading-5 text-slate-500">Cada bloque representa una transferencia. Pase el cursor o use Tab para consultar archivo, RFC, tiempos, verificación y detalle del error.</p>
         </Panel>
@@ -501,13 +586,12 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
     results: "Resultados y evidencia",
     continuity: "Continuidad y pendientes"
   } as const;
-  const cards: Array<{ group: typeof groups[keyof typeof groups]; label: string; value: string; context: string; description: string; tone: KpiTone }> = [
+  const cards: Array<{ group: typeof groups[keyof typeof groups]; label: string; value: string; context: string; tone: KpiTone }> = [
     {
       group: groups.performance,
       label: "Salud operativa",
       value: formatPercent(kpis.operationalHealthScore),
       context: server.isHealthy ? "Dependencias disponibles" : "Hay servicios degradados",
-      description: "Parte de 100 y descuenta las deducciones reales del diagnóstico de salud. Consulte el desglose para conocer la causa y cómo recuperarla. La actividad normal no penaliza y el reinicio de estadísticas no oculta incidencias reales.",
       tone: !server.isHealthy || kpis.operationalHealthScore < 70 ? "red" : kpis.operationalHealthScore < 90 ? "gold" : "green"
     },
     {
@@ -515,7 +599,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Éxito del día",
       value: formatPercent(kpis.successRateTodayPercent),
       context: `${transfers.completedToday} completadas de ${kpis.totalTransfersToday}`,
-      description: "Porcentaje de cierres completados entre completados, fallas técnicas, rechazos y fallas de catálogo del período. Los retiros administrativos y expiraciones se muestran por separado para no confundirlos con errores.",
       tone: kpis.totalTransfersToday === 0 ? "slate" : kpis.successRateTodayPercent >= 95 ? "green" : kpis.successRateTodayPercent >= 85 ? "gold" : "red"
     },
     {
@@ -523,7 +606,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "En transmisión",
       value: String(transfers.activeTransfers),
       context: `${transfers.waitingTransfers} esperando turno`,
-      description: "Sesiones que están enviando bytes en este instante. La cifra de espera corresponde a sesiones admitidas que todavía no inician su flujo de datos.",
       tone: transfers.activeTransfers > 0 ? "blue" : "slate"
     },
     {
@@ -531,7 +613,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Fallas del día",
       value: String(transfers.failedToday),
       context: `${kpis.catalogFailuresToday} de catálogo`,
-      description: "Cierres con falla técnica, falla de catálogo o rechazo dentro del período diario medido. Las cancelaciones administrativas y expiraciones cuentan por separado; las cargas abiertas no son fallas.",
       tone: transfers.failedToday > 0 ? "red" : "green"
     },
     {
@@ -539,7 +620,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Pendientes críticos",
       value: String(kpis.stalePendingTransfers),
       context: `${transfers.pausedResumableTransfers} reanudables`,
-      description: "Pendientes o pausadas sin actividad durante más de 30 minutos. Esto pide revisión, pero no significa que haya vencido el plazo del archivo. Las activas se protegen de la limpieza.",
       tone: kpis.stalePendingTransfers > 0 ? "red" : transfers.pausedResumableTransfers > 0 ? "violet" : "green"
     },
     {
@@ -547,7 +627,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Cobertura de recibos",
       value: formatPercent(kpis.receiptCoverageTodayPercent),
       context: `${kpis.completedWithoutReceiptToday} sin recibo`,
-      description: "Porcentaje de transferencias completadas hoy que tienen un recibo digital asociado. Una cifra menor a 100 % requiere revisar la emisión o persistencia de evidencia.",
       tone: kpis.completedWithoutReceiptToday > 0 ? "red" : "green"
     },
     {
@@ -555,7 +634,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Verificación aplicada",
       value: formatPercent(kpis.verificationCoverageTodayPercent),
       context: `${transfers.verificationBypassedToday} omitidas por política`,
-      description: "Cobertura de verificación entre los archivos completados que la política obliga a validar. Las omisiones autorizadas por política se informan aparte y no reducen este porcentaje.",
       tone: kpis.verificationCoverageTodayPercent < 100 ? "red" : transfers.verificationBypassedToday > 0 ? "gold" : "green"
     },
     {
@@ -563,7 +641,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Duración P95",
       value: formatSeconds(kpis.p95UploadDurationTodaySeconds),
       context: `Mediana ${formatSeconds(kpis.medianUploadDurationTodaySeconds)}`,
-      description: "El 95 % de las transferencias completadas hoy terminó en este tiempo o menos. La mediana representa el comportamiento típico y es menos sensible a archivos atípicos.",
       tone: "blue"
     },
     {
@@ -571,7 +648,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Volumen confirmado",
       value: formatBytes(transfers.totalBytesTransferredToday),
       context: `P95 por archivo ${formatBytes(kpis.p95FileSizeTodayBytes)}`,
-      description: "Suma de bytes de transferencias completadas durante el día. El P95 permite dimensionar capacidad sin dejar que un único archivo gigantesco distorsione la lectura.",
       tone: "blue"
     },
     {
@@ -579,7 +655,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Throughput",
       value: `${transfers.averageThroughputMbps.toFixed(2)} Mbps`,
       context: `${formatBytes(transfers.bytesTransferredLastHour)} en 1 h`,
-      description: "Velocidad efectiva promedio calculada con los bytes confirmados en la última hora. No es la velocidad instantánea de la red ni el ancho de banda contratado.",
       tone: "blue"
     },
     {
@@ -587,7 +662,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Continuidad recuperada",
       value: formatPercent(kpis.resumeReuseTodayPercent),
       context: `${formatBytes(transfers.resumedBytesToday)} reutilizados`,
-      description: "Proporción del volumen completado hoy que pudo reutilizarse al reanudar cargas interrumpidas. Evita retransmitir bytes ya custodiados por el servidor.",
       tone: transfers.resumedBytesToday > 0 ? "violet" : "slate"
     },
     {
@@ -595,7 +669,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Actividad institucional",
       value: `${kpis.distinctRfcsToday} RFC`,
       context: `Promedio ${formatBytes(kpis.averageFileSizeTodayBytes)}`,
-      description: "Cantidad de RFC distintos con actividad creada durante el día. El contexto muestra el tamaño promedio de los archivos completados.",
       tone: "gold"
     },
     {
@@ -603,7 +676,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Pendientes persistidos",
       value: String(kpis.pendingTransfers ?? 0),
       context: `${formatBytes(kpis.pendingBytes ?? 0)} en copias parciales`,
-      description: "Total de sesiones Pending o Paused que aún están abiertas en base de datos, incluso tras reiniciar el servidor. El tamaño indica espacio recibido pendiente de completar o retirar.",
       tone: (kpis.pendingTransfers ?? 0) > 0 ? "violet" : "green"
     },
     {
@@ -611,7 +683,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Plazo vencido",
       value: String(kpis.expiredPendingTransfers ?? 0),
       context: "Pendientes por limpiar",
-      description: "Archivos parciales cuya fecha individual de reanudación ya venció y siguen abiertos. Se retiran en el próximo ciclo automático si no están activos; puede ejecutar la limpieza ahora.",
       tone: (kpis.expiredPendingTransfers ?? 0) > 0 ? "red" : "green"
     },
     {
@@ -619,7 +690,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Vencen en 24 horas",
       value: String(kpis.expiringNext24Hours ?? 0),
       context: `${formatBytes(kpis.nearExpiryBytes ?? 0)} por reanudar`,
-      description: "Pendientes que vencerán durante las siguientes 24 horas. Priorice contactar a sus emisores para completar el envío antes de que se elimine la copia parcial.",
       tone: (kpis.expiringNext24Hours ?? 0) > 0 ? "gold" : "green"
     },
     {
@@ -627,7 +697,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Mayor espera pendiente",
       value: `${(kpis.oldestPendingAgeHours ?? 0).toFixed(1)} h`,
       context: "Desde la última actividad",
-      description: "Horas sin actividad de la transferencia pendiente más antigua. Permite descubrir abandono o cortes persistentes. No es el tiempo de transmisión ni cambia al reiniciar estadísticas.",
       tone: (kpis.oldestPendingAgeHours ?? 0) >= 24 ? "red" : (kpis.oldestPendingAgeHours ?? 0) > 0.5 ? "gold" : "green"
     },
     {
@@ -635,7 +704,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Expiradas del día",
       value: String(kpis.expiredToday ?? 0),
       context: "Cerradas por vencimiento",
-      description: "Transferencias terminadas como Expired durante el período diario medido. Indica cuántas cargas perdieron la ventana de continuidad y requieren iniciar de nuevo.",
       tone: (kpis.expiredToday ?? 0) > 0 ? "gold" : "green"
     },
     {
@@ -643,7 +711,6 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
       label: "Retiros manuales del día",
       value: String(kpis.administrativelyCancelledToday ?? 0),
       context: "Decisiones administrativas",
-      description: "Pendientes retirados manualmente por un administrador durante el período diario medido. Permite distinguir limpieza intencional de fallas técnicas; el motivo permanece en la bitácora.",
       tone: "slate"
     }
   ];
@@ -658,7 +725,7 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
         <span className="dashboard-disclosure-icon" aria-hidden="true">⌄</span>
       </summary>
       <div className="space-y-6 border-t border-white/10 p-4 sm:p-5">
-        <p className="text-xs leading-5 text-slate-400">Contadores del día desde medianoche en {summary.statisticsTimeZone ?? "America/Mazatlan"}{summary.statisticsStartedUtc ? `, o desde el último reinicio si fue posterior (${formatDateTime(summary.statisticsStartedUtc)})` : ""}. Las ventanas de última hora se recortan al reinicio. Pasa el cursor o usa Tab sobre una tarjeta para consultar su definición.</p>
+        <p className="text-xs leading-5 text-slate-400">Contadores del día desde medianoche en {summary.statisticsTimeZone ?? "America/Mazatlan"}{summary.statisticsStartedUtc ? `, o desde el último reinicio si fue posterior (${formatDateTime(summary.statisticsStartedUtc)})` : ""}. Las ventanas de última hora se recortan al reinicio. Cada tarjeta explica cómo interpretar su cifra. Pasa el cursor, usa Tab o selecciona la tarjeta para fijar la ayuda.</p>
         {Object.values(groups).map(group => (
           <section key={group} aria-label={group}>
             <h4 className="mb-3 text-sm font-semibold text-slate-200">{group}</h4>
@@ -672,25 +739,20 @@ function KpiCommandDeck({ summary }: { summary: SummaryResponse }) {
   );
 }
 
-function KpiInsightCard(props: { label: string; value: string; context: string; description: string; tone: KpiTone }) {
+function KpiInsightCard(props: { label: string; value: string; context: string; tone: KpiTone }) {
   const styles = kpiToneClasses(props.tone);
   return (
-    <article
-      tabIndex={0}
-      aria-label={`${props.label}: ${props.value}. ${props.context}. ${props.description}`}
-      className={`group/kpi relative isolate rounded-2xl border p-4 outline-none transition hover:z-[80] hover:-translate-y-0.5 focus-within:z-[80] focus-visible:ring-2 focus-visible:ring-amber-300/60 ${styles.panel}`}
+    <MetricHelp label={props.label}
+      ariaLabel={`Ayuda de ${props.label}, ${props.value}. ${props.context}`}
+      className={`flex h-full w-full flex-col items-stretch rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 ${styles.panel}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">{props.label}</p>
+      <span className="flex items-start justify-between gap-3">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">{props.label}</span>
         <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[10px] font-bold ${styles.icon}`} aria-hidden="true">i</span>
-      </div>
-      <p className={`mt-3 text-2xl font-semibold tracking-tight tabular-nums ${styles.value}`}>{props.value}</p>
-      <p className="mt-1 min-h-8 text-[11px] leading-4 text-slate-500">{props.context}</p>
-      <div role="tooltip" className="pointer-events-none invisible absolute left-4 right-4 top-[calc(100%-0.35rem)] z-[90] translate-y-1 rounded-xl border border-amber-300/25 bg-[#05070b] p-3 text-[11px] leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/kpi:visible group-hover/kpi:translate-y-0 group-hover/kpi:opacity-100 group-focus/kpi:visible group-focus/kpi:translate-y-0 group-focus/kpi:opacity-100">
-        <span className="block font-semibold text-amber-200">Qué significa</span>
-        {props.description}
-      </div>
-    </article>
+      </span>
+      <span className={`mt-3 text-2xl font-semibold tracking-tight tabular-nums ${styles.value}`}>{props.value}</span>
+      <span className="mt-1 min-h-8 text-[11px] leading-4 text-slate-400">{props.context}</span>
+    </MetricHelp>
   );
 }
 
@@ -712,7 +774,7 @@ function RingsView({ summary }: { summary: SummaryResponse }) {
         <RingMetric label="Éxito" value={kpis.totalTransfersToday === 0 ? 0 : kpis.successRateTodayPercent} display={kpis.totalTransfersToday === 0 ? "Sin actividad" : formatPercent(kpis.successRateTodayPercent)} />
         <RingMetric label="Estabilidad" value={stability} display={formatPercent(stability)} />
         <RingMetric label={server.diskCapacityAvailable === false ? "Holgura CPU/RAM" : "Holgura"} value={capacity} display={formatPercent(capacity)} inverse />
-        <RingMetric label="Recibos" value={receiptCoverage} display={formatPercent(receiptCoverage)} />
+        <RingMetric label="Recibos" helpLabel="Cobertura de recibos" value={receiptCoverage} display={formatPercent(receiptCoverage)} />
         <RingMetric label="Verificación" value={verificationCoverage} display={formatPercent(verificationCoverage)} />
       </div>
       <div className="mt-8 grid gap-3 border-t border-white/[0.06] pt-5 sm:grid-cols-3">
@@ -787,7 +849,7 @@ function MosaicView({ summary }: { summary: SummaryResponse }) {
       <MosaicTile eyebrow="Reanudables" value={String(transfers.pausedResumableTransfers)} detail="Parciales vigentes" tone="gold" />
       <MosaicTile eyebrow="Recibos" value={String(transfers.receiptsIssuedToday)} detail="Firmados hoy" tone="green" />
       <MosaicTile className="sm:col-span-2" eyebrow="Actividad institucional" value={`${kpis.distinctRfcsToday} RFC`} detail={`${formatBytes(kpis.averageFileSizeTodayBytes)} por archivo en promedio`} tone="slate" />
-      <MosaicTile className="sm:col-span-2" eyebrow="Continuidad recuperada" value={formatBytes(transfers.resumedBytesToday)} detail={`${transfers.resumedTransfersToday} transferencias reanudadas`} tone="blue" />
+      <MosaicTile className="sm:col-span-2" eyebrow="Bytes recuperados" value={formatBytes(transfers.resumedBytesToday)} detail={`${transfers.resumedTransfersToday} transferencias reanudadas`} tone="blue" />
     </div>
   );
 }
@@ -805,10 +867,10 @@ function TimelineView({ summary }: { summary: SummaryResponse }) {
               <span className={`relative z-10 mt-1 h-4 w-4 rounded-full border-4 border-[#11141a] ${statusDotClass(event.status)}`} />
               <div className="min-w-0 rounded-2xl border border-white/[0.06] bg-black/10 p-4">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="truncate text-sm font-semibold text-white" title={event.fileName}>{event.fileName}</p>
+                  <p className="min-w-0 break-all text-sm font-semibold text-white">{event.fileName}</p>
                   <span className="shrink-0 text-[10px] tabular-nums text-slate-500">{formatDateTime(event.createdUtc)}</span>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500"><StatusBadge status={event.status} detail={event.lastError} /><span>{formatBytes(event.bytesReceived)}</span><span>{event.verificationRequired ? (event.verificationPerformed ? "Verificado" : "Verificación pendiente") : "Verificación omitida"}</span></div>
+                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500"><StatusBadge transfer={event} /><span>{formatBytes(event.bytesReceived)}</span><span>{event.verificationRequired ? (event.verificationPerformed ? "Verificado" : "Verificación pendiente") : "Verificación omitida"}</span></div>
               </div>
             </article>
           ))}
@@ -838,7 +900,14 @@ function RadarView({ summary }: { summary: SummaryResponse }) {
         <div className="mt-6 space-y-4">
           {metrics.map(metric => (
             <div key={metric.label}>
-              <div className="flex items-center justify-between text-xs"><span className="font-medium text-slate-300">{metric.label}</span><span className="font-semibold tabular-nums text-white">{metric.value.toFixed(0)}</span></div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-2 font-medium text-slate-300">{metric.label}
+                  <MetricHelp label={metric.label} description={metric.label === "Éxito" && summary.kpis.totalTransfersToday === 0
+                    ? "El radar usa 100 como valor de referencia cuando todavía no hay cierres. Con actividad, muestra el porcentaje de cierres completados."
+                    : undefined} />
+                </span>
+                <span className="font-semibold tabular-nums text-white">{metric.value.toFixed(0)}</span>
+              </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className={`h-full rounded-full ${toneBar(metric.value >= 80 ? "green" : metric.value >= 55 ? "gold" : "red")}`} style={{ width: `${metric.value}%` }} /></div>
               <p className="mt-1.5 text-[11px] text-slate-500">{metric.detail}</p>
             </div>
@@ -857,7 +926,7 @@ function TrafficView({ summary }: { summary: SummaryResponse }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">Decisión inmediata</p><h3 className="mt-1 text-2xl font-semibold text-white">Semáforo operativo</h3></div>
+        <PanelHeading eyebrow="Decisión inmediata" title="Semáforo operativo" />
         <p className="max-w-xl text-sm text-slate-500">Agrupa señales por acción requerida: continuar, vigilar o intervenir.</p>
       </div>
       <div className="grid gap-5 lg:grid-cols-3">
@@ -869,21 +938,28 @@ function TrafficView({ summary }: { summary: SummaryResponse }) {
   );
 }
 
-function RingMetric({ label, value, display, inverse = false }: { label: string; value: number; display: string; inverse?: boolean }) {
+function RingMetric({ label, helpLabel = label, value, display, inverse = false }: { label: string; helpLabel?: string; value: number; display: string; inverse?: boolean }) {
   const safe = clamp(value, 0, 100);
   const visualTone: Tone = (inverse ? safe < 15 : safe < 55) ? "red" : safe < 80 ? "gold" : "green";
   const color = visualTone === "green" ? "#34d399" : visualTone === "gold" ? "#f2b96b" : "#fb7185";
   return (
     <div className="text-center">
       <div className="mx-auto grid aspect-square w-full max-w-32 place-items-center rounded-full p-2" style={{ background: `conic-gradient(${color} ${safe}%, rgba(255,255,255,.06) 0)` }}><div className="grid h-full w-full place-items-center rounded-full bg-[#11141a]"><span className="px-2 text-center text-xs font-semibold text-white sm:text-sm">{display}</span></div></div>
-      <p className="mt-3 text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p>
+      <div className="mt-3 flex items-center justify-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p>
+        <MetricHelp label={helpLabel} />
+      </div>
     </div>
   );
 }
 
 function HeatCell({ label, value, detail, severity }: { label: string; value: string; detail: string; severity: Severity }) {
   const styles = severity === "good" ? "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-200" : severity === "warning" ? "border-amber-400/25 bg-amber-400/[0.09] text-amber-100" : "border-rose-400/30 bg-rose-400/[0.11] text-rose-100";
-  return <div className={`min-h-32 rounded-2xl border p-4 ${styles}`}><p className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-65">{label}</p><p className="mt-3 text-2xl font-semibold text-white">{value}</p><p className="mt-2 text-[11px] leading-4 opacity-65">{detail}</p></div>;
+  return <div className={`min-h-32 rounded-2xl border p-4 ${styles}`}>
+    <div className="flex items-start justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-65">{label}</p><MetricHelp label={label} /></div>
+    <p className="mt-3 text-2xl font-semibold text-white">{value}</p>
+    <p className="mt-2 text-[11px] leading-4 opacity-65">{detail}</p>
+  </div>;
 }
 
 function LegendDot({ tone, label }: { tone: Severity; label: string }) {
@@ -892,11 +968,21 @@ function LegendDot({ tone, label }: { tone: Severity; label: string }) {
 }
 
 function ProcessStage({ index, label, value, detail, tone }: { index: number; label: string; value: number; detail: string; tone: Tone }) {
-  return <div className={`min-h-44 min-w-36 flex-1 rounded-2xl border p-4 ${tonePanel(tone)}`}><span className="text-[10px] font-semibold tracking-widest opacity-50">{String(index).padStart(2, "0")}</span><p className="mt-5 text-4xl font-semibold text-white">{value}</p><p className="mt-2 text-sm font-semibold">{label}</p><p className="mt-1 text-[11px] opacity-55">{detail}</p></div>;
+  return <div className={`min-h-44 min-w-36 flex-1 rounded-2xl border p-4 ${tonePanel(tone)}`}>
+    <div className="flex items-start justify-between gap-2"><span className="text-[10px] font-semibold tracking-widest opacity-50">{String(index).padStart(2, "0")}</span><MetricHelp label={label} /></div>
+    <p className="mt-5 text-4xl font-semibold text-white">{value}</p>
+    <p className="mt-2 text-sm font-semibold">{label}</p>
+    <p className="mt-1 text-[11px] opacity-55">{detail}</p>
+  </div>;
 }
 
 function MosaicTile({ eyebrow, value, detail, tone, className = "", hero = false }: { eyebrow: string; value: string; detail: string; tone: Tone; className?: string; hero?: boolean }) {
-  return <article className={`relative overflow-hidden rounded-3xl border p-5 ${tonePanel(tone)} ${className}`}><div className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-current opacity-[0.04] blur-2xl" /><p className="relative text-[10px] font-semibold uppercase tracking-[0.18em] opacity-60">{eyebrow}</p><p className={`relative mt-3 font-semibold tracking-tight text-white ${hero ? "text-5xl sm:text-6xl" : "text-3xl"}`}>{value}</p><p className={`relative mt-2 text-current opacity-60 ${hero ? "max-w-sm text-sm leading-6" : "text-xs"}`}>{detail}</p></article>;
+  return <article className={`relative overflow-hidden rounded-3xl border p-5 ${tonePanel(tone)} ${className}`}>
+    <div className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-current opacity-[0.04] blur-2xl" />
+    <div className="relative flex items-start justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-60">{eyebrow}</p><MetricHelp label={eyebrow} /></div>
+    <p className={`relative mt-3 font-semibold tracking-tight text-white ${hero ? "text-5xl sm:text-6xl" : "text-3xl"}`}>{value}</p>
+    <p className={`relative mt-2 text-current opacity-60 ${hero ? "max-w-sm text-sm leading-6" : "text-xs"}`}>{detail}</p>
+  </article>;
 }
 
 function RadarChart({ metrics }: { metrics: Array<{ label: string; value: number; detail: string }> }) {
@@ -922,7 +1008,20 @@ function RadarChart({ metrics }: { metrics: Array<{ label: string; value: number
 function TrafficColumn({ severity, title, subtitle, items }: { severity: Severity; title: string; subtitle: string; items: Array<{ label: string; detail: string; severity: Severity }> }) {
   const styles = severity === "good" ? "border-emerald-400/18 bg-emerald-400/[0.035]" : severity === "warning" ? "border-amber-400/20 bg-amber-400/[0.04]" : "border-rose-400/25 bg-rose-400/[0.05]";
   const light = severity === "good" ? "bg-emerald-400 shadow-[0_0_24px_#34d399]" : severity === "warning" ? "bg-amber-400 shadow-[0_0_24px_#fbbf24]" : "bg-rose-400 shadow-[0_0_24px_#fb7185]";
-  return <section className={`rounded-3xl border p-5 ${styles}`}><div className="flex items-center gap-3"><span className={`h-4 w-4 rounded-full ${light}`} /><div><h4 className="font-semibold text-white">{title}</h4><p className="text-[11px] text-slate-500">{subtitle}</p></div><span className="ml-auto text-2xl font-semibold text-white">{items.length}</span></div><div className="mt-5 space-y-2">{items.length === 0 && <p className="rounded-xl border border-white/[0.06] p-4 text-xs text-slate-500">No hay señales en esta categoría.</p>}{items.map(item => <div key={item.label} className="rounded-xl border border-white/[0.06] bg-black/10 p-3"><p className="text-xs font-semibold text-slate-200">{item.label}</p><p className="mt-1 text-[11px] leading-4 text-slate-500">{item.detail}</p></div>)}</div></section>;
+  return <section className={`rounded-3xl border p-5 ${styles}`}>
+    <div className="flex items-center gap-3">
+      <span aria-hidden="true" className={`h-4 w-4 rounded-full ${light}`} />
+      <div><h4 className="font-semibold text-white">{title}</h4><p className="text-[11px] text-slate-500">{subtitle}</p></div>
+      <span className="ml-auto text-2xl font-semibold text-white">{items.length}</span>
+    </div>
+    <div className="mt-5 space-y-2">
+      {items.length === 0 && <p className="rounded-xl border border-white/[0.06] p-4 text-xs text-slate-500">No hay señales en esta categoría.</p>}
+      {items.map(item => <div key={item.label} className="rounded-xl border border-white/[0.06] bg-black/10 p-3">
+        <div className="flex items-start justify-between gap-2"><p className="text-xs font-semibold text-slate-200">{item.label}</p><MetricHelp label={item.label} /></div>
+        <p className="mt-1 text-[11px] leading-4 text-slate-500">{item.detail}</p>
+      </div>)}
+    </div>
+  </section>;
 }
 
 function buildHeatSignals(summary: SummaryResponse): Array<{ label: string; value: string; detail: string; severity: Severity }> {
@@ -1015,35 +1114,47 @@ function resourceHeadroom(server: SummaryResponse["server"]): number {
 }
 
 function ActivityStatusChip({ transfer }: { transfer: RecentTransferDto }) {
+  const presentation = statusPresentation(statusKind(transfer.status));
+  return <TransferHelp transfer={transfer}
+    className={`h-5 w-5 cursor-help rounded-md border transition hover:scale-125 focus-visible:scale-125 ${presentation.dotClass}`}>
+    <span className="sr-only">{presentation.label}</span>
+  </TransferHelp>;
+}
+
+function TransferHelp({ transfer, className, children }: { transfer: RecentTransferDto; className: string; children: React.ReactNode }) {
   const kind = statusKind(transfer.status);
   const presentation = statusPresentation(kind);
   const verification = transfer.verificationRequired
     ? transfer.verificationPerformed ? "Verificación ejecutada" : "Verificación requerida pendiente"
     : "Verificación omitida por política";
-
+  const nextSteps: Partial<Record<StatusKind, string>> = {
+    completed: "Consulta el recibo para verificar la evidencia del cierre.",
+    pending: "Revisa la última actividad y el plazo del archivo en Mantenimiento.",
+    paused: "Consulta el plazo en Mantenimiento y pide al emisor que continúe el envío mientras siga vigente.",
+    catalogFailed: "Copia la traza y solicita revisar el catálogo antes de reenviar el archivo.",
+    failed: "Lee el error y conserva la traza para solicitar soporte.",
+    unknown: "Conserva el estado técnico y la traza para solicitar soporte."
+  };
   return (
-    <span className="group/activity relative inline-flex hover:z-[100] focus-within:z-[100]">
-      <span
-        tabIndex={0}
-        role="img"
-        aria-label={`${transfer.fileName}. ${presentation.label}. ${formatBytes(transfer.bytesReceived)}. ${verification}.`}
-        className={`h-5 w-5 cursor-help rounded-md border outline-none transition hover:scale-125 focus-visible:scale-125 focus-visible:ring-2 focus-visible:ring-white/70 ${presentation.dotClass}`}
-      />
-      <span role="tooltip" className="dashboard-context-help pointer-events-none invisible z-[110] rounded-xl border border-white/15 bg-[#05070b] p-3 text-left opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/activity:visible group-hover/activity:opacity-100 group-focus-within/activity:visible group-focus-within/activity:opacity-100">
-        <span className="block break-words text-xs font-semibold text-white">{transfer.fileName}</span>
-        <span className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[9px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span>
-        <span className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px] leading-4 text-slate-400">
-          <span>Estado técnico</span><span className="text-right font-mono text-slate-200">{transfer.status}</span>
-          <span>RFC</span><span className="truncate text-right font-mono text-slate-200">{transfer.rfc || "—"}</span>
-          <span>Tamaño</span><span className="text-right text-slate-200">{formatBytes(transfer.bytesReceived)}</span>
-          <span>Inicio</span><span className="text-right text-slate-200">{formatDateTime(transfer.createdUtc)}</span>
-          <span>Fin</span><span className="text-right text-slate-200">{formatDateTime(transfer.completedUtc)}</span>
-          <span>Control</span><span className="text-right text-slate-200">{verification}</span>
-        </span>
-        {transfer.lastError && <span className="mt-2 block rounded-lg border border-rose-400/20 bg-rose-400/[0.07] p-2 text-[10px] leading-4 text-rose-100">{transfer.lastError}</span>}
-        <span className="mt-2 block text-[9px] leading-4 text-slate-600">{presentation.description}</span>
-      </span>
-    </span>
+    <HelpTrigger title={transfer.fileName} ariaLabel={`${presentation.label}, ${transfer.fileName}. Consultar detalle`}
+      className={className} nextStep={nextSteps[kind]}
+      description={<>
+        <span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span>
+        <p className="mt-2">{presentation.description}</p>
+        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-slate-400">
+          <dt>Estado técnico</dt><dd className="break-words text-right text-slate-200">{transfer.status}</dd>
+          <dt>RFC</dt><dd className="break-words text-right text-slate-200">{transfer.rfc || "—"}</dd>
+          <dt>Tamaño</dt><dd className="text-right text-slate-200">{formatBytes(transfer.bytesReceived)}</dd>
+          <dt>Inicio</dt><dd className="text-right text-slate-200">{formatDateTime(transfer.createdUtc)}</dd>
+          <dt>Fin</dt><dd className="text-right text-slate-200">{formatDateTime(transfer.completedUtc)}</dd>
+          <dt>Control</dt><dd className="text-right text-slate-200">{verification}</dd>
+          {transfer.traceId && <><dt>Traza</dt><dd className="break-all text-right text-slate-200">{transfer.traceId}</dd></>}
+          {transfer.receiptId && <><dt>Recibo</dt><dd className="break-all text-right text-slate-200">{transfer.receiptId}</dd></>}
+        </dl>
+        {transfer.lastError && <p className="mt-2 break-words rounded-lg border border-rose-400/20 bg-rose-400/[0.07] p-2 text-rose-100">{transfer.lastError}</p>}
+      </>}>
+      {children}
+    </HelpTrigger>
   );
 }
 
@@ -1054,12 +1165,13 @@ function StatusLegend({ counts }: { counts: Record<StatusKind, number> }) {
       {visibleKinds.map(kind => {
         const presentation = statusPresentation(kind);
         return (
-          <span key={kind} className="group/legend relative inline-flex cursor-help items-center gap-1.5 text-[10px] text-slate-400 hover:z-[100] focus:z-[100]" tabIndex={0}>
-            <span className={`h-2.5 w-2.5 rounded-sm border ${presentation.dotClass}`} />
+          <HelpTrigger key={kind} title={presentation.label} description={presentation.description}
+            ariaLabel={`${presentation.label}, ${counts[kind]} en la actividad reciente. Consultar significado`}
+            className="inline-flex cursor-help items-center gap-1.5 text-[10px] text-slate-400">
+            <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-sm border ${presentation.dotClass}`} />
             <span>{presentation.label}</span>
             <span className="font-semibold tabular-nums text-slate-200">{counts[kind]}</span>
-            <span role="tooltip" className="dashboard-context-help pointer-events-none invisible z-[110] rounded-lg border border-white/15 bg-[#05070b] p-3 text-xs leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_20px_60px_rgba(0,0,0,0.95)] transition group-hover/legend:visible group-hover/legend:opacity-100 group-focus/legend:visible group-focus/legend:opacity-100">{presentation.description}</span>
-          </span>
+          </HelpTrigger>
         );
       })}
     </div>
@@ -1081,7 +1193,11 @@ function RecentTransfers({ transfers }: { transfers: RecentTransferDto[] }) {
       <div className="flex flex-col gap-1 border-b border-white/[0.06] px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="dashboard-eyebrow">Trazabilidad</p>
-          <h3 id="recent-transfers-title" className="mt-1 text-xl font-semibold">Transferencias recientes</h3>
+          <div className="mt-1 flex items-center gap-2">
+            <h3 id="recent-transfers-title" className="text-xl font-semibold">Transferencias recientes</h3>
+            <HelpTrigger title="Cómo localizar una transferencia" description="Escribe parte del nombre, RFC, traza o recibo para buscar entre los registros recientes. Puedes combinar la búsqueda con un filtro de estado."
+              nextStep="Selecciona el estado del archivo para fijar su detalle y copiar la traza. El recibo identifica la evidencia firmada de una transferencia completada." />
+          </div>
         </div>
         <span className="text-xs text-slate-400" aria-live="polite">{filtered.length} de {transfers.length} registros recientes</span>
       </div>
@@ -1108,14 +1224,14 @@ function RecentTransfers({ transfers }: { transfers: RecentTransferDto[] }) {
           <tbody>
             {filtered.map((transfer) => (
               <tr key={transfer.uploadId || `${transfer.traceId ?? transfer.fileName}-${transfer.createdUtc}`} className="border-t border-white/[0.05] text-slate-300 transition hover:bg-white/[0.025]">
-                <td className="max-w-72 truncate px-5 py-3.5 font-medium text-slate-100" title={transfer.fileName}>{transfer.fileName}</td>
-                <td className="max-w-36 truncate font-mono text-[10px] text-slate-400" title={transfer.rfc}>{transfer.rfc || "—"}</td>
-                <td><StatusBadge status={transfer.status} detail={transfer.lastError} /></td>
+                <td className="max-w-72 break-words px-5 py-3.5 font-medium text-slate-100">{transfer.fileName}</td>
+                <td className="max-w-36 break-words font-mono text-[10px] text-slate-400">{transfer.rfc || "—"}</td>
+                <td><StatusBadge transfer={transfer} /></td>
                 <td className="tabular-nums">{formatBytes(transfer.bytesReceived)}</td>
                 <td>{transfer.policyExtension ?? "—"}{transfer.policyVersion ? ` · v${transfer.policyVersion}` : ""}</td>
                 <td>{transfer.verificationRequired ? (transfer.verificationPerformed ? "Ejecutada" : "Pendiente") : "Omitida por política"}</td>
-                <td className="max-w-40 truncate font-mono text-[10px] text-slate-500" title={transfer.traceId ?? undefined}>{transfer.traceId ?? "—"}</td>
-                <td className="max-w-40 truncate pr-5 font-mono text-[10px] text-slate-500" title={transfer.receiptId ?? undefined}>{transfer.receiptId ?? "—"}</td>
+                <td className="max-w-40 break-all font-mono text-[10px] text-slate-500">{transfer.traceId ?? "—"}</td>
+                <td className="max-w-40 break-all pr-5 font-mono text-[10px] text-slate-500">{transfer.receiptId ?? "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -1139,29 +1255,29 @@ function HealthRing({ score, healthy }: { score: number; healthy: boolean }) {
   );
 }
 
-function FlowNode(props: { index: string; label: string; value: number; detail: string; description: string; tone: Tone; active?: boolean }) {
+function FlowNode(props: { index: string; label: string; value: number; detail: string; tone: Tone; active?: boolean }) {
   return (
     <div className={`relative rounded-2xl border p-4 ${tonePanel(props.tone)}`}>
-      <div className="flex items-center justify-between"><span className="text-[10px] font-semibold tracking-widest text-current opacity-55">{props.index}</span><span className="flex items-center gap-2">{props.active && <span className="ase-pulse h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_16px_#38bdf8]" />}<InfoPopover title={props.label} description={props.description} compact /></span></div>
+      <div className="flex items-center justify-between"><span className="text-[10px] font-semibold tracking-widest text-current opacity-55">{props.index}</span><span className="flex items-center gap-2">{props.active && <span className="ase-pulse h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_16px_#38bdf8]" />}<MetricHelp label={props.label} /></span></div>
       <p className="mt-5 text-3xl font-semibold tabular-nums text-white">{props.value}</p><p className="mt-1 text-sm font-semibold">{props.label}</p><p className="mt-1 text-[11px] text-current opacity-55">{props.detail}</p>
     </div>
   );
 }
 
-function ResourceDial({ label, value, description, available = true }: { label: string; value: number; description: string; available?: boolean }) {
+function ResourceDial({ label, value, available = true }: { label: string; value: number; available?: boolean }) {
   const safe = clamp(value, 0, 100);
   return (
     <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4">
-      <div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2 font-semibold text-slate-300">{label}<InfoPopover title={`Uso de ${label}`} description={description} compact /></span><span className="tabular-nums text-slate-400">{available ? `${safe.toFixed(1)} %` : "Sin medición"}</span></div>
+      <div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2 font-semibold text-slate-300">{label}<MetricHelp label={label} /></span><span className="tabular-nums text-slate-400">{available ? `${safe.toFixed(1)} %` : "Sin medición"}</span></div>
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className={`h-full rounded-full ${toneBar(available ? usageTone(safe) : "slate")}`} style={{ width: available ? `${safe}%` : "0%" }} /></div>
     </div>
   );
 }
 
-function ServiceTile({ label, ok, detail, description }: { label: string; ok: boolean; detail?: string; description: string }) {
+function ServiceTile({ label, ok, detail, description }: { label: string; ok: boolean; detail?: string; description?: string }) {
   return (
     <div className={`rounded-2xl border p-4 ${ok ? "border-emerald-400/15 bg-emerald-400/[0.045]" : "border-rose-400/25 bg-rose-500/[0.07]"}`}>
-      <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-400 shadow-[0_0_12px_#4ade80]" : "bg-rose-400 shadow-[0_0_12px_#fb7185]"}`} /><span className="text-xs font-semibold text-slate-200">{label}</span></span><InfoPopover title={label} description={description} compact /></div>
+      <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-400 shadow-[0_0_12px_#4ade80]" : "bg-rose-400 shadow-[0_0_12px_#fb7185]"}`} /><span className="text-xs font-semibold text-slate-200">{label}</span></span><MetricHelp label={label} description={description} /></div>
       <p className={`mt-3 text-[11px] ${ok ? "text-emerald-300/75" : "text-rose-200"}`}>{detail ?? (ok ? "Operando" : "Requiere atención")}</p>
     </div>
   );
@@ -1174,22 +1290,39 @@ function ChartPanel(props: { eyebrow: string; title: string; footer: string; chi
 function MetricBar(props: { label: string; value: number; max: number; display: string; tone: Tone }) {
   const width = props.value <= 0 ? 0 : Math.max(3, clamp(props.value / props.max * 100, 0, 100));
   return (
-    <div><div className="mb-2 flex items-end justify-between gap-4 text-xs"><span className="font-medium text-slate-300">{props.label}</span><span className="font-semibold tabular-nums text-white">{props.display}</span></div><div className="h-3 overflow-hidden rounded-full bg-white/[0.055]"><div className={`h-full rounded-full transition-[width] duration-700 ${toneBar(props.tone)}`} style={{ width: `${width}%` }} /></div></div>
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-4 text-xs">
+        <span className="flex items-center gap-2 font-medium text-slate-300">{props.label}<MetricHelp label={props.label} /></span>
+        <span className="font-semibold tabular-nums text-white">{props.display}</span>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-white/[0.055]"><div className={`h-full rounded-full transition-[width] duration-700 ${toneBar(props.tone)}`} style={{ width: `${width}%` }} /></div>
+    </div>
   );
 }
 
-function MetricCard(props: { label: string; value: string; helper?: string; description?: string; accent?: boolean; danger?: boolean }) {
+function MetricCard(props: { label: string; value: string; helper?: string; accent?: boolean; danger?: boolean }) {
   const border = props.danger ? "border-rose-400/25 bg-rose-500/[0.055]" : props.accent ? "border-amber-300/20 bg-amber-400/[0.055]" : "border-white/[0.07] bg-white/[0.025]";
-  const explanation = props.description ?? props.helper ?? `${props.label}: ${props.value}`;
-  return <div tabIndex={0} aria-label={`${props.label}: ${props.value}. ${explanation}`} className={`group/metric relative isolate rounded-2xl border p-4 outline-none hover:z-[80] focus-within:z-[80] focus-visible:ring-2 focus-visible:ring-amber-300/60 ${border}`}><div className="flex items-start justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{props.label}</p><span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-white/10 text-[9px] font-bold text-slate-500" aria-hidden="true">i</span></div><p className={`mt-2 text-2xl font-semibold tracking-tight ${props.danger ? "text-rose-100" : "text-white"}`}>{props.value}</p>{props.helper && <p className="mt-2 text-xs leading-5 text-slate-500">{props.helper}</p>}<div role="tooltip" className="pointer-events-none invisible absolute left-3 right-3 top-[calc(100%-0.25rem)] z-[90] rounded-xl border border-amber-300/20 bg-[#05070b] p-3 text-[11px] leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/metric:visible group-hover/metric:opacity-100 group-focus/metric:visible group-focus/metric:opacity-100"><span className="block font-semibold text-amber-200">Cómo leer este indicador</span>{explanation}</div></div>;
+  return <MetricHelp label={props.label} ariaLabel={`Ayuda de ${props.label}, ${props.value}${props.helper ? `. ${props.helper}` : ""}`}
+    className={`flex h-full w-full flex-col items-stretch rounded-2xl border p-4 text-left ${border}`}>
+    <span className="flex items-start justify-between gap-2">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">{props.label}</span>
+      <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-amber-300/20 text-[9px] font-bold text-amber-200" aria-hidden="true">i</span>
+    </span>
+    <span className={`mt-2 text-2xl font-semibold tracking-tight ${props.danger ? "text-rose-100" : "text-white"}`}>{props.value}</span>
+    {props.helper && <span className="mt-2 text-xs leading-5 text-slate-400">{props.helper}</span>}
+  </MetricHelp>;
 }
 
-function SignalCard({ label, value, detail, description }: { label: string; value: string; detail: string; description?: string }) {
-  return <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4"><div className="flex items-start justify-between gap-2"><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>{description && <InfoPopover title={label} description={description} compact />}</div><p className="mt-2 text-xl font-semibold text-white">{value}</p><p className="mt-1 text-[11px] text-slate-500">{detail}</p></div>;
+function SignalCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return <div className="relative rounded-2xl border border-white/[0.06] bg-black/10 p-4"><div className="flex items-start justify-between gap-2"><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p><MetricHelp label={label} /></div><p className="mt-2 text-xl font-semibold text-white">{value}</p><p className="mt-1 text-[11px] text-slate-500">{detail}</p></div>;
 }
 
-function MiniMetric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
-  return <div className="min-w-0 text-center"><p className={`truncate text-lg font-semibold ${danger ? "text-rose-300" : "text-white"}`}>{value}</p><p className="mt-1 truncate text-[10px] uppercase tracking-wide text-slate-500">{label}</p></div>;
+function MiniMetric({ label, value, danger = false, description, nextStep }: { label: string; value: string; danger?: boolean; description?: string; nextStep?: string }) {
+  return <MetricHelp label={label} description={description} nextStep={nextStep}
+    ariaLabel={`Ayuda de ${label}, ${value}`} className="flex min-w-0 flex-col items-center rounded-lg p-1 text-center">
+    <span className={`text-lg font-semibold ${danger ? "text-rose-300" : "text-white"}`}>{value}</span>
+    <span className="mt-1 text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
+  </MetricHelp>;
 }
 
 function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
@@ -1198,20 +1331,7 @@ function Panel({ children, className = "" }: { children: React.ReactNode; classN
 
 function PanelHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description?: string }) {
   const explanation = description ?? panelExplanation(title);
-  return <div className="relative"><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">{eyebrow}</p><div className="mt-1 flex items-center gap-2"><h3 className="text-xl font-semibold tracking-tight text-white">{title}</h3>{explanation && <InfoPopover title={title} description={explanation} />}</div></div>;
-}
-
-function InfoPopover({ title, description, compact = false }: { title: string; description: string; compact?: boolean }) {
-  const size = compact ? "h-4 w-4 text-[9px]" : "h-5 w-5 text-[10px]";
-  return (
-    <span className="group/help relative z-20 inline-flex shrink-0 hover:z-[100] focus-within:z-[100]">
-      <button type="button" aria-label={`Explicación: ${title}`} className={`grid place-items-center rounded-full border border-amber-300/25 bg-[#15120b] font-bold text-amber-200 outline-none transition hover:border-amber-200/60 hover:bg-amber-300/10 focus-visible:ring-2 focus-visible:ring-amber-300/70 ${size}`}>i</button>
-      <span role="tooltip" className="dashboard-context-help pointer-events-none invisible z-[110] rounded-xl border border-amber-300/25 bg-[#05070b] p-4 text-left text-xs font-normal leading-5 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/help:visible group-hover/help:opacity-100 group-focus-within/help:visible group-focus-within/help:opacity-100">
-        <span className="block text-xs font-semibold text-amber-200">{title}</span>
-        <span className="mt-1 block text-slate-200">{description}</span>
-      </span>
-    </span>
-  );
+  return <div className="relative"><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/70">{eyebrow}</p><div className="mt-1 flex items-center gap-2"><h3 className="text-xl font-semibold tracking-tight text-white">{title}</h3>{explanation && <HelpTrigger title={title} description={explanation} />}</div></div>;
 }
 
 export function panelExplanation(title: string): string | undefined {
@@ -1230,23 +1350,28 @@ export function panelExplanation(title: string): string | undefined {
     "Flujo de transferencias": "Presenta de izquierda a derecha el trabajo acumulado y el estado del proceso. Mezcla resultados diarios con actividad actual, por lo que las etapas no deben sumarse como si fueran una sola población.",
     "Cronología de transferencias": "Ordena los eventos recientes desde el más nuevo y conserva su estado, tamaño y verificación. Es una vista rápida de trazabilidad; el recibo y la traza aparecen en la tabla detallada.",
     "Radar operativo": "Compara varias dimensiones convertidas a puntuaciones de 0 a 100. Facilita descubrir desequilibrios, pero no sustituye umbrales técnicos ni compromisos de servicio.",
-    "Fortalezas y brechas": "Desglosa las dimensiones del radar para explicar qué componente eleva o reduce el equilibrio operativo. Valores bajos orientan la prioridad de investigación."
+    "Fortalezas y brechas": "Desglosa las dimensiones del radar para explicar qué componente eleva o reduce el equilibrio operativo. Valores bajos orientan la prioridad de investigación.",
+    "Semáforo operativo": "Ordena las señales según la acción requerida. Empieza por Atender, revisa si persisten las señales de Vigilar y consulta la ayuda de cada señal para decidir el siguiente paso.",
+    "Indicadores principales": "Muestra las cifras del corte junto con su contexto. Selecciona una tarjeta para entender qué datos incluye el indicador y cómo interpretarlos.",
+    "Operación y custodia": "Relaciona las cargas abiertas con las completadas, los recibos y los controles de verificación. Consulta la ayuda de cada tarjeta para identificar su período y alcance."
   };
   return explanations[title];
 }
 
 function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) {
-  return <div><h3 className="text-lg font-semibold text-white">{title}</h3><p className="mt-1 text-sm text-slate-400">{subtitle}</p></div>;
+  const explanation = panelExplanation(title);
+  return <div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold text-white">{title}</h3>{explanation && <HelpTrigger title={title} description={explanation} />}</div><p className="mt-1 text-sm text-slate-400">{subtitle}</p></div>;
 }
 
 function LiveBadge({ healthy }: { healthy: boolean }) {
   return <span className={`flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${healthy ? "border-emerald-400/20 bg-emerald-400/[0.07] text-emerald-300" : "border-rose-400/25 bg-rose-400/[0.08] text-rose-200"}`}><span className={`h-1.5 w-1.5 rounded-full ${healthy ? "ase-pulse bg-emerald-400" : "bg-rose-400"}`} />{healthy ? "Sistema en línea" : "Atención requerida"}</span>;
 }
 
-function StatusBadge({ status, detail }: { status: string; detail?: string | null }) {
-  const kind = statusKind(status);
-  const presentation = statusPresentation(kind);
-  return <span className="group/status relative inline-flex hover:z-[100] focus:z-[100]" tabIndex={0}><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>{presentation.label}</span><span role="tooltip" className="pointer-events-none invisible absolute left-0 top-8 z-[110] w-64 rounded-xl border border-white/15 bg-[#05070b] p-3 text-[10px] leading-4 text-slate-100 opacity-0 ring-1 ring-black/80 shadow-[0_24px_70px_rgba(0,0,0,0.95)] transition group-hover/status:visible group-hover/status:opacity-100 group-focus/status:visible group-focus/status:opacity-100"><span className="font-semibold text-white">{status}</span><span className="mt-1 block text-slate-300">{presentation.description}</span>{detail && <span className="mt-2 block text-rose-200">{detail}</span>}</span></span>;
+function StatusBadge({ transfer }: { transfer: RecentTransferDto }) {
+  const presentation = statusPresentation(statusKind(transfer.status));
+  return <TransferHelp transfer={transfer} className={`inline-flex cursor-help rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${presentation.badgeClass}`}>
+    {presentation.label}
+  </TransferHelp>;
 }
 
 function ViewGlyph({ mode }: { mode: ViewMode }) {

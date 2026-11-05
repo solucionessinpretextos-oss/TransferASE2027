@@ -7,14 +7,18 @@
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
 import { ReactNode } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { ContextualHelpProvider, HelpSteps, HelpTrigger } from "./ContextualHelp";
 import aseLogoWhite from "../assets/ase-logo-white.png";
 
 export function Layout({ children }: { children: ReactNode }) {
   const { session, logout } = useAuth();
+  const { pathname } = useLocation();
+  const guide = pathname.startsWith("/policies") ? helpGuides.policies : pathname.startsWith("/access") ? helpGuides.access : helpGuides.dashboard;
 
   return (
+    <ContextualHelpProvider key={pathname}>
     <div className="min-h-screen bg-[#0d0f13] text-slate-100 lg:flex">
       <a href="#contenido-principal" className="sr-only z-[150] rounded-lg bg-amber-200 px-4 py-3 text-sm font-semibold text-[#17130c] focus:not-sr-only focus:fixed focus:top-3 focus:left-3">
         Ir al contenido principal
@@ -64,11 +68,15 @@ export function Layout({ children }: { children: ReactNode }) {
             </NavLink>
           )}
         </nav>
+        <HelpTrigger title={guide.title} ariaLabel="Guía de esta pantalla" clickOnly description={<HelpSteps steps={guide.steps} />}
+          className="min-h-11 rounded-lg border border-amber-300/30 bg-amber-400/8 px-3 py-2 text-left text-xs font-semibold text-amber-100 hover:bg-amber-400/15">
+          <span aria-hidden="true" className="mr-2">ⓘ</span>Guía de esta pantalla
+        </HelpTrigger>
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#101217] p-2.5 lg:mt-auto lg:block lg:p-3">
           <div className="min-w-0 px-1">
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">Sesión e.firma</p>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 lg:gap-y-2">
-              <p className="break-all font-mono text-xs font-semibold text-white" title={session?.rfc}>
+              <p className="break-all font-mono text-xs font-semibold text-white">
                 {session?.rfc ?? "—"}
               </p>
               {session?.roles.map(role => (
@@ -97,8 +105,28 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="relative mx-auto max-w-[1600px]">{children}</div>
       </main>
     </div>
+    </ContextualHelpProvider>
   );
 }
+
+const helpGuides = {
+  dashboard: { title: "Primer recorrido por el Dashboard", steps: [
+    { title: "Empieza en Panorama", text: "Lee la salud operativa y las tarjetas superiores. Las diez presentaciones muestran el mismo corte; elige la que te resulte más clara. Los círculos con i explican cómo leer cada dato." },
+    { title: "Entiende qué requiere atención", text: "Abre Diagnóstico para ver qué descontó puntos y cómo corregirlo. En Entrega de alertas, revisa si falló un aviso por correo o si el evento se relaciona con un archivo." },
+    { title: "Sigue la historia de un archivo", text: "En Actividad, busca por nombre, RFC, traza o recibo. Consulta el estado antes de volver a cargar un archivo." },
+    { title: "Actúa según tu permiso", text: "En Mantenimiento puedes revisar pendientes y vencimientos. Solo administradores pueden retirar, conciliar, limpiar o iniciar un nuevo período de estadísticas. Lee el efecto de cada operación antes de confirmarla." }
+  ] },
+  policies: { title: "Primer recorrido por Políticas de archivos", steps: [
+    { title: "Encuentra la extensión", text: "Escribe, por ejemplo, .pdf en el buscador. Ordena los resultados y cambia el número de filas por página si necesitas comparar varias extensiones." },
+    { title: "Lee la regla completa", text: "Revisa si se acepta, si exige verificación profunda, cuál es su límite y quién hizo el último cambio. Abre su detalle para consultar el historial." },
+    { title: "Cambia una regla solo si tienes permiso", text: "Si eres administrador, selecciona Editar, escribe un motivo y guarda la nueva versión. Si eres usuario de consulta, puedes ver el detalle y el historial. Los cambios de política afectan las siguientes transferencias." }
+  ] },
+  access: { title: "Primer recorrido por Accesos al Dashboard", steps: [
+    { title: "Identifica a la persona", text: "Busca su RFC en la lista o usa Autorizar RFC. Cada persona entra con su propia e.firma." },
+    { title: "Asigna el permiso necesario", text: "Solo consulta puede observar; Administrador también puede cambiar reglas y ejecutar acciones. Elige el menor permiso que permita su trabajo." },
+    { title: "Verifica antes de confirmar", text: "Revisa RFC y perfil antes de guardar. Retirar acceso al Dashboard conserva la cuenta del cliente. Los permisos nuevos se aplican al volver a iniciar sesión." }
+  ] }
+};
 
 function navClass(isActive: boolean): string {
   return [

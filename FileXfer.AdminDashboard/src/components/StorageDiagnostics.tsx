@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { ServerHealthDto } from "../types/admin";
+import { HelpTrigger } from "./ContextualHelp";
 
 export function StorageDiagnostics({ server, onChanged }: { server: ServerHealthDto; onChanged: () => void }) {
   const { authorizedFetch, session } = useAuth();
@@ -33,7 +34,7 @@ export function StorageDiagnostics({ server, onChanged }: { server: ServerHealth
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.17em] text-amber-200/85">Prueba de acceso</p>
-          <h4 id="storage-diagnostic-title" className="mt-1 text-sm font-semibold text-white">Diagnóstico comprobado del almacenamiento</h4>
+          <div className="mt-1 flex items-center gap-2"><h4 id="storage-diagnostic-title" className="text-sm font-semibold text-white">Diagnóstico comprobado del almacenamiento</h4><HelpTrigger title="Acceso al almacenamiento" description="Verifica si la cuenta del servicio puede leer, escribir y borrar un archivo temporal en la ubicación de trabajo. La capacidad del disco se mide por separado." nextStep="Revisa cuál comprobación falló. Un administrador puede repetirla desde esta sección después de corregir la ruta o sus permisos." /></div>
         </div>
         <button
           type="button"
