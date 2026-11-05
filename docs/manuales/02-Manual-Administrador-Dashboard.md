@@ -403,13 +403,15 @@ El reinicio no elimina archivos, recibos, auditoría ni alertas. Los pendientes 
 
 ### Activar el correo institucional en el servidor de pruebas
 
-El responsable del servidor abre **PowerShell 7 como administrador** en SERVERDIG1, después de publicar el servidor 2.2.1.11, y ejecuta el script del paquete de despliegue:
+El responsable del servidor abre **PowerShell 7 como administrador** en SERVERDIG1, después de publicar el servidor 2.2.1.11, y ejecuta la revisión del configurador SMTP:
 
 ```powershell
-& 'D:\Releases\TransferASE\2.2.1.11\deployment\Configure-FileXferSmtp.ps1'
+& 'D:\Releases\TransferASE\2.2.1.11-smtp\Configure-FileXferSmtp.ps1'
 ```
 
 Los valores preparados son `mail.ase-sinaloa.gob.mx:465`, cuenta/remitente/destinatario `juan.carrillo@ase-sinaloa.gob.mx`. Capture la contraseña cuando se solicite: no la escriba en un comando, chat o ticket. El script prueba cifrado y autenticación sin enviar mensajes, guarda la configuración local con permisos restringidos y reinicia únicamente `FileXferPruebas.Server`. Necesita volver a comprobar la entrega con una alerta autorizada; autenticarse en SMTP no prueba por sí solo que un correo llegó al buzón.
+
+Si la validación falla, conserve la etapa y el código SMTP. Con `-ConnectionOnly` puede verificar la conexión y el saludo sin introducir la contraseña. Con `-CheckOnly` puede validar también la autenticación sin aplicar la configuración.
 
 La herramienta no reenvía automáticamente los eventos agotados. Para esos avisos, conserve el ID y coordine con soporte el reproceso. La configuración local contiene el secreto protegido por permisos Windows, no cifrado en reposo, y debe permanecer fuera del repositorio.
 

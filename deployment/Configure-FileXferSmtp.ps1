@@ -1,6 +1,6 @@
 #requires -Version 7.0
 #requires -RunAsAdministrator
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Configure')]
 param(
     [string]$InstallDirectory = 'C:\Servicios\FileXferPruebas',
     [ValidatePattern('^[A-Za-z0-9_.-]+$')][string]$ServiceName = 'FileXferPruebas.Server',
@@ -10,7 +10,8 @@ param(
     [string]$Recipient = 'juan.carrillo@ase-sinaloa.gob.mx',
     [uri]$HealthUri = 'https://192.168.2.243:51136/healthz',
     [uri]$ReadinessUri = 'https://192.168.2.243:51136/readyz',
-    [switch]$CheckOnly
+    [Parameter(Mandatory, ParameterSetName = 'Check')][switch]$CheckOnly,
+    [Parameter(Mandatory, ParameterSetName = 'Connection')][switch]$ConnectionOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -43,23 +44,76 @@ foreach ($name in @('Enabled','SmtpHost','SmtpPort','SmtpUseTls','SmtpUser','Smt
 }
 if ($overrides.Count -gt 0) { throw 'Existen variables Alerts__ que prevalecen sobre JSON. Resuélvalas con el administrador antes de aplicar este archivo; no se imprimieron sus valores.' }
 
-$securePassword = Read-Host "Contraseña SMTP de $Account (no se mostrará)" -AsSecureString
-if ($securePassword.Length -eq 0) { throw 'La contraseña no puede estar vacía.' }
-$credential = [Net.NetworkCredential]::new($Account, $securePassword)
+function Get-SmtpFailureMessage([Exception]$Exception, [string]$Stage) {
+    $prefix = "Falló la etapa de $Stage. La configuración sigue intacta."
+    for ($cause = $Exception; $null -ne $cause; $cause = $cause.InnerException) {
+        if ($cause -is [MailKit.Net.Smtp.SmtpCommandException]) {
+            $code = [int]$cause.StatusCode
+            $status = "SMTP $code"
+            # El texto remoto puede contener datos sensibles. Solo se muestra el código numérico.
+            if ($cause.Message -match '\A(?:[45][0-9]{2}[ -])?([45]\.[0-9]{1,3}\.[0-9]{1,3})(?=\s|\z)') {
+                $status += " ($($Matches[1]))"
+            }
+            $detail = switch ($code) {
+                421 { 'El servidor de correo no está disponible para esta conexión. Revise disponibilidad y restricciones de acceso.' }
+                454 { 'El servidor informó una falla temporal. Pida al administrador de correo revisar el servicio y los registros de acceso.' }
+                530 { 'El servidor exige un paso de autenticación o cifrado. Revise la política SMTP para esta conexión.' }
+                534 { 'El mecanismo de autenticación no cumple la política del servidor. Confirme qué método admite esta cuenta.' }
+                535 { 'El servidor rechazó la autenticación. Verifique el usuario, la contraseña y si SMTP AUTH está habilitado para la cuenta.' }
+                538 { 'El servidor exige cifrado para el mecanismo de autenticación.' }
+                554 { 'El servidor rechazó el comando. Pida al administrador de correo revisar la política y los registros de acceso.' }
+                default { 'Consulte ese código con el administrador de correo.' }
+            }
+            return "$prefix $status. $detail"
+        }
+        if ($cause -is [MailKit.Security.SslHandshakeException]) {
+            return "$prefix No se pudo establecer TLS. Revise el nombre del servidor, el puerto y el certificado."
+        }
+        if ($cause -is [Net.Sockets.SocketException]) {
+            return "$prefix Error de red $($cause.SocketErrorCode). Revise DNS y acceso al puerto SMTP desde este equipo."
+        }
+    }
+    return "$prefix Tipo de error: $($Exception.GetBaseException().GetType().Name)."
+}
+
+$securePassword = $null
+$credential = $null
+$authenticated = $false
 $smtp = [MailKit.Net.Smtp.SmtpClient]::new()
 $smtp.Timeout = 15000
 try {
     $socketOptions = if ($SmtpPort -eq 465) { [MailKit.Security.SecureSocketOptions]::SslOnConnect } else { [MailKit.Security.SecureSocketOptions]::StartTls }
-    $smtp.Connect($SmtpHost, $SmtpPort, $socketOptions)
-    $smtp.Authenticate($credential)
+    try {
+        $smtp.Connect($SmtpHost, $SmtpPort, $socketOptions)
+    } catch {
+        throw (Get-SmtpFailureMessage -Exception $_.Exception -Stage 'conexión, TLS o saludo SMTP')
+    }
+    "PASS: conexión, TLS y saludo SMTP comprobados en ${SmtpHost}:$SmtpPort."
+    $supportsAuth = $smtp.Capabilities.HasFlag([MailKit.Net.Smtp.SmtpCapabilities]::Authentication)
+    if ($ConnectionOnly) {
+        if ($supportsAuth) { 'El servidor anuncia SMTP AUTH.' } else { 'El servidor no anuncia SMTP AUTH para esta conexión.' }
+        return
+    }
+    if (-not $supportsAuth) { throw 'La conexión TLS se completó, pero el servidor no anuncia SMTP AUTH. La configuración sigue intacta.' }
+    $securePassword = Read-Host "Contraseña SMTP de $Account (no se mostrará)" -AsSecureString
+    if ($securePassword.Length -eq 0) { throw 'La contraseña no puede estar vacía.' }
+    $credential = [Net.NetworkCredential]::new($Account, $securePassword)
+    try {
+        $smtp.Authenticate($credential)
+        $authenticated = $true
+    } catch {
+        throw (Get-SmtpFailureMessage -Exception $_.Exception -Stage 'autenticación SMTP')
+    }
     'PASS: conexión TLS y autenticación SMTP comprobadas. No se envió ningún correo.'
-} catch {
-    throw ('SMTP no quedó verificado; no se cambió la configuración. Tipo de error: ' + $_.Exception.GetBaseException().GetType().Name)
 } finally {
+    if ($null -ne $securePassword -and (-not $authenticated -or $CheckOnly)) {
+        $credential = $null
+        $securePassword.Dispose()
+    }
     if ($smtp.IsConnected) { try { $smtp.Disconnect($true) } catch { } }
     $smtp.Dispose()
 }
-if ($CheckOnly) { $securePassword.Dispose(); return }
+if ($CheckOnly) { return }
 
 # El JSON queda accesible únicamente a SYSTEM, Administradores y la cuenta del servicio.
 # Es una protección por permisos de Windows, no cifrado del secreto en reposo.
