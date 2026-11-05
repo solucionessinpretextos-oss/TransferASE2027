@@ -7,8 +7,8 @@
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
 using System.Net;
-using System.Net.Mail;
-using System.Text;
+using MailKit.Security;
+using MimeKit;
 using FileXfer.Server.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -75,34 +75,34 @@ public sealed class EmailAlertSink : IAlertTransport
         SecurityAlertEnvelope alert,
         CancellationToken ct)
     {
-        using var smtp = new SmtpClient(_opt.SmtpHost!, _opt.SmtpPort)
+        using var smtp = new MailKit.Net.Smtp.SmtpClient
         {
-            DeliveryMethod = SmtpDeliveryMethod.Network,
-            EnableSsl = true,
-            UseDefaultCredentials = false,
             Timeout = checked(_opt.SmtpTimeoutSeconds * 1000)
         };
-        if (!string.IsNullOrWhiteSpace(_opt.SmtpUser))
-            smtp.Credentials = new NetworkCredential(_opt.SmtpUser, _opt.SmtpPassword);
-
-        using var mail = new MailMessage
+        using var mail = new MimeMessage
         {
-            From = new MailAddress(_opt.EmailFrom!),
             Subject = $"[ALERTA] {LogAlertSink.NormalizeTitle(alert.Title)}",
-            SubjectEncoding = Encoding.UTF8,
-            Body = LogAlertSink.Limit(alert.Message, 16_384),
-            BodyEncoding = Encoding.UTF8,
-            IsBodyHtml = false
+            Body = new TextPart("plain") { Text = LogAlertSink.Limit(alert.Message, 16_384) }
         };
-
+        mail.From.Add(MailboxAddress.Parse(_opt.EmailFrom!));
         foreach (var to in _opt.EmailTo!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            mail.To.Add(to);
+            mail.To.Add(MailboxAddress.Parse(to));
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(_opt.SmtpTimeoutSeconds));
-        await smtp.SendMailAsync(mail, timeout.Token);
+        await smtp.ConnectAsync(_opt.SmtpHost!, _opt.SmtpPort, SocketOptionsForPort(_opt.SmtpPort), timeout.Token);
+        if (!string.IsNullOrWhiteSpace(_opt.SmtpUser))
+            await smtp.AuthenticateAsync(_opt.SmtpUser, _opt.SmtpPassword!, timeout.Token);
+        await smtp.SendAsync(mail, timeout.Token);
+        // SMTP ya aceptó el mensaje. Un fallo posterior de QUIT no debe duplicar la entrega.
+        try { await smtp.DisconnectAsync(true, timeout.Token); }
+        catch (Exception) { /* Dispose cierra el socket; la entrega ya fue confirmada. */ }
         return AlertTransportResult.Delivered();
     }
+
+    // 465 exige TLS desde el primer byte. Los demás puertos exigen STARTTLS, sin texto plano.
+    public static SecureSocketOptions SocketOptionsForPort(int port) =>
+        port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;
 }
 
 public sealed class WebhookAlertSink : IAlertTransport

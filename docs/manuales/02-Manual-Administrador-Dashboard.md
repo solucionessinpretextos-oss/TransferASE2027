@@ -345,6 +345,61 @@ Estas acciones de recuperación no eliminan archivos ni reinician estadísticas.
 
 ## Cierre de sesión y seguridad
 
+### Permisos de Solo consulta
+
+El rol **Solo consulta** (`ops`) puede buscar, ordenar, paginar y leer datos. Estas acciones cambian la presentación de su pantalla, no la configuración del sistema.
+
+| Acción | Solo consulta | Administrador |
+|---|---|---|
+| Leer indicadores, alertas, políticas e historial | Sí | Sí |
+| Cambiar una extensión, su aceptación, límite o verificación | No | Sí, con motivo |
+| Crear una política o restaurar una versión anterior | No | Sí, con motivo |
+| Retirar/conciliar pendientes o limpiar vencidos | No | Sí, con motivo |
+| Reiniciar estadísticas | No | Sí, con motivo |
+| Ejecutar una comprobación de escritura del almacenamiento | No | Sí |
+| Administrar el directorio de RFC y sus permisos | No | Sí |
+
+En **Políticas de archivos**, Solo consulta verá **Ver detalle**, campos deshabilitados y el historial sin botones de restauración. El servidor también rechaza las operaciones de escritura: ocultar botones no sustituye la autorización.
+
+### Identificar una alerta que agotó los intentos
+
+1. Entre en **Dashboard → Diagnóstico**.
+2. Busque **Entrega de alertas**, debajo del diagnóstico de salud y almacenamiento.
+3. El filtro inicial es **Intentos agotados**. Puede cambiarlo a pendientes, en entrega, entregadas o todos, y elegir 10, 25, 50 o 100 avisos por página.
+4. Cada tarjeta muestra el evento, canal afectado, intentos fallidos acumulados, límite actual, RFC, fecha, código de error y cómo corregirlo.
+5. Si el aviso pertenece a un archivo, verá su nombre y, al abrir **Identificadores para seguimiento**, su ID de catálogo y traza. Los registros antiguos intentan recuperar el nombre desde BuDi; si ya no está disponible conservan el ID.
+6. Si el aviso corresponde a **Login SAT fallido**, puede indicar **sin archivo asociado**. En ese caso falló la notificación de un acceso rechazado; no significa que una subida agotó reintentos ni que se perdió un archivo.
+7. Use **Actualizar alertas** para consultar de inmediato. La sección también consulta cada 15 segundos mientras está abierta.
+
+| Lo que ve | Qué significa | Qué hacer |
+|---|---|---|
+| Webhook sin configurar | No existe ese canal en este ambiente | No atribuya a webhook un fallo que ocurrió en SMTP |
+| Intentos agotados / DeadLetter | El aviso ya no se vuelve a enviar automáticamente | Corregir el canal y solicitar a soporte un reproceso controlado por ID de evento |
+| Host de ejemplo | SMTP sigue usando una configuración inicial | Configurar el servidor de correo real |
+| Error de autenticación | El servidor de correo rechazó credenciales o permisos | Verificar cuenta, contraseña y permisos de envío con el administrador |
+| Error TLS | No se validó una conexión cifrada al destino | Revisar certificado, nombre y puerto; mantener la validación de certificados |
+| `SmtpException` en un registro antiguo | El historial guardó un código genérico | Revisar configuración; el sistema no inventa una causa que no se registró |
+
+**La salud sigue mostrando una advertencia mientras haya avisos agotados pendientes de atención.** Corregir la contraseña no reenvía esas filas antiguas. Reiniciar estadísticas tampoco entrega mensajes ni borra esta evidencia.
+
+### Reiniciar correctamente el período de estadísticas
+
+Un administrador entra en **Mantenimiento → Reiniciar estadísticas…**, escribe un motivo de 5 a 500 caracteres y confirma. Verá la nueva fecha de inicio. Desde el servidor 2.2.1.11 se corrige la validación que podía responder HTTP 500 antes de procesar el motivo.
+
+El reinicio no elimina archivos, recibos, auditoría ni alertas. Los pendientes y la salud siguen usando el estado real. Si la operación falla, conserve la hora y el mensaje mostrado; no repita envíos de archivos para corregir una estadística.
+
+### Activar el correo institucional en el servidor de pruebas
+
+El responsable del servidor abre **PowerShell 7 como administrador** en SERVERDIG1, después de publicar el servidor 2.2.1.11, y ejecuta el script del paquete de despliegue:
+
+```powershell
+& 'D:\Releases\TransferASE\2.2.1.11\deployment\Configure-FileXferSmtp.ps1'
+```
+
+Los valores preparados son `mail.ase-sinaloa.gob.mx:465`, cuenta/remitente/destinatario `juan.carrillo@ase-sinaloa.gob.mx`. Capture la contraseña cuando se solicite: no la escriba en un comando, chat o ticket. El script prueba cifrado y autenticación sin enviar mensajes, guarda la configuración local con permisos restringidos y reinicia únicamente `FileXferPruebas.Server`. Necesita volver a comprobar la entrega con una alerta autorizada; autenticarse en SMTP no prueba por sí solo que un correo llegó al buzón.
+
+La herramienta no reenvía automáticamente los eventos agotados. Para esos avisos, conserve el ID y coordine con soporte el reproceso. La configuración local contiene el secreto protegido por permisos Windows, no cifrado en reposo, y debe permanecer fuera del repositorio.
+
 - Presione **Cerrar sesión** al terminar.
 - No comparta el equipo con una sesión administrativa abierta.
 - No pegue tokens en la URL, consola o capturas.

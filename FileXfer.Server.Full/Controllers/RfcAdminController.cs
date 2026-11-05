@@ -16,7 +16,7 @@ namespace FileXfer.Server.Controllers;
 
 [ApiController]
 [Route("admin/rfcs")]
-[Authorize(Policy = "PrivilegedEfirma")]
+[Authorize(Policy = "AdminEfirma")]
 public sealed class RfcAdminController : ControllerBase
 {
     private readonly IDbContextFactory<FileXferDbContext> _dbf;

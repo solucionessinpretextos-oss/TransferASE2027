@@ -10,7 +10,8 @@ namespace FileXfer.Server.Controllers.Admin;
 [Authorize(Policy = "PrivilegedEfirma")]
 public sealed class MonitoringStatisticsController(MonitoringStatisticsService statistics) : ControllerBase
 {
-    public sealed record ResetRequest([property: Required, StringLength(500, MinimumLength = 5)] string Reason);
+    // MVC valida records posicionales desde los parámetros del constructor.
+    public sealed record ResetRequest([Required, StringLength(500, MinimumLength = 5)] string Reason);
 
     [HttpPost("reset")]
     [Authorize(Policy = "AdminEfirma")]

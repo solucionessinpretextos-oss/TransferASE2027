@@ -34,7 +34,7 @@ internal static class DashboardAccessSmokeTests
             await db.SaveChangesAsync();
         }
 
-        Require(typeof(RfcAdminController).GetCustomAttributes<AuthorizeAttribute>().Any(a => a.Policy == "PrivilegedEfirma"), "Falta e.firma en la ruta de RFC.");
+        Require(typeof(RfcAdminController).GetCustomAttributes<AuthorizeAttribute>().Any(a => a.Policy == "AdminEfirma"), "Falta e.firma de administrador en la ruta de RFC.");
         foreach (var name in new[] { "Create", "Update", "Activate", "Deactivate" })
             Require(typeof(RfcAdminController).GetMethod(name)!.GetCustomAttributes<AuthorizeAttribute>().Any(a => a.Roles == "admin"), $"{name} no exige admin.");
 

@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthContext";
 import { RecentTransferDto, SummaryResponse } from "../types/admin";
 import { MaintenanceRequest, TransferMaintenance } from "../components/TransferMaintenance";
 import { StorageDiagnostics } from "../components/StorageDiagnostics";
+import { AlertDeliveryDiagnostics } from "../components/AlertDeliveryDiagnostics";
 
 const REFRESH_INTERVAL_MS = 2_000;
 const VIEW_PREFERENCE_KEY = "filexfer.admin.dashboard-view.v1";
@@ -182,6 +183,7 @@ export function Dashboard() {
 
       <section id="dashboard-health" aria-label="Diagnóstico" hidden={section !== "health"}>
         <OperationalHealthGuide summary={summary} onChanged={() => setRevision(value => value + 1)} onMaintenanceAction={openMaintenance} />
+        <AlertDeliveryDiagnostics active={section === "health"} />
       </section>
 
       <section id="dashboard-maintenance" aria-label="Mantenimiento" hidden={section !== "maintenance"}>

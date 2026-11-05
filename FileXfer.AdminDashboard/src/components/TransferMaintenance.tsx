@@ -100,7 +100,7 @@ export function TransferMaintenance({ statisticsStartedUtc, onChanged, requestAc
   const allSelected = selectable.length > 0 && selectable.every(item => selected.includes(item.uploadId));
   const lastPage = Math.max(1, Math.ceil((pending?.totalCount ?? 0) / pageSize));
   const resultTone = operationResult ? cleanupResultTone(operationResult) : null;
-  const openAction = (next: MaintenanceAction) => { setReason(""); setError(null); setAction(next); };
+  const openAction = (next: MaintenanceAction) => { if (!canManage || busy) return; setReason(""); setError(null); setAction(next); };
 
   const execute = async (event: FormEvent) => {
     event.preventDefault();

@@ -295,21 +295,7 @@ builder.Services
         };
     });
 
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("PrivilegedEfirma", policy =>
-    {
-        policy.RequireAuthenticatedUser();
-        policy.RequireRole("admin", "ops");
-        policy.RequireClaim("amr", "efirma");
-    });
-    options.AddPolicy("AdminEfirma", policy =>
-    {
-        policy.RequireAuthenticatedUser();
-        policy.RequireRole("admin");
-        policy.RequireClaim("amr", "efirma");
-    });
-});
+builder.Services.AddAuthorization(DashboardAuthorization.Configure);
 
 const string AdminDashboardCorsPolicy = "AllowAdminDashboardDev";
 

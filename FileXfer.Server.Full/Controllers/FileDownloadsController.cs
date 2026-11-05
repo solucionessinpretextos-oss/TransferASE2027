@@ -82,7 +82,7 @@ public sealed class FileDownloadsController : ControllerBase
             {
                 await _alerts.NotifySecurityEventAsync(
                     "Descarga bloqueada por integridad",
-                    $"ArchivoLocalId={idArchivoLocal}; RFC={targetRfc}; Code={ex.Code}; TraceId={HttpContext.TraceIdentifier}",
+                    $"ArchivoLocalId={idArchivoLocal}; RFC={targetRfc}; Code={ex.Code}; TraceId={HttpContext.TraceIdentifier}; FileNameEncoded={Uri.EscapeDataString(descriptor.FileName)}",
                     cancellationToken);
             }
 

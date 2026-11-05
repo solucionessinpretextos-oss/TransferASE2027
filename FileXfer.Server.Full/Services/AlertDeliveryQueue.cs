@@ -337,7 +337,7 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
                 {
                     // Nunca registrar el mensaje completo de una excepción HTTP: puede contener
                     // una URL con credenciales o tokens en el query string.
-                    result = AlertTransportResult.Failed(ex.GetType().Name);
+                    result = AlertTransportResult.Failed(AlertFailureDescription.Code(ex));
                 }
             }
 

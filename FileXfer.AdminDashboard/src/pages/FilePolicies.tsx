@@ -19,7 +19,8 @@ function mbToBytes(value: string): number | null {
 }
 
 export function FilePolicies() {
-  const { authorizedFetch } = useAuth();
+  const { authorizedFetch, session } = useAuth();
+  const canManage = session?.roles.some(role => role.toLowerCase() === "admin") ?? false;
   const [policies, setPolicies] = useState<FilePolicyDto[]>([]);
   const [selected, setSelected] = useState<FilePolicyDto | null>(null);
   const [history, setHistory] = useState<FilePolicyRevisionDto[]>([]);
@@ -86,6 +87,7 @@ export function FilePolicies() {
   };
 
   const newPolicy = () => {
+    if (!canManage) return;
     setSelected(null);
     setExtension(".");
     setAllowed(true);
@@ -99,6 +101,7 @@ export function FilePolicies() {
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canManage || busy) return;
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -130,7 +133,7 @@ export function FilePolicies() {
   };
 
   const rollback = async (revision: FilePolicyRevisionDto) => {
-    if (!selected) return;
+    if (!selected || !canManage || busy) return;
     const rollbackReason = window.prompt(
       `Motivo para restaurar ${selected.extension} a la versión ${revision.version}:`
     );
@@ -226,10 +229,11 @@ export function FilePolicies() {
             Controle extensiones, inspección profunda y límites opcionales. Cada cambio crea una versión auditable.
           </p>
         </div>
-        <button onClick={newPolicy} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold hover:bg-emerald-500">
+        {canManage && <button onClick={newPolicy} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold hover:bg-emerald-500">
           Nueva extensión
-        </button>
+        </button>}
       </header>
+      {!canManage && <p role="status" className="rounded-xl border border-sky-400/25 bg-[#101e2a] p-4 text-sm text-sky-100">Modo solo consulta. Puede buscar, ordenar y consultar el historial. Las propiedades y las versiones solo pueden modificarlas los administradores.</p>}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Metric label="Configuradas" value={policies.length} />
@@ -287,7 +291,7 @@ export function FilePolicies() {
                     <td>v{policy.version}</td>
                     <td className="text-xs text-slate-400">{new Date(policy.updatedUtc).toLocaleString()}</td>
                     <td className="max-w-40 truncate text-xs text-slate-400" title={policy.updatedBy}>{policy.updatedBy}</td>
-                    <td className="pr-4 text-right"><button onClick={() => void beginEdit(policy)} className="text-emerald-300 hover:text-emerald-200">Editar</button></td>
+                    <td className="pr-4 text-right"><button onClick={() => void beginEdit(policy)} className="text-emerald-300 hover:text-emerald-200">{canManage ? "Editar" : "Ver detalle"}</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -357,7 +361,8 @@ export function FilePolicies() {
 
         <div className="space-y-6">
           <form onSubmit={save} className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <h3 className="font-semibold">{selected ? `Editar ${selected.extension}` : "Nueva política"}</h3>
+            <h3 className="font-semibold">{selected ? `${canManage ? "Editar" : "Consultar"} ${selected.extension}` : canManage ? "Nueva política" : "Seleccione una extensión para consultar"}</h3>
+            <fieldset disabled={!canManage || busy} className="space-y-4 disabled:opacity-80">
             <label className="block text-sm">Extensión
               <input value={extension} disabled={!!selected} onChange={e => setExtension(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 disabled:opacity-60" required />
             </label>
@@ -371,22 +376,23 @@ export function FilePolicies() {
             <label className="block text-sm">Tamaño máximo opcional (MB, vacío = sin límite)
               <input type="number" min="0.01" step="0.01" value={maxMb} onChange={e => setMaxMb(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2" />
             </label>
-            <label className="block text-sm">Motivo del cambio
+            {canManage && <label className="block text-sm">Motivo del cambio
               <textarea value={reason} onChange={e => setReason(e.target.value)} minLength={5} maxLength={512} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2" required />
-            </label>
-            <button disabled={busy} className="w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold hover:bg-emerald-500 disabled:opacity-50">Guardar nueva versión</button>
+            </label>}
+            </fieldset>
+            {canManage && <button disabled={busy} className="w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold hover:bg-emerald-500 disabled:opacity-50">Guardar nueva versión</button>}
           </form>
 
           {selected && (
             <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-              <h3 className="mb-3 font-semibold">Historial y rollback</h3>
+              <h3 className="mb-3 font-semibold">{canManage ? "Historial y rollback" : "Historial de versiones"}</h3>
               <div className="max-h-80 space-y-2 overflow-y-auto">
                 {history.map(revision => (
                   <div key={revision.id} className="rounded-lg border border-slate-800 p-3 text-xs">
                     <div className="flex justify-between gap-2"><strong>v{revision.version}</strong><span>{new Date(revision.changedUtc).toLocaleString()}</span></div>
                     <p className="mt-1 text-slate-300">{revision.changeReason}</p>
                     <p className="text-slate-500">{revision.changedBy} · {revision.isAllowed ? "habilitada" : "bloqueada"} · {revision.requiresVerification ? "verificada" : "sin verificación"}</p>
-                    {revision.version !== selected.version && <button onClick={() => void rollback(revision)} className="mt-2 text-amber-300 hover:text-amber-200">Restaurar esta configuración</button>}
+                    {canManage && revision.version !== selected.version && <button disabled={busy} onClick={() => void rollback(revision)} className="mt-2 text-amber-300 hover:text-amber-200">Restaurar esta configuración</button>}
                   </div>
                 ))}
               </div>

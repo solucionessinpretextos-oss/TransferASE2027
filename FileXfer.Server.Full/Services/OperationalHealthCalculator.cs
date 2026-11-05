@@ -68,7 +68,7 @@ public static class OperationalHealthCalculator
         if (!server.StorageOk)
             steps.Add(server.StorageDiagnostic?.Remediation ?? "Ejecute Comprobar almacenamiento ahora para obtener la operación que falló, la ruta y la cuenta que debe tener permisos.");
         if (!server.MessageBusOk) steps.Add("Revise la disponibilidad del canal de trabajo configurado.");
-        if (!server.AlertingOk) steps.Add("Revise el error de entrega de SMTP/webhook y los eventos en dead-letter antes de reintentar.");
+        if (!server.AlertingOk) steps.Add("Consulte Entrega de alertas en este diagnóstico: muestra canal, evento o archivo, intentos fallidos, causa y corrección. Corrija la configuración del canal antes de reintentar; reiniciar estadísticas no entrega las notificaciones pendientes.");
         return string.Join(" ", steps);
     }
 }

@@ -18,6 +18,7 @@ TestSqlServer2014QueryTranslation();
 TestHealthExplanations();
 await TestAdministrativeContractAsync();
 await TestDashboardCanonicalPathAsync();
+await DashboardHttpTests.RunAsync();
 Console.WriteLine("PASS monitoring reset=durable-and-audited history-and-receipts=preserved statistics-window=bounded live-health=not-hidden active-transfers=not-double-counted pending-expiry=distinct-from-idle legacy-activity=creation-fallback sql2014=queries-translated-without-openjson health-formula=explained dashboard-path=canonical-get-head-308");
 return 0;
 
