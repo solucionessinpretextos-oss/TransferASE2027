@@ -48,7 +48,7 @@ public static class OperationalHealthCalculator
             details.Add(server.StorageDiagnostic?.Message ?? "El almacenamiento no superó su comprobación funcional.");
         if (!server.MessageBusOk) details.Add("El canal interno de trabajo reporta una incidencia.");
         if (!server.AlertingOk)
-            details.Add($"Alertamiento degradado: {server.AlertQueuePending} entregas pendientes, {server.AlertDeadLetter} agotaron sus reintentos.");
+            details.Add($"Alertamiento degradado: {server.AlertQueuePending} entregas pendientes y {server.AlertDeadLetter} con intentos agotados en el período actual.");
         if (server.IsHealthy)
         {
             details.Clear();
@@ -68,7 +68,7 @@ public static class OperationalHealthCalculator
         if (!server.StorageOk)
             steps.Add(server.StorageDiagnostic?.Remediation ?? "Ejecute Comprobar almacenamiento ahora para obtener la operación que falló, la ruta y la cuenta que debe tener permisos.");
         if (!server.MessageBusOk) steps.Add("Revise la disponibilidad del canal de trabajo configurado.");
-        if (!server.AlertingOk) steps.Add("Consulte Entrega de alertas en este diagnóstico: muestra canal, evento o archivo, intentos fallidos, causa y corrección. Corrija la configuración del canal antes de reintentar; reiniciar estadísticas no entrega las notificaciones pendientes.");
+        if (!server.AlertingOk) steps.Add("Consulte el canal y la causa en Entrega de alertas. Después de resolver la incidencia, un administrador puede iniciar un período nuevo para excluir los avisos agotados del corte anterior. Las fallas activas y los avisos pendientes siguen bajo supervisión.");
         return string.Join(" ", steps);
     }
 }

@@ -11,8 +11,11 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 await TestStatisticsAndSummaryAsync();
+await TestAlertStatisticsHealthAsync();
 await TestLegacyActivityFallbackAsync();
 TestSqlServer2014QueryTranslation();
 TestHealthExplanations();
@@ -21,6 +24,78 @@ await TestDashboardCanonicalPathAsync();
 await DashboardHttpTests.RunAsync();
 Console.WriteLine("PASS monitoring reset=durable-and-audited history-and-receipts=preserved statistics-window=bounded live-health=not-hidden active-transfers=not-double-counted pending-expiry=distinct-from-idle legacy-activity=creation-fallback sql2014=queries-translated-without-openjson health-formula=explained dashboard-path=canonical-get-head-308");
 return 0;
+
+static async Task TestAlertStatisticsHealthAsync()
+{
+    var options = new DbContextOptionsBuilder<FileXferDbContext>()
+        .UseInMemoryDatabase("alert-health-" + Guid.NewGuid().ToString("N")).Options;
+    var factory = new TestDbFactory(options);
+    var stats = new AlertStatisticsService(factory);
+    var now = DateTimeOffset.UtcNow;
+    var old = Alert(1, AlertOutboxStatuses.DeadLetter, now.AddMinutes(-1));
+    var pending = Alert(2, AlertOutboxStatuses.Pending, now.AddMinutes(-2));
+    await using (var db = factory.CreateDbContext())
+    {
+        db.AlertOutboxDeliveries.AddRange(old, pending);
+        await db.SaveChangesAsync();
+    }
+
+    using var queue = new AlertDeliveryQueue(factory, new LogAlertSink(NullLogger<LogAlertSink>.Instance), [],
+        Options.Create(new AlertOptions { Enabled = true, WorkerCount = 1, QueueCapacity = 3, PollIntervalMilliseconds = 100 }),
+        NullLogger<AlertDeliveryQueue>.Instance);
+    await queue.StartAsync(default);
+    try
+    {
+        await ExpectSnapshotAsync(s => s.DeadLetter == 1 && s.Pending == 1 && Score(s) == 75);
+        var reset = await stats.ResetAsync("CARJ721209SD2", null, "Se corrigió el canal de correo", default);
+        await ExpectSnapshotAsync(s => s.DeadLetter == 0 && s.Pending == 1 && Score(s) == 100);
+
+        await using (var db = factory.CreateDbContext())
+        {
+            Require(await db.AlertOutboxDeliveries.AnyAsync(row => row.Id == old.Id && row.AttemptCount == 3),
+                "El período nuevo modificó el aviso agotado del historial.");
+            db.AlertOutboxDeliveries.Add(Alert(3, AlertOutboxStatuses.DeadLetter, reset.TimestampUtc));
+            await db.SaveChangesAsync();
+        }
+        await ExpectSnapshotAsync(s => s.DeadLetter == 1 && Score(s) == 75);
+
+        await stats.ResetAsync("CARJ721209SD2", null, "Corte posterior con cola activa", default);
+        await using (var db = factory.CreateDbContext())
+        {
+            db.AlertOutboxDeliveries.Add(Alert(4, AlertOutboxStatuses.Pending, DateTimeOffset.UtcNow));
+            await db.SaveChangesAsync();
+        }
+        await ExpectSnapshotAsync(s => s.DeadLetter == 0 && s.Pending == 2 && Score(s) == 75);
+        Console.WriteLine("PASS alert-health previous-exhaustion=excluded new-exhaustion=penalized saturation=preserved");
+    }
+    finally { await queue.StopAsync(default); }
+
+    async Task ExpectSnapshotAsync(Func<AlertDeliverySnapshot, bool> predicate)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if (predicate(queue.GetSnapshot())) return;
+            await Task.Delay(50);
+        }
+        throw new InvalidOperationException("La salud de alertas no reflejó el período y la cola esperados.");
+    }
+
+    static double Score(AlertDeliverySnapshot snapshot) => OperationalHealthCalculator.Score(
+        OperationalHealthCalculator.Explain(new ServerHealthDto
+        {
+            IsHealthy = snapshot.IsHealthy, DatabaseOk = true, StorageOk = true, MessageBusOk = true,
+            AlertingOk = snapshot.IsHealthy, AlertDeadLetter = snapshot.DeadLetter, AlertQueuePending = snapshot.Pending
+        }, 0, 0, 0));
+
+    static AlertOutboxDelivery Alert(int id, string status, DateTimeOffset updatedUtc) => new()
+    {
+        EventId = Guid.NewGuid(), Transport = "email", DeduplicationKey = $"fixture-{id}", Title = "Alerta de prueba",
+        Message = "Evento sintético", Status = status, OccurredUtc = updatedUtc, CreatedUtc = updatedUtc,
+        UpdatedUtc = updatedUtc, NextAttemptUtc = updatedUtc.AddHours(1),
+        AttemptCount = status == AlertOutboxStatuses.DeadLetter ? 3 : 0,
+        LastFailureCode = status == AlertOutboxStatuses.DeadLetter ? "fixture-error" : null
+    };
+}
 
 static async Task TestStatisticsAndSummaryAsync()
 {

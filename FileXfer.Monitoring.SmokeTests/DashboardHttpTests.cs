@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using FileXfer.Server.Controllers.Admin;
 using FileXfer.Server.Data;
 using FileXfer.Server.Options;
@@ -38,6 +39,7 @@ internal static class DashboardHttpTests
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton<IDbContextFactory<FileXferDbContext>>(factory);
         builder.Services.AddSingleton<MonitoringStatisticsService>();
+        builder.Services.AddSingleton<AlertStatisticsService>();
         builder.Services.AddSingleton<IFilePolicyService, FilePolicyService>();
         builder.Services.Configure<AlertOptions>(options => {
             options.Enabled = true; options.SmtpHost = "smtp.dev.tu-dominio.com";
@@ -122,6 +124,152 @@ internal static class DashboardHttpTests
                   EmailAlertSink.SocketOptionsForPort(25) == MailKit.Security.SecureSocketOptions.StartTls, "Se degradó TLS o no se soporta 465.");
             Check(AlertFailureDescription.Code(new MailKit.Security.AuthenticationException("secret")) == "smtp_authentication_failed", "No se clasificó SMTP sin exponer credenciales.");
             Console.WriteLine("PASS dashboard-http ops=11-writes-denied rfc-directory=admin-only efirma=required reset=200 invalid-reasons=400 reset-audit=preserved alerts=context-and-pagination-secret-safe smtp465=implicit-tls");
+
+            await VerifyAlertStatisticsAsync();
+
+            async Task VerifyAlertStatisticsAsync()
+            {
+                const string alertsRoute = "/admin/monitoring/alerts";
+                const string statisticsRoute = alertsRoute + "/statistics";
+                const string resetRoute = statisticsRoute + "/reset";
+                const string actorRfc = "CARJ721209SD2";
+                const string firstReason = "Canal SMTP verificado";
+                const string secondReason = "Cierre del período siguiente";
+
+                foreach (var (role, efirma, expected) in new[]
+                {
+                    ((string?)null, true, HttpStatusCode.Unauthorized),
+                    ("ops", true, HttpStatusCode.Forbidden),
+                    ("admin", false, HttpStatusCode.Forbidden)
+                })
+                {
+                    using var read = await Request("GET", statisticsRoute, role, efirma: efirma);
+                    using var write = await Request("POST", resetRoute, role, new { reason = firstReason }, efirma);
+                    Check(read.StatusCode == expected && write.StatusCode == expected,
+                        "La bitácora y el reinicio de alertas requieren administrador con e.firma.");
+                }
+
+                foreach (var invalid in new[] { "", "  abcd  ", new string('a', 501) })
+                {
+                    using var response = await Request("POST", resetRoute, "admin", new { reason = invalid });
+                    Check(response.StatusCode == HttpStatusCode.BadRequest, "Se aceptó un motivo inválido al reiniciar alertas.");
+                }
+
+                var pendingAlert = new AlertOutboxDelivery
+                {
+                    EventId = Guid.NewGuid(), Transport = "email", Title = "Aviso previo todavía pendiente",
+                    Message = "Evento sintético de prueba",
+                    Status = AlertOutboxStatuses.Pending, AttemptCount = 1, LastFailureCode = "SmtpException",
+                    OccurredUtc = loginAlert.OccurredUtc, UpdatedUtc = loginAlert.UpdatedUtc,
+                    NextAttemptUtc = DateTimeOffset.UtcNow.AddMinutes(5)
+                };
+                await using (var db = factory.CreateDbContext())
+                {
+                    db.AlertOutboxDeliveries.Add(pendingAlert);
+                    await db.SaveChangesAsync();
+                }
+
+                var before = await GetStatisticsAsync("?page=1&pageSize=10");
+                Check(before.GetProperty("statisticsStartedUtc").ValueKind == JsonValueKind.Null &&
+                      before.GetProperty("totalCount").GetInt32() == 0, "La bitácora parte con un reinicio inexistente.");
+                var reset = await ResetAlertStatisticsAsync("  " + firstReason + "  ");
+                var cutoff = reset.GetProperty("statisticsStartedUtc").GetDateTimeOffset();
+                Check(reset.GetProperty("exhaustedBefore").GetInt32() == 1, "El reinicio no informó el agotado del período anterior.");
+
+                var current = await GetDeliveriesAsync("?period=Current&status=All");
+                Check(current.StatisticsStartedUtc == cutoff && current.TotalCount == 1 &&
+                      current.Items[0].Id == pendingAlert.Id && current.Items[0].CountsInCurrentPeriod && current.Items[0].FailedAttempts == 1,
+                    "El período nuevo ocultó el pendiente previo o cambió sus intentos.");
+                var history = await GetDeliveriesAsync("");
+                Check(history.StatisticsStartedUtc == cutoff && history.TotalCount == 1 && history.Items[0].Id == loginAlert.Id &&
+                      !history.Items[0].CountsInCurrentPeriod && history.Items[0].Status == AlertOutboxStatuses.DeadLetter &&
+                      history.Items[0].FailedAttempts == 3 && history.Items[0].FailureCode == "SmtpException",
+                    "La consulta compatible perdió el agotado histórico o cambió su evidencia.");
+
+                await using (var db = factory.CreateDbContext())
+                {
+                    var audit = await db.AuditLogs.SingleAsync(row => row.Action == AlertStatisticsService.ResetAction);
+                    Check(audit.ActorRfc == actorRfc && audit.Ip == "127.0.0.1" && audit.TimestampUtc == cutoff && audit.Details!.Contains(firstReason),
+                        "El reinicio de alertas no dejó un corte con autor, origen y motivo en la base.");
+                    var pending = await db.AlertOutboxDeliveries.SingleAsync(row => row.Id == pendingAlert.Id);
+                    Check(pending.Status == AlertOutboxStatuses.Pending && pending.AttemptCount == 1 && pending.NextAttemptUtc == pendingAlert.NextAttemptUtc,
+                        "El reinicio modificó la programación de un aviso pendiente.");
+                    Check(await db.AlertOutboxDeliveries.CountAsync() == 2, "El reinicio eliminó entregas.");
+                    // Una alerta que nació antes del corte puede agotar sus intentos dentro del nuevo período.
+                    pending.Status = AlertOutboxStatuses.DeadLetter;
+                    pending.AttemptCount = 3;
+                    pending.UpdatedUtc = cutoff;
+                    await db.SaveChangesAsync();
+                }
+
+                current = await GetDeliveriesAsync("?period=Current&status=DeadLetter");
+                Check(current.TotalCount == 1 && current.Items[0].Id == pendingAlert.Id && current.Items[0].CountsInCurrentPeriod,
+                    "Un agotado nuevo que nació antes del corte no volvió a contar.");
+                var nextReset = await ResetAlertStatisticsAsync(secondReason);
+                var nextCutoff = nextReset.GetProperty("statisticsStartedUtc").GetDateTimeOffset();
+                Check(nextCutoff > cutoff && nextReset.GetProperty("exhaustedBefore").GetInt32() == 1,
+                    "El reinicio siguiente acumuló agotados históricos o no avanzó el corte.");
+
+                var latest = await GetStatisticsAsync("?page=1&pageSize=1");
+                var oldest = await GetStatisticsAsync("?page=2&pageSize=1");
+                var newestEntry = latest.GetProperty("items")[0];
+                var oldestEntry = oldest.GetProperty("items")[0];
+                Check(latest.GetProperty("page").GetInt32() == 1 && latest.GetProperty("pageSize").GetInt32() == 1 &&
+                      latest.GetProperty("statisticsStartedUtc").GetDateTimeOffset() == nextCutoff && latest.GetProperty("totalCount").GetInt32() == 2 &&
+                      oldest.GetProperty("page").GetInt32() == 2,
+                    "La bitácora no informó el corte activo o su paginación.");
+                Check(newestEntry.GetProperty("id").GetGuid() != Guid.Empty && newestEntry.GetProperty("actorRfc").GetString() == actorRfc &&
+                      newestEntry.GetProperty("reason").GetString() == secondReason && newestEntry.GetProperty("timestampUtc").GetDateTimeOffset() == nextCutoff &&
+                      newestEntry.GetProperty("previousStartedUtc").GetDateTimeOffset() == cutoff && newestEntry.GetProperty("exhaustedBefore").GetInt32() == 1,
+                    "La bitácora no mostró los datos del último corte primero.");
+                Check(oldestEntry.GetProperty("reason").GetString() == firstReason &&
+                      oldestEntry.GetProperty("previousStartedUtc").ValueKind == JsonValueKind.Null,
+                    "La segunda página perdió el primer corte o su motivo.");
+
+                const string legacyAuditRoute = "/audit/logs";
+                using (var legacy = await Request("GET", legacyAuditRoute, "ops"))
+                {
+                    legacy.EnsureSuccessStatusCode();
+                    var payload = await legacy.Content.ReadFromJsonAsync<JsonElement>();
+                    Check(payload.GetProperty("total").GetInt32() == 1 && payload.GetProperty("items").GetArrayLength() == 1 &&
+                          payload.GetProperty("items")[0].GetProperty("action").GetString() == MonitoringStatisticsService.ResetAction,
+                        "El endpoint legado expuso la bitácora de alertas u ocultó otra acción existente.");
+                }
+                var resetAuditRoute = legacyAuditRoute + "?action=" + Uri.EscapeDataString(AlertStatisticsService.ResetAction);
+                foreach (var (role, count) in new[] { ("ops", 0), ("admin", 2) })
+                {
+                    using var legacy = await Request("GET", resetAuditRoute, role);
+                    legacy.EnsureSuccessStatusCode();
+                    var payload = await legacy.Content.ReadFromJsonAsync<JsonElement>();
+                    Check(payload.GetProperty("total").GetInt32() == count && payload.GetProperty("items").GetArrayLength() == count,
+                        $"La auditoría legada aplicó visibilidad incorrecta para el rol {role}.");
+                }
+
+                using var invalidPeriod = await Request("GET", alertsRoute + "?period=Invalid", "ops");
+                Check(invalidPeriod.StatusCode == HttpStatusCode.BadRequest, "Se aceptó un período de alertas inválido.");
+                Console.WriteLine("PASS alert-statistics-http admin-efirma=required reason=required audit=paged legacy-audit=admin-only original-delivery=preserved pending=visible new-exhaustion=counted");
+
+                async Task<JsonElement> GetStatisticsAsync(string query)
+                {
+                    using var response = await Request("GET", statisticsRoute + query, "admin");
+                    response.EnsureSuccessStatusCode();
+                    return await response.Content.ReadFromJsonAsync<JsonElement>();
+                }
+
+                async Task<JsonElement> ResetAlertStatisticsAsync(string reason)
+                {
+                    using var response = await Request("POST", resetRoute, "admin", new { reason });
+                    response.EnsureSuccessStatusCode();
+                    return await response.Content.ReadFromJsonAsync<JsonElement>();
+                }
+
+                async Task<AlertDeliveriesController.PageDto> GetDeliveriesAsync(string query)
+                {
+                    using var response = await Request("GET", alertsRoute + query, "ops");
+                    response.EnsureSuccessStatusCode();
+                    return (await response.Content.ReadFromJsonAsync<AlertDeliveriesController.PageDto>())!;
+                }
+            }
         }
         finally { await app.StopAsync(); }
     }

@@ -91,7 +91,7 @@ const metricGuidance = [
   { labels: ["Base de datos"], description: "Comprueba la conexión a la base operativa que sostiene las sesiones, el catálogo, los recibos y la auditoría.", nextStep: "Si aparece degradada, consulta Diagnóstico y reporta la dependencia afectada." },
   { labels: ["Almacenamiento"], description: "Estado de acceso al destino de los archivos. Afecta la escritura, reanudación y descarga.", nextStep: "En Diagnóstico consulta el detalle de la ruta y la prueba de acceso." },
   { labels: ["Bus interno"], description: "Canal interno que coordina tareas y eventos del servidor. Una degradación puede retrasar pasos posteriores.", nextStep: "Consulta Diagnóstico para identificar si la falla afecta a otras dependencias." },
-  { labels: ["Alertas", "Alertamiento", "Alertas no entregadas"], description: "Estado del canal de notificación. Los avisos con intentos agotados quedan disponibles para diagnóstico.", nextStep: "En Diagnóstico → Entrega de alertas revisa el canal, la causa y el identificador del evento." }
+  { labels: ["Alertas", "Alertamiento", "Alertas no entregadas"], description: "El indicador considera los intentos agotados del período vigente y las fallas activas del canal. Los cortes anteriores siguen disponibles en el historial.", nextStep: "En Diagnóstico → Entrega de alertas revisa el canal, la causa y el identificador del evento." }
 ];
 
 type MetricHelpProps = Omit<ComponentProps<typeof HelpTrigger>, "title" | "description"> & {
@@ -249,7 +249,7 @@ export function Dashboard() {
 
       <section id="dashboard-health" aria-label="Diagnóstico" hidden={section !== "health"}>
         <OperationalHealthGuide summary={summary} onChanged={() => setRevision(value => value + 1)} onMaintenanceAction={openMaintenance} />
-        <AlertDeliveryDiagnostics active={section === "health"} />
+        <AlertDeliveryDiagnostics active={section === "health"} onReset={() => setRevision(value => value + 1)} />
       </section>
 
       <section id="dashboard-maintenance" aria-label="Mantenimiento" hidden={section !== "maintenance"}>
@@ -1037,7 +1037,7 @@ function buildHeatSignals(summary: SummaryResponse): Array<{ label: string; valu
     { label: "Base de datos", value: server.databaseOk ? "Disponible" : "Error", detail: "Dependencia crítica", severity: server.databaseOk ? "good" : "danger" },
     { label: "Almacenamiento", value: server.storageOk ? "Disponible" : "Error", detail: "Destino de archivos", severity: server.storageOk ? "good" : "danger" },
     { label: "Bus interno", value: server.messageBusOk ? "Disponible" : "Error", detail: "Mensajería operativa", severity: server.messageBusOk ? "good" : "danger" },
-    { label: "Alertas", value: server.alertingEnabled ? (server.alertingOk ? "Disponible" : "Error") : "Modo local", detail: `${server.alertDeadLetter} en dead-letter`, severity: server.alertingEnabled && !server.alertingOk ? "danger" : server.alertingEnabled ? "good" : "warning" },
+    { label: "Alertas", value: server.alertingEnabled ? (server.alertingOk ? "Disponible" : "Error") : "Modo local", detail: `${server.alertDeadLetter} con intentos agotados en el período`, severity: server.alertingEnabled && !server.alertingOk ? "danger" : server.alertingEnabled ? "good" : "warning" },
     { label: "En transmisión", value: String(transfers.activeTransfers), detail: "Streams actuales", severity: "good" },
     { label: "Reanudables", value: String(transfers.pausedResumableTransfers), detail: "Parciales protegidos", severity: countSeverity(transfers.pausedResumableTransfers, 3, 10) },
     { label: "Recibos", value: String(transfers.receiptsIssuedToday), detail: "Emitidos hoy", severity: transfers.completedToday > transfers.receiptsIssuedToday ? "warning" : "good" },
@@ -1071,7 +1071,7 @@ function buildTrafficSignals(summary: SummaryResponse): Array<{ label: string; d
     { label: "Disco", detail: server.diskCapacityAvailable === false ? "Sin medición de capacidad. Compruebe el diagnóstico de almacenamiento." : `${formatPercent(server.diskUsagePercent)} de utilización.`, severity: server.diskCapacityAvailable === false ? "warning" : inverseSeverity(server.diskUsagePercent, 75, 90) },
     { label: "Fallas recientes", detail: `${formatPercent(kpis.failureRateLastHourPercent)} durante la última hora.`, severity: inverseSeverity(kpis.failureRateLastHourPercent, 5, 15) },
     { label: "Pendientes sin actividad", detail: `${kpis.stalePendingTransfers} cargas llevan más de 30 minutos sin actividad.`, severity: countSeverity(kpis.stalePendingTransfers, 1, 5) },
-    { label: "Alertas no entregadas", detail: `${server.alertDeadLetter} mensajes en dead-letter.`, severity: countSeverity(server.alertDeadLetter, 1, 1) },
+    { label: "Alertas no entregadas", detail: `${server.alertDeadLetter} avisos con intentos agotados en el período actual.`, severity: countSeverity(server.alertDeadLetter, 1, 1) },
     { label: "Verificación omitida", detail: `${transfers.verificationBypassedToday} archivos por política explícita.`, severity: transfers.verificationBypassedToday > 0 ? "warning" : "good" },
     { label: "Recibos", detail: `${transfers.receiptsIssuedToday} emitidos para ${transfers.completedToday} completadas.`, severity: transfers.receiptsIssuedToday < transfers.completedToday ? "warning" : "good" }
   ];
@@ -1403,7 +1403,7 @@ export function buildExecutiveObservations(summary: SummaryResponse): Array<{ ti
   const attentionCount = kpis.stalePendingTransfers + expiredPending + transfers.failedLastHour + server.alertDeadLetter + penalizedHealth.length + (server.isHealthy ? 0 : 1);
   const attention = attentionCount === 0
     ? "No se detectan pendientes sin actividad, plazos vencidos ni alertas operativas en este corte."
-    : `Revise ${kpis.stalePendingTransfers} pendientes sin actividad, ${expiredPending} pendientes con plazo vencido y ${server.alertDeadLetter} alertas en dead-letter. El período medido registra ${transfers.failedLastHour} fallas en la última hora. ${penalizedHealth.length ? `La salud conserva deducciones por: ${penalizedHealth.map(item => item.label).join(", ")}; consulte el diagnóstico para sanearlas.` : server.isHealthy ? "" : "Hay dependencias degradadas; consulte el diagnóstico."}`;
+    : `Revise ${kpis.stalePendingTransfers} pendientes sin actividad, ${expiredPending} pendientes con plazo vencido y ${server.alertDeadLetter} alertas con intentos agotados en el período actual. El período medido registra ${transfers.failedLastHour} fallas en la última hora. ${penalizedHealth.length ? `La salud conserva deducciones por: ${penalizedHealth.map(item => item.label).join(", ")}; consulte el diagnóstico para sanearlas.` : server.isHealthy ? "" : "Hay dependencias degradadas; consulte el diagnóstico."}`;
   const continuity = transfers.pausedResumableTransfers === 0 && transfers.resumedTransfersToday === 0
     ? "No hay cargas parciales por reanudar. El mecanismo de continuidad permanece disponible y sin trabajo acumulado."
     : `${countLabel(transfers.pausedResumableTransfers, "carga reanudable", "cargas reanudables")} en custodia; hoy se recuperaron ${formatBytes(transfers.resumedBytesToday)} en ${countLabel(transfers.resumedTransfersToday, "transferencia", "transferencias")}.`;

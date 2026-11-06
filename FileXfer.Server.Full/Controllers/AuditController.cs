@@ -7,6 +7,7 @@
 // Esta documentación está pensada para orientar mantenimiento futuro sin tener que reconstruir el flujo desde cero.
 
 using FileXfer.Server.Data;
+using FileXfer.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +30,7 @@ public sealed class AuditController: ControllerBase
     if(from.HasValue && to.HasValue && from>to) return BadRequest(new{message="El rango de fechas es inválido"});
     await using var db=await _dbf.CreateDbContextAsync();
     var q=db.AuditLogs.AsQueryable();
+    if(!User.IsInRole("admin")) q=q.Where(x=>x.Action!=AlertStatisticsService.ResetAction);
     if(!string.IsNullOrWhiteSpace(rfc)) q=q.Where(x=>x.ActorRfc==rfc);
     if(!string.IsNullOrWhiteSpace(action)) q=q.Where(x=>x.Action==action);
     if(from!=null) q=q.Where(x=>x.TimestampUtc>=from);

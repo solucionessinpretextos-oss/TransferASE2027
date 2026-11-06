@@ -20,28 +20,40 @@ public sealed class AlertDeliveriesController(
     public sealed record DeliveryDto(Guid Id, Guid EventId, string Transport, string Title, string Status,
         int FailedAttempts, string? FailureCode, string FailureExplanation, string Remediation,
         DateTimeOffset OccurredUtc, DateTimeOffset UpdatedUtc, DateTimeOffset? NextAttemptUtc,
-        string? Rfc, int? FileId, string? FileName, string? TraceId, string RelatedItem);
+        string? Rfc, int? FileId, string? FileName, string? TraceId, string RelatedItem,
+        bool CountsInCurrentPeriod = true);
     public sealed record PageDto(int Page, int PageSize, int TotalCount, bool Enabled, bool EmailConfigured,
-        bool WebhookConfigured, int MaxDeliveryAttempts, string[] ConfigurationIssues, IReadOnlyList<DeliveryDto> Items);
+        bool WebhookConfigured, int MaxDeliveryAttempts, string[] ConfigurationIssues, IReadOnlyList<DeliveryDto> Items,
+        DateTimeOffset? StatisticsStartedUtc = null);
 
     [HttpGet]
     public async Task<ActionResult<PageDto>> Get(CancellationToken ct, [FromQuery] string status = "DeadLetter",
-        [FromQuery] int page = 1, [FromQuery] int pageSize = 10)
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 10, [FromQuery] string period = "All")
     {
         if (page < 1 || page > 100_000 || pageSize is < 1 or > 100)
             return BadRequest(new { message = "Página o tamaño de página fuera del rango permitido." });
         if (status is not ("All" or "DeadLetter" or "Pending" or "Processing" or "Delivered"))
             return BadRequest(new { message = "Estado de entrega inválido." });
+        if (period is not ("All" or "Current"))
+            return BadRequest(new { message = "Período de entrega inválido." });
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var startedUtc = await AlertStatisticsService.GetStartedUtcAsync(db, ct);
         var query = db.AlertOutboxDeliveries.AsNoTracking();
         if (status != "All") query = query.Where(row => row.Status == status);
+        if (period == "Current" && startedUtc is { } cutoff)
+            query = query.Where(row => row.UpdatedUtc >= cutoff || row.Status == AlertOutboxStatuses.Pending ||
+                row.Status == AlertOutboxStatuses.Processing);
         var count = await query.CountAsync(ct);
         var rows = await query.OrderByDescending(row => row.UpdatedUtc).ThenBy(row => row.Id)
             .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
         var items = new List<DeliveryDto>();
         foreach (var row in rows)
         {
-            var item = Describe(row);
+            var item = Describe(row) with
+            {
+                CountsInCurrentPeriod = startedUtc is null || row.UpdatedUtc >= startedUtc.Value ||
+                    row.Status is AlertOutboxStatuses.Pending or AlertOutboxStatuses.Processing
+            };
             // Las alertas antiguas solo guardaban el ID del catálogo. La consulta conserva el contexto RFC.
             if (item.FileId is > 0 && item.FileName is null && item.Rfc is not null && budi is not null)
             {
@@ -63,7 +75,7 @@ public sealed class AlertDeliveriesController(
         if (opt.Enabled && opt.SmtpHost?.Contains("tu-dominio", StringComparison.OrdinalIgnoreCase) == true)
             issues.Add("SMTP utiliza un servidor de ejemplo. Configure el host SMTP real, el puerto y las direcciones de envío; proporcione autenticación si el relay la requiere.");
         return Ok(new PageDto(page, pageSize, count, opt.Enabled, emailConfigured, webhookConfigured,
-            opt.MaxDeliveryAttempts, issues.ToArray(), items));
+            opt.MaxDeliveryAttempts, issues.ToArray(), items, startedUtc));
     }
 
     public static DeliveryDto Describe(AlertOutboxDelivery row)

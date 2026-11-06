@@ -37,6 +37,8 @@ public interface IAlertDeliveryState
 /// </summary>
 public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDeliveryState
 {
+    private sealed record StatisticsPeriod(DateTimeOffset? StartedUtc, int Exhausted, DateTimeOffset? LastFailureUtc);
+
     private static readonly TimeSpan HealthFailureWindow = TimeSpan.FromMinutes(5);
     private readonly IDbContextFactory<FileXferDbContext> _dbFactory;
     private readonly LogAlertSink _logSink;
@@ -47,7 +49,7 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
     private readonly SemaphoreSlim _wakeSignal = new(0, 1);
     private long _pending;
     private long _inFlight;
-    private long _deadLetter;
+    private StatisticsPeriod _statisticsPeriod = new(null, 0, null);
     private long _enqueuedTotal;
     private long _deliveredTotal;
     private long _deduplicatedTotal;
@@ -55,7 +57,8 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
     private long _retryTotal;
     private long _terminalFailureTotal;
     private long _lastDeliveredUnixMilliseconds;
-    private long _lastFailureUnixMilliseconds;
+    private long _lastTransportFailureUnixMilliseconds;
+    private long _lastOutboxFailureUnixMilliseconds;
     private long _lastDroppedUnixMilliseconds;
     private long _nextCleanupUnixMilliseconds;
     private long _lastDatabaseWarningUnixMilliseconds;
@@ -157,12 +160,15 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
     public AlertDeliverySnapshot GetSnapshot()
     {
         var now = DateTimeOffset.UtcNow;
+        var period = Volatile.Read(ref _statisticsPeriod);
         var lastDelivered = ReadTimestamp(ref _lastDeliveredUnixMilliseconds);
-        var lastFailure = ReadTimestamp(ref _lastFailureUnixMilliseconds);
+        var observedTransportFailure = ReadTimestamp(ref _lastTransportFailureUnixMilliseconds);
+        if (observedTransportFailure < period.StartedUtc) observedTransportFailure = null;
+        var lastFailure = Latest(period.LastFailureUtc, observedTransportFailure);
+        lastFailure = Latest(lastFailure, ReadTimestamp(ref _lastOutboxFailureUnixMilliseconds));
         var lastDropped = ReadTimestamp(ref _lastDroppedUnixMilliseconds);
         var pending = ToInt32Saturated(Interlocked.Read(ref _pending));
         var inFlight = ToInt32Saturated(Interlocked.Read(ref _inFlight));
-        var deadLetter = ToInt32Saturated(Interlocked.Read(ref _deadLetter));
         var recentFailure = lastFailure is not null &&
                             now - lastFailure.Value <= HealthFailureWindow &&
                             (lastDelivered is null || lastDelivered < lastFailure);
@@ -171,10 +177,10 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
 
         return new AlertDeliverySnapshot(
             _options.Enabled,
-            !_options.Enabled || (!recentFailure && !recentDrop && !saturated && deadLetter == 0),
+            !_options.Enabled || (!recentFailure && !recentDrop && !saturated && period.Exhausted == 0),
             pending,
             inFlight,
-            deadLetter,
+            period.Exhausted,
             _options.QueueCapacity,
             Interlocked.Read(ref _enqueuedTotal),
             Interlocked.Read(ref _deliveredTotal),
@@ -252,7 +258,7 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
                 catch (Exception ex)
                 {
                     Interlocked.Exchange(
-                        ref _lastFailureUnixMilliseconds,
+                        ref _lastOutboxFailureUnixMilliseconds,
                         DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                     LogDatabaseWarning(ex, "El worker del outbox SQL tuvo un fallo recuperable");
                     await Task.Delay(
@@ -408,11 +414,10 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
         }
 
         await db.SaveChangesAsync(ct);
-        Interlocked.Exchange(ref _lastFailureUnixMilliseconds, now.ToUnixTimeMilliseconds());
+        Interlocked.Exchange(ref _lastTransportFailureUnixMilliseconds, now.ToUnixTimeMilliseconds());
 
         if (terminal)
         {
-            Interlocked.Increment(ref _deadLetter);
             Interlocked.Increment(ref _terminalFailureTotal);
             ServerMetrics.AlertDeliveryFailedTotal.Add(1);
             _log.LogError(
@@ -480,6 +485,7 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
         {
             var now = DateTimeOffset.UtcNow;
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var startedUtc = await AlertStatisticsService.GetStartedUtcAsync(db, ct);
             var pending = await db.AlertOutboxDeliveries.CountAsync(
                 row => row.Status == AlertOutboxStatuses.Pending ||
                        (row.Status == AlertOutboxStatuses.Processing && row.LeaseExpiresUtc <= now),
@@ -487,23 +493,24 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
             var inFlight = await db.AlertOutboxDeliveries.CountAsync(
                 row => row.Status == AlertOutboxStatuses.Processing && row.LeaseExpiresUtc > now,
                 ct);
-            var deadLetter = await db.AlertOutboxDeliveries.CountAsync(
-                row => row.Status == AlertOutboxStatuses.DeadLetter,
-                ct);
+            var exhausted = db.AlertOutboxDeliveries.Where(row => row.Status == AlertOutboxStatuses.DeadLetter);
+            var failed = db.AlertOutboxDeliveries.Where(row => row.LastFailureCode != null);
+            if (startedUtc is { } cutoff)
+            {
+                exhausted = exhausted.Where(row => row.UpdatedUtc >= cutoff);
+                failed = failed.Where(row => row.Status != AlertOutboxStatuses.DeadLetter || row.UpdatedUtc >= cutoff);
+            }
+            var deadLetter = await exhausted.CountAsync(ct);
             var lastDelivered = await db.AlertOutboxDeliveries
                 .Where(row => row.DeliveredUtc != null)
                 .MaxAsync(row => (DateTimeOffset?)row.DeliveredUtc, ct);
-            var lastFailure = await db.AlertOutboxDeliveries
-                .Where(row => row.LastFailureCode != null)
-                .MaxAsync(row => (DateTimeOffset?)row.UpdatedUtc, ct);
+            var lastFailure = await failed.MaxAsync(row => (DateTimeOffset?)row.UpdatedUtc, ct);
 
             Interlocked.Exchange(ref _pending, pending);
             Interlocked.Exchange(ref _inFlight, inFlight);
-            Interlocked.Exchange(ref _deadLetter, deadLetter);
+            Volatile.Write(ref _statisticsPeriod, new StatisticsPeriod(startedUtc, deadLetter, lastFailure));
             if (lastDelivered is not null)
                 Interlocked.Exchange(ref _lastDeliveredUnixMilliseconds, lastDelivered.Value.ToUnixTimeMilliseconds());
-            if (lastFailure is not null)
-                Interlocked.Exchange(ref _lastFailureUnixMilliseconds, lastFailure.Value.ToUnixTimeMilliseconds());
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -512,7 +519,7 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
         catch (Exception ex)
         {
             Interlocked.Exchange(
-                ref _lastFailureUnixMilliseconds,
+                ref _lastOutboxFailureUnixMilliseconds,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             LogDatabaseWarning(ex, "No se pudo actualizar el estado del outbox SQL");
         }
@@ -646,6 +653,9 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
         var jitter = Random.Shared.Next(0, Math.Max(1, exponential / 4));
         return TimeSpan.FromMilliseconds(exponential + jitter);
     }
+
+    private static DateTimeOffset? Latest(DateTimeOffset? first, DateTimeOffset? second) =>
+        first is null || second > first ? second : first;
 
     private static DateTimeOffset? ReadTimestamp(ref long storage)
     {

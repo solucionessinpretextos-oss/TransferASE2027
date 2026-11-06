@@ -393,13 +393,17 @@ En **Políticas de archivos**, Solo consulta verá **Ver detalle**, campos desha
 | Error TLS | No se validó una conexión cifrada al destino | Revisar certificado, nombre y puerto; mantener la validación de certificados |
 | `SmtpException` en un registro antiguo | El historial guardó un código genérico | Revisar configuración; el sistema no inventa una causa que no se registró |
 
-**La salud sigue mostrando una advertencia mientras haya avisos agotados pendientes de atención.** Corregir la contraseña no reenvía esas filas antiguas. Reiniciar estadísticas tampoco entrega mensajes ni borra esta evidencia.
+### Iniciar un período nuevo de estadísticas de alertas
+
+Después de revisar la incidencia, un administrador con e.firma puede abrir **Diagnóstico → Entrega de alertas → Reiniciar estadísticas de alertas**, capturar un motivo de 5 a 500 caracteres y confirmar. Los avisos agotados antes del corte dejan de descontar puntos de salud. Los nuevos agotamientos, las fallas activas y la saturación de la cola siguen afectando el indicador.
+
+Use **Todo el historial** para ver los avisos de períodos anteriores y sus intentos. Las entregas pendientes siguen su curso y los avisos agotados conservan su estado. En **Bitácora de reinicios** el administrador puede revisar la fecha, el RFC responsable, el motivo y cuántos avisos agotados salieron del período.
 
 ### Reiniciar correctamente el período de estadísticas
 
 Un administrador entra en **Mantenimiento → Reiniciar estadísticas…**, escribe un motivo de 5 a 500 caracteres y confirma. Verá la nueva fecha de inicio. Desde el servidor 2.2.1.11 se corrige la validación que podía responder HTTP 500 antes de procesar el motivo.
 
-El reinicio no elimina archivos, recibos, auditoría ni alertas. Los pendientes y la salud siguen usando el estado real. Si la operación falla, conserve la hora y el mensaje mostrado; no repita envíos de archivos para corregir una estadística.
+El reinicio de Mantenimiento aplica a estadísticas de transferencias. Conserva archivos, recibos y auditoría. El período de alertas se administra por separado en **Entrega de alertas**.
 
 ### Activar el correo institucional en el servidor de pruebas
 

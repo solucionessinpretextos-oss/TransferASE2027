@@ -332,6 +332,7 @@ builder.Services.AddHostedService<ResumableUploadCleanupService>();
 builder.Services.AddSingleton<ISystemHealthService, SystemHealthService>();
 builder.Services.AddSingleton<StorageHealthProbe>();
 builder.Services.AddSingleton<MonitoringStatisticsService>();
+builder.Services.AddSingleton<AlertStatisticsService>();
 
 builder.Services.AddSingleton<LogAlertSink>();
 builder.Services.AddSingleton<EmailAlertSink>();

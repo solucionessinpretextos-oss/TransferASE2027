@@ -12,10 +12,10 @@ const auth = vi.hoisted(() => ({ authorizedFetch: vi.fn(), roles: ["ops"] }));
 vi.mock("../auth/AuthContext", () => ({ useAuth: () => ({ authorizedFetch: auth.authorizedFetch, session: { roles: auth.roles } }) }));
 const policy = { id: "policy", extension: ".pdf", isAllowed: true, requiresVerification: true, maxFileBytes: null, version: 2, updatedUtc: "2026-11-05T00:00:00Z", updatedBy: "Admin", changeReason: "Nueva política" };
 const history = [{ ...policy, id: "revision", version: 1, changedUtc: policy.updatedUtc, changedBy: "Admin", changeReason: "Primera versión" }];
-const alerts: AlertDeliveryPage = { page: 1, pageSize: 10, totalCount: 1, enabled: true, emailConfigured: true, webhookConfigured: false, maxDeliveryAttempts: 3, configurationIssues: [], items: [{
+const alerts: AlertDeliveryPage = { page: 1, pageSize: 10, totalCount: 1, enabled: true, emailConfigured: true, webhookConfigured: false, maxDeliveryAttempts: 3, configurationIssues: [], statisticsStartedUtc: null, items: [{
   id: "delivery-id", eventId: "event-id", transport: "email", title: "Login SAT fallido", status: "DeadLetter", failedAttempts: 3,
   failureCode: "SmtpException", failureExplanation: "La entrega SMTP falló.", remediation: "Revise el servidor de correo.", occurredUtc: policy.updatedUtc, updatedUtc: policy.updatedUtc,
-  rfc: "CARJ721209SD2", relatedItem: "Autenticación rechazada por certificado fuera de vigencia; sin archivo asociado."
+  rfc: "CARJ721209SD2", relatedItem: "Autenticación rechazada por certificado fuera de vigencia; sin archivo asociado.", countsInCurrentPeriod: true
 }] };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 let container: HTMLDivElement; let root: Root;
@@ -75,7 +75,9 @@ describe("Dashboard de consulta y diagnóstico", () => {
     expect(container.textContent).toContain("3 · límite actual 3");
     expect(container.textContent).toContain("ya no se reintenta automáticamente");
     expect(container.textContent).toContain("event-id");
-    expect(auth.authorizedFetch).toHaveBeenCalledWith("/admin/monitoring/alerts?status=DeadLetter&page=1&pageSize=10", expect.anything());
+    expect(auth.authorizedFetch).toHaveBeenCalledWith("/admin/monitoring/alerts?status=DeadLetter&page=1&pageSize=10&period=Current", expect.anything());
+    expect(button("Reiniciar estadísticas de alertas")).toBeUndefined();
+    expect(button("Ver bitácora de reinicios")).toBeUndefined();
   });
   it("muestra nombre, catálogo y traza si la alerta sí está asociada con un archivo", async () => {
     auth.authorizedFetch.mockResolvedValue(json({ ...alerts, items: [{ ...alerts.items[0], title: "Descarga bloqueada", fileId: 51, fileName: "Informe.pdf", relatedItem: "Informe.pdf", traceId: "trace-51" }] }));
@@ -92,5 +94,62 @@ describe("Dashboard de consulta y diagnóstico", () => {
     auth.authorizedFetch.mockResolvedValue(json({}, 503));
     await act(async () => root.render(<AlertDeliveryDiagnostics />));
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("HTTP 503");
+  });
+
+  it("permite al administrador reiniciar con motivo y revisar el historial y la bitácora paginada", async () => {
+    auth.roles = ["admin"];
+    const onReset = vi.fn();
+    const cut = "2026-11-06T12:00:00Z";
+    let didReset = false;
+    auth.authorizedFetch.mockImplementation(async (path: string) => {
+      if (path.endsWith("/statistics/reset")) {
+        didReset = true;
+        return json({ statisticsStartedUtc: cut, exhaustedBefore: 1, message: "Nuevo período registrado." });
+      }
+      if (path.includes("/statistics?")) {
+        const page = path.includes("page=2") ? 2 : 1;
+        return json({ statisticsStartedUtc: cut, page, pageSize: 10, totalCount: 11, items: [{
+          id: `reset-${page}`, timestampUtc: cut, actorRfc: "CARJ721209SD2", reason: page === 1 ? "Canal SMTP recuperado" : "Reinicio anterior",
+          previousStartedUtc: null, exhaustedBefore: 1
+        }] });
+      }
+      if (!didReset) return json(alerts);
+      return path.endsWith("period=All")
+        ? json({ ...alerts, statisticsStartedUtc: cut, items: [{ ...alerts.items[0], countsInCurrentPeriod: false }] })
+        : json({ ...alerts, statisticsStartedUtc: cut, items: [], totalCount: 0 });
+    });
+    await act(async () => root.render(<AlertDeliveryDiagnostics onReset={onReset} />));
+    const trigger = button("Reiniciar estadísticas de alertas");
+    trigger.focus();
+    await click(trigger);
+    const dialog = container.querySelector('[role="dialog"]')!;
+    const input = dialog.querySelector("textarea")!;
+    expect(document.activeElement).toBe(input);
+    expect(button("Confirmar reinicio").disabled).toBe(true);
+    await act(async () => dialog.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(auth.authorizedFetch.mock.calls.some(call => call[1]?.method === "POST")).toBe(false);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "  Canal SMTP recuperado  ");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click(button("Confirmar reinicio"));
+    expect(auth.authorizedFetch).toHaveBeenCalledWith("/admin/monitoring/alerts/statistics/reset", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ reason: "Canal SMTP recuperado" })
+    }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(container.querySelector(`time[datetime="${cut}"]`)).not.toBeNull();
+    expect(container.textContent).not.toContain("Login SAT fallido");
+    const period = Array.from(container.querySelectorAll("select")).find(item => Array.from(item.options).some(option => option.value === "All" && option.textContent === "Todo el historial"))!;
+    await act(async () => { period.value = "All"; period.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(container.textContent).toContain("Login SAT fallido");
+    expect(container.textContent).toContain("Histórico · fuera del período actual");
+    await click(button("Ver bitácora de reinicios"));
+    expect(container.textContent).toContain("Canal SMTP recuperado");
+    const auditNext = container.querySelector<HTMLButtonElement>('nav[aria-label="Páginas de la bitácora"] button:last-child')!;
+    await click(auditNext);
+    expect(auth.authorizedFetch).toHaveBeenCalledWith("/admin/monitoring/alerts/statistics?page=2&pageSize=10", expect.anything());
+    expect(container.textContent).toContain("Reinicio anterior");
   });
 });
