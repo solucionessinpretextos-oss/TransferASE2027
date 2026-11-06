@@ -7,6 +7,7 @@ import { RecentTransferDto, SummaryResponse } from "../types/admin";
 import { MaintenanceRequest, TransferMaintenance } from "../components/TransferMaintenance";
 import { StorageDiagnostics } from "../components/StorageDiagnostics";
 import { AlertDeliveryDiagnostics } from "../components/AlertDeliveryDiagnostics";
+import { AlertIncidents, OperationalAudit } from "../components/DashboardReports";
 import { HelpSteps, HelpTrigger } from "../components/ContextualHelp";
 
 const REFRESH_INTERVAL_MS = 2_000;
@@ -17,13 +18,14 @@ type Tone = "gold" | "green" | "red" | "blue" | "slate";
 type Severity = "good" | "warning" | "danger";
 type StatusKind = "completed" | "transmitting" | "pending" | "paused" | "catalogFailed" | "failed" | "cancelled" | "unknown";
 type KpiTone = "green" | "red" | "blue" | "gold" | "violet" | "slate";
-type DashboardSection = "overview" | "health" | "maintenance" | "activity";
+type DashboardSection = "overview" | "health" | "maintenance" | "activity" | "audit";
 
 const dashboardSections = [
   { id: "overview", label: "Panorama" },
   { id: "health", label: "Diagnóstico" },
   { id: "maintenance", label: "Mantenimiento" },
-  { id: "activity", label: "Actividad" }
+  { id: "activity", label: "Actividad" },
+  { id: "audit", label: "Bitácora" }
 ] as const;
 
 const dashboardViews = [
@@ -130,7 +132,8 @@ async function fetchSummary(
 }
 
 export function Dashboard() {
-  const { authorizedFetch } = useAuth();
+  const { authorizedFetch, session } = useAuth();
+  const isAdmin = session?.roles.some(role => role.toLowerCase() === "admin") ?? false;
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -138,6 +141,10 @@ export function Dashboard() {
   const [section, setSection] = useState<DashboardSection>("overview");
   const [revision, setRevision] = useState(0);
   const [maintenanceRequest, setMaintenanceRequest] = useState<MaintenanceRequest | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin && section === "audit") setSection("overview");
+  }, [isAdmin, section]);
 
   useEffect(() => {
     let disposed = false;
@@ -216,8 +223,8 @@ export function Dashboard() {
         </div>
       )}
 
-      <nav className="dashboard-section-nav" aria-label="Secciones del Dashboard">
-        {dashboardSections.map(item => (
+      <nav className={isAdmin ? "dashboard-section-nav dashboard-section-nav--audit" : "dashboard-section-nav"} aria-label="Secciones del Dashboard">
+        {dashboardSections.filter(item => item.id !== "audit" || isAdmin).map(item => (
           <button key={item.id} id={`dashboard-nav-${item.id}`} type="button" aria-pressed={section === item.id}
             aria-controls={`dashboard-${item.id}`} onClick={() => setSection(item.id)}>
             {item.label}
@@ -249,6 +256,7 @@ export function Dashboard() {
 
       <section id="dashboard-health" aria-label="Diagnóstico" hidden={section !== "health"}>
         <OperationalHealthGuide summary={summary} onChanged={() => setRevision(value => value + 1)} onMaintenanceAction={openMaintenance} />
+        <AlertIncidents active={section === "health"} refreshKey={revision} />
         <AlertDeliveryDiagnostics active={section === "health"} onReset={() => setRevision(value => value + 1)} />
       </section>
 
@@ -259,6 +267,10 @@ export function Dashboard() {
       <section id="dashboard-activity" aria-label="Actividad" hidden={section !== "activity"}>
         <RecentTransfers transfers={summary.recentTransfers} />
       </section>
+
+      {isAdmin && <section id="dashboard-audit" aria-label="Bitácora" hidden={section !== "audit"}>
+        <OperationalAudit active={section === "audit"} />
+      </section>}
 
       <footer className="flex flex-col gap-2 border-t border-white/[0.06] pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
         <span>Resumen cada 2 s · Cola de pendientes cada 15 s · Fechas en hora local</span>

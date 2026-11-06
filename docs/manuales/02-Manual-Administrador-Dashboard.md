@@ -399,6 +399,17 @@ Después de revisar la incidencia, un administrador con e.firma puede abrir **Di
 
 Use **Todo el historial** para ver los avisos de períodos anteriores y sus intentos. Las entregas pendientes siguen su curso y los avisos agotados conservan su estado. En **Bitácora de reinicios** el administrador puede revisar la fecha, el RFC responsable, el motivo y cuántos avisos agotados salieron del período.
 
+### Probar un canal y reprocesar un aviso
+
+1. Entre con e.firma de administrador a **Diagnóstico → Entrega de alertas**. Use **Probar correo SMTP…** o **Probar webhook…** para el canal habilitado que quiere comprobar.
+2. Revise el canal y confirme. La prueba usa el destino configurado y aparece en el seguimiento de entregas. Espere el estado final. **Aceptado por el canal** confirma que el destino SMTP o webhook respondió correctamente. Para correo, revise también que el mensaje llegó al buzón.
+3. Para un aviso previo, filtre **Intentos agotados**. Si pertenece a un período anterior, seleccione **Todo el historial**. Use **Reprocesar** en el aviso, escriba el motivo y confirme. Se registra una entrega nueva del mismo evento y el aviso agotado original queda disponible como evidencia.
+4. Consulte **Bitácora** en el menú superior para revisar fecha, RFC responsable, motivo y estado registrado. También incluye reinicios, revisiones de políticas, accesos y mantenimiento. Los filtros por fechas, RFC y tipo de evento se combinan.
+
+### Investigar incidencias por canal y causa
+
+En **Diagnóstico → Incidencias de alertas** puede consultar los avisos afectados por cada código, cuántos siguen activos, cuántos agotaron intentos y la última entrega aceptada por el canal. **Primera observación disponible** es el registro de fallo más antiguo que conserva el historial consultado.
+
 ### Reiniciar correctamente el período de estadísticas
 
 Un administrador entra en **Mantenimiento → Reiniciar estadísticas…**, escribe un motivo de 5 a 500 caracteres y confirma. Verá la nueva fecha de inicio. Desde el servidor 2.2.1.11 se corrige la validación que podía responder HTTP 500 antes de procesar el motivo.

@@ -372,6 +372,7 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
         row.LeaseExpiresUtc = null;
         row.LastFailureCode = null;
         row.UpdatedUtc = now;
+        await AlertOperationsService.RecordOutcomeAsync(db, row, ct);
         await db.SaveChangesAsync(ct);
 
         Interlocked.Increment(ref _deliveredTotal);
@@ -404,6 +405,7 @@ public sealed class AlertDeliveryQueue : BackgroundService, IAlertSink, IAlertDe
         if (terminal)
         {
             row.Status = AlertOutboxStatuses.DeadLetter;
+            await AlertOperationsService.RecordOutcomeAsync(db, row, ct);
         }
         else
         {

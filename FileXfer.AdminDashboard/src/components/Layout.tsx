@@ -112,9 +112,9 @@ export function Layout({ children }: { children: ReactNode }) {
 const helpGuides = {
   dashboard: { title: "Primer recorrido por el Dashboard", steps: [
     { title: "Empieza en Panorama", text: "Lee la salud operativa y las tarjetas superiores. Las diez presentaciones muestran el mismo corte; elige la que te resulte más clara. Los círculos con i explican cómo leer cada dato." },
-    { title: "Entiende qué requiere atención", text: "Abre Diagnóstico para ver qué descontó puntos y cómo corregirlo. En Entrega de alertas, revisa si falló un aviso por correo o si el evento se relaciona con un archivo." },
+    { title: "Entiende qué requiere atención", text: "Abre Diagnóstico para ver qué descontó puntos. Incidencias de alertas agrupa las causas por canal y muestra la última entrega aceptada. En Entrega de alertas puedes abrir el detalle de un aviso." },
     { title: "Sigue la historia de un archivo", text: "En Actividad, busca por nombre, RFC, traza o recibo. Consulta el estado antes de volver a cargar un archivo." },
-    { title: "Actúa según tu permiso", text: "En Mantenimiento puedes revisar pendientes y vencimientos. Solo administradores pueden retirar, conciliar, limpiar o iniciar un nuevo período de estadísticas. Lee el efecto de cada operación antes de confirmarla." }
+    { title: "Actúa según tu permiso", text: "En Mantenimiento puedes revisar pendientes y vencimientos. Si administras el Dashboard, puedes probar un canal, reprocesar avisos agotados y consultar el resultado y el responsable en Bitácora." }
   ] },
   policies: { title: "Primer recorrido por Políticas de archivos", steps: [
     { title: "Encuentra la extensión", text: "Escribe, por ejemplo, .pdf en el buscador. Ordena los resultados y cambia el número de filas por página si necesitas comparar varias extensiones." },

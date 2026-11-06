@@ -1,5 +1,6 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { type AlertAction, type AlertChannel, AlertDeliveryActions } from "./AlertDeliveryActions";
 import { HelpTrigger } from "./ContextualHelp";
 
 export interface AlertDelivery {
@@ -33,6 +34,10 @@ export function AlertDeliveryDiagnostics({ active = true, onReset }: { active?: 
   const [data, setData] = useState<AlertDeliveryPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [action, setAction] = useState<AlertAction | null>(null);
+  const refresh = useCallback(() => setRevision(value => value + 1), []);
+  const channelEnabled = (channel: string): channel is AlertChannel => !!data?.enabled &&
+    ((channel === "email" && data.emailConfigured) || (channel === "webhook" && data.webhookConfigured));
   useEffect(() => {
     if (!active) return;
     const abort = new AbortController();
@@ -65,7 +70,7 @@ export function AlertDeliveryDiagnostics({ active = true, onReset }: { active?: 
         <div className="mt-1 flex items-center gap-2"><h3 id="alert-delivery-title" className="text-lg font-semibold text-white">Entrega de alertas</h3><HelpTrigger title="Entrega de alertas" description="Estos registros cuentan los intentos de notificar un evento por correo o webhook. Una alerta puede corresponder a un archivo, una sesión o un evento del sistema." nextStep="Filtra por Intentos agotados y revisa el canal, la causa y el ID del evento antes de solicitar un reproceso." /></div>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">Identifique qué aviso falló, por qué y a qué archivo o evento corresponde. Los intentos son de entrega de la notificación; no de subida del archivo.</p>
       </div>
-      <button type="button" className={control} disabled={loading} onClick={() => setRevision(value => value + 1)}>{loading ? "Consultando…" : "Actualizar alertas"}</button>
+      <button type="button" className={control} disabled={loading} onClick={refresh}>{loading ? "Consultando…" : "Actualizar alertas"}</button>
     </div>
     {data && <p className="mt-4 text-xs leading-5 text-slate-300">
       {data.statisticsStartedUtc ? <>Período de alertas iniciado el <time dateTime={data.statisticsStartedUtc}>{date(data.statisticsStartedUtc)}</time>.</> : "Período inicial, sin reinicio de estadísticas de alertas."}
@@ -76,6 +81,11 @@ export function AlertDeliveryDiagnostics({ active = true, onReset }: { active?: 
       setRevision(value => value + 1);
       onReset?.();
     }} />}
+    {active && isAdmin && data?.enabled && (data.emailConfigured || data.webhookConfigured) && <div className="mt-4 flex flex-wrap gap-2" aria-label="Probar canales configurados">
+      {data.emailConfigured && <button type="button" className={control} disabled={!!action} onClick={event => setAction({ kind: "test", channel: "email", trigger: event.currentTarget })}>Probar correo SMTP…</button>}
+      {data.webhookConfigured && <button type="button" className={control} disabled={!!action} onClick={event => setAction({ kind: "test", channel: "webhook", trigger: event.currentTarget })}>Probar webhook…</button>}
+    </div>}
+    {isAdmin && <AlertDeliveryActions active={active} action={action} onDismiss={() => setAction(null)} onChanged={refresh} />}
     <div className="mt-4 flex flex-wrap items-end gap-3">
       <label className="grid gap-1 text-xs text-slate-300">Estado de entrega
         <select className={control} value={status} onChange={event => { setStatus(event.target.value); setPage(1); }}>
@@ -120,7 +130,13 @@ export function AlertDeliveryDiagnostics({ active = true, onReset }: { active?: 
           <p className="mt-1"><strong>Cómo corregirlo: </strong>{item.remediation}</p>
           <p className="mt-1 font-mono">Código: {item.failureCode}</p>
         </div>}
-        {item.status === "DeadLetter" && <p className="mt-3 text-xs leading-5 text-rose-200">Este aviso ya no se reintenta automáticamente. Corrija el canal y solicite el reproceso controlado de este evento. Reiniciar estadísticas no lo reenvía ni elimina su evidencia.</p>}
+        {item.status === "DeadLetter" && <>
+          <p className="mt-3 text-xs leading-5 text-rose-200">Este aviso ya no se reintenta automáticamente. Una vez corregido el canal, un administrador puede reprocesarlo. Su evidencia se conserva con los cambios de período.</p>
+          {active && isAdmin && channelEnabled(item.transport) &&
+            <button type="button" className={`${control} mt-3`} disabled={!!action} aria-label={`Reprocesar aviso ${item.title}`} onClick={event => {
+              if (channelEnabled(item.transport)) setAction({ kind: "reprocess", channel: item.transport, id: item.id, title: item.title, trigger: event.currentTarget });
+            }}>Reprocesar aviso…</button>}
+        </>}
         {item.nextAttemptUtc && <p className="mt-3 text-xs text-slate-300">Próximo intento programado: {date(item.nextAttemptUtc)}</p>}
         <details className="mt-3 text-xs text-slate-400"><summary className="cursor-pointer text-slate-200">Identificadores para seguimiento</summary>
           <p className="mt-2">Evento: {item.eventId}</p><p>Entrega: {item.id}</p><p>Fecha del evento: {date(item.occurredUtc)}</p>

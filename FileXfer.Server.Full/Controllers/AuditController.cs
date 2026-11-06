@@ -30,7 +30,8 @@ public sealed class AuditController: ControllerBase
     if(from.HasValue && to.HasValue && from>to) return BadRequest(new{message="El rango de fechas es inválido"});
     await using var db=await _dbf.CreateDbContextAsync();
     var q=db.AuditLogs.AsQueryable();
-    if(!User.IsInRole("admin")) q=q.Where(x=>x.Action!=AlertStatisticsService.ResetAction);
+    if(!User.IsInRole("admin")) q=q.Where(x=>x.Action!=AlertStatisticsService.ResetAction &&
+        x.Action!=AlertOperationsService.TestAction && x.Action!=AlertOperationsService.ReprocessAction);
     if(!string.IsNullOrWhiteSpace(rfc)) q=q.Where(x=>x.ActorRfc==rfc);
     if(!string.IsNullOrWhiteSpace(action)) q=q.Where(x=>x.Action==action);
     if(from!=null) q=q.Where(x=>x.TimestampUtc>=from);
