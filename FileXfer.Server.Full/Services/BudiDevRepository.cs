@@ -220,15 +220,30 @@ namespace FileXfer.Server.Services
             if ((idRequerimiento.GetValueOrDefault() > 0) == (idResultado.GetValueOrDefault() > 0))
                 return false;
 
-            if (!await IsOficioContextAuthorizedAsync(
-                    rfc,
-                    periodo,
-                    idEnte,
-                    idAuditoria,
-                    idActo,
-                    idOficio,
-                    ct))
+            if (!await IsAuditContextAuthorizedAsync(rfc, periodo, idEnte, idAuditoria, ct))
                 return false;
+
+            if (idActo == 16)
+            {
+                if (!await IsCedulaContextAuthorizedAsync(
+                        idEnte,
+                        idAuditoria,
+                        idOficio,
+                        idResultado,
+                        ct))
+                    return false;
+            }
+            else if (!await IsOficioContextAuthorizedAsync(
+                         rfc,
+                         periodo,
+                         idEnte,
+                         idAuditoria,
+                         idActo,
+                         idOficio,
+                         ct))
+            {
+                return false;
+            }
 
             if (idResultado.GetValueOrDefault() > 0)
             {
@@ -240,10 +255,7 @@ namespace FileXfer.Server.Services
                 }
 
                 if (idActo == 16)
-                {
-                    var cedulas = await GetResultadosCedulasPorAuditoriaAsync(idAuditoria, idEnte, ct);
-                    return cedulas.Any(resultado => resultado.IdResultado == resultadoId);
-                }
+                    return true;
 
                 return false;
             }
@@ -260,6 +272,47 @@ namespace FileXfer.Server.Services
 
             return requerimientos.Items.Any(requerimiento =>
                 requerimiento.IdRequerimiento == idRequerimiento!.Value);
+        }
+
+        private async Task<bool> IsCedulaContextAuthorizedAsync(
+            int idEnlace,
+            int idAuditoria,
+            int idAnexo,
+            int? idResultado,
+            CancellationToken ct)
+        {
+            if (idEnlace <= 0 || idAuditoria <= 0 || idAnexo <= 0 || idResultado.GetValueOrDefault() <= 0)
+                return false;
+
+            await using var cn = Conn();
+            const string sql = @"
+                SELECT CASE WHEN EXISTS
+                (
+                    SELECT 1
+                    FROM [dbo].[BUZ_Eventos_Anexos] anexo
+                    INNER JOIN [dbo].[BUZ_Eventos_Movimientos] movimiento
+                        ON movimiento.[ID_Evento] = anexo.[ID_Evento]
+                    INNER JOIN [dbo].[BUZ_Resultados_Cedulas] resultado
+                        ON resultado.[ID_Anexo] = anexo.[ID_Anexo]
+                    INNER JOIN [dbo].[BUZ_Asignaciones_Resumen_Resultados] asignacion
+                        ON asignacion.[id_cedula_resultado] = resultado.[ID]
+                    WHERE anexo.[ID_Anexo] = @IdAnexo
+                      AND anexo.[Cedula] = 1
+                      AND movimiento.[ID_Auditoria] = @IdAuditoria
+                      AND asignacion.[ID_Enlace] = @IdEnlace
+                      AND resultado.[ID] = @IdResultado
+                ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END;";
+
+            return await cn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                sql,
+                new
+                {
+                    IdEnlace = idEnlace,
+                    IdAuditoria = idAuditoria,
+                    IdAnexo = idAnexo,
+                    IdResultado = idResultado.Value
+                },
+                cancellationToken: ct));
         }
 
         public async Task<bool> IsAuditContextAuthorizedAsync(
