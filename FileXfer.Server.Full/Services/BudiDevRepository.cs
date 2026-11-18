@@ -289,16 +289,11 @@ namespace FileXfer.Server.Services
                 SELECT CASE WHEN EXISTS
                 (
                     SELECT 1
-                    FROM [dbo].[BUZ_Eventos_Anexos] anexo
-                    INNER JOIN [dbo].[BUZ_Eventos_Movimientos] movimiento
-                        ON movimiento.[ID_Evento] = anexo.[ID_Evento]
-                    INNER JOIN [dbo].[BUZ_Resultados_Cedulas] resultado
-                        ON resultado.[ID_Anexo] = anexo.[ID_Anexo]
+                    FROM [dbo].[BUZ_Resultados_Cedulas] resultado
                     INNER JOIN [dbo].[BUZ_Asignaciones_Resumen_Resultados] asignacion
                         ON asignacion.[id_cedula_resultado] = resultado.[ID]
-                    WHERE anexo.[ID_Anexo] = @IdAnexo
-                      AND anexo.[Cedula] = 1
-                      AND movimiento.[ID_Auditoria] = @IdAuditoria
+                    WHERE resultado.[ID_Anexo] = @IdAnexo
+                      AND resultado.[ID_Auditoria] = @IdAuditoria
                       AND asignacion.[ID_Enlace] = @IdEnlace
                       AND resultado.[ID] = @IdResultado
                 ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END;";
